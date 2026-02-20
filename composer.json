@@ -1,0 +1,25 @@
+{
+    "name": "semitexa/orm",
+    "description": "Semitexa ORM — attribute-driven schema, connection pooling, MySQL adapter",
+    "version": "v1.0.0",
+    "type": "semitexa-module",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Semitexa",
+            "email": "support@semitexa.com"
+        }
+    ],
+    "require": {
+        "php": "^8.4",
+        "semitexa/core": "^1.0"
+    },
+    "require-dev": {
+        "swoole/ide-helper": "^5.1"
+    },
+    "autoload": {
+        "psr-4": {
+            "Semitexa\\Orm\\": "src/"
+        }
+    }
+}
