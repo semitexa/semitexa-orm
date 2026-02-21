@@ -7,6 +7,7 @@ namespace Semitexa\Orm\Adapter;
 class MysqlAdapter implements DatabaseAdapterInterface
 {
     private string $serverVersion = '';
+    private string $lastInsertIdValue = '0';
 
     /** @var array<string, string> Minimum version required per capability */
     private const CAPABILITY_VERSIONS = [
@@ -48,6 +49,8 @@ class MysqlAdapter implements DatabaseAdapterInterface
         try {
             $stmt = $connection->prepare($sql);
             $stmt->execute($params);
+            // Capture lastInsertId from the same connection that ran the query
+            $this->lastInsertIdValue = $connection->lastInsertId();
             return $stmt;
         } finally {
             $this->pool->push($connection);
@@ -67,13 +70,7 @@ class MysqlAdapter implements DatabaseAdapterInterface
 
     public function lastInsertId(): string
     {
-        $connection = $this->pool->pop();
-
-        try {
-            return $connection->lastInsertId();
-        } finally {
-            $this->pool->push($connection);
-        }
+        return $this->lastInsertIdValue;
     }
 
     private function detectVersion(): void

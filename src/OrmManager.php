@@ -5,16 +5,24 @@ declare(strict_types=1);
 namespace Semitexa\Orm;
 
 use Semitexa\Core\Environment;
+use Semitexa\Core\Util\ProjectRoot;
 use Semitexa\Orm\Adapter\ConnectionPool;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Adapter\MysqlAdapter;
 use Semitexa\Orm\Schema\SchemaCollector;
+use Semitexa\Orm\Schema\SchemaComparator;
+use Semitexa\Orm\Sync\AuditLogger;
+use Semitexa\Orm\Sync\SyncEngine;
+use Semitexa\Orm\Transaction\TransactionManager;
 
 class OrmManager
 {
     private ?ConnectionPool $pool = null;
     private ?DatabaseAdapterInterface $adapter = null;
     private ?SchemaCollector $schemaCollector = null;
+    private ?SchemaComparator $schemaComparator = null;
+    private ?SyncEngine $syncEngine = null;
+    private ?TransactionManager $transactionManager = null;
 
     public function getAdapter(): DatabaseAdapterInterface
     {
@@ -41,6 +49,48 @@ class OrmManager
         }
 
         return $this->schemaCollector;
+    }
+
+    public function getSchemaComparator(): SchemaComparator
+    {
+        if ($this->schemaComparator === null) {
+            $this->schemaComparator = new SchemaComparator(
+                $this->getAdapter(),
+                $this->getDatabaseName(),
+            );
+        }
+
+        return $this->schemaComparator;
+    }
+
+    public function getSyncEngine(): SyncEngine
+    {
+        if ($this->syncEngine === null) {
+            $historyDir = ProjectRoot::get() . '/var/migrations/history';
+            $this->syncEngine = new SyncEngine(
+                $this->getAdapter(),
+                new AuditLogger($historyDir),
+            );
+        }
+
+        return $this->syncEngine;
+    }
+
+    public function getTransactionManager(): TransactionManager
+    {
+        if ($this->transactionManager === null) {
+            $this->transactionManager = new TransactionManager(
+                $this->getPool(),
+                $this->getAdapter(),
+            );
+        }
+
+        return $this->transactionManager;
+    }
+
+    public function getDatabaseName(): string
+    {
+        return Environment::getEnvValue('DB_DATABASE', 'semitexa');
     }
 
     public function shutdown(): void

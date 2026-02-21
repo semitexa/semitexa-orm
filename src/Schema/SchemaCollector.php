@@ -257,8 +257,21 @@ class SchemaCollector
 
     private function validateTypeMatch(string $phpType, MySqlType $sqlType, string $propName, string $className): void
     {
+        // Backed enums: StringBackedEnum → Varchar/Text, IntBackedEnum → Int/Bigint
+        if (enum_exists($phpType)) {
+            $ref = new \ReflectionEnum($phpType);
+            if ($ref->isBacked()) {
+                $backingType = (string) $ref->getBackingType();
+                $phpType = $backingType; // Replace enum class name with its backing type
+            } else {
+                $this->errors[] = "Property '{$propName}' in '{$className}': non-backed enum '{$phpType}' cannot be mapped to a database column.";
+                return;
+            }
+        }
+
         $valid = match ($sqlType) {
-            MySqlType::Varchar, MySqlType::Text, MySqlType::Json => in_array($phpType, ['string', 'mixed']),
+            MySqlType::Varchar, MySqlType::Text => in_array($phpType, ['string', 'mixed']),
+            MySqlType::Json => in_array($phpType, ['string', 'array', 'mixed']),
             MySqlType::Int, MySqlType::Bigint => in_array($phpType, ['int', 'mixed']),
             MySqlType::Decimal => in_array($phpType, ['string', 'float', 'mixed']),
             MySqlType::Boolean => in_array($phpType, ['bool', 'int', 'mixed']),
