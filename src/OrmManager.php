@@ -12,6 +12,7 @@ use Semitexa\Orm\Adapter\MysqlAdapter;
 use Semitexa\Orm\Schema\SchemaCollector;
 use Semitexa\Orm\Schema\SchemaComparator;
 use Semitexa\Orm\Sync\AuditLogger;
+use Semitexa\Orm\Sync\SeedRunner;
 use Semitexa\Orm\Sync\SyncEngine;
 use Semitexa\Orm\Transaction\TransactionManager;
 
@@ -23,6 +24,7 @@ class OrmManager
     private ?SchemaComparator $schemaComparator = null;
     private ?SyncEngine $syncEngine = null;
     private ?TransactionManager $transactionManager = null;
+    private ?SeedRunner $seedRunner = null;
 
     public function getAdapter(): DatabaseAdapterInterface
     {
@@ -86,6 +88,15 @@ class OrmManager
         }
 
         return $this->transactionManager;
+    }
+
+    public function getSeedRunner(): SeedRunner
+    {
+        if ($this->seedRunner === null) {
+            $this->seedRunner = new SeedRunner($this->getAdapter());
+        }
+
+        return $this->seedRunner;
     }
 
     public function getDatabaseName(): string

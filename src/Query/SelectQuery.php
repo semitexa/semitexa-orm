@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Query;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
+use Semitexa\Orm\Attribute\Aggregate;
+use Semitexa\Orm\Attribute\PrimaryKey;
 use Semitexa\Orm\Hydration\StreamingHydrator;
 use Semitexa\Orm\Repository\PaginatedResult;
 
@@ -30,6 +32,9 @@ class SelectQuery
     /** @var array<string, mixed> */
     private array $params = [];
     private int $paramCounter = 0;
+
+    /** @var array{alias: string, sql: string}[]|null Cached aggregate subqueries */
+    private ?array $aggregateSubqueries = null;
 
     public function __construct(
         string $table,
@@ -198,7 +203,13 @@ class SelectQuery
 
     public function buildSql(): string
     {
-        $cols = implode(', ', array_map(fn(string $c) => $c === '*' ? '*' : "`{$c}`", $this->columns));
+        $cols = implode(', ', array_map(fn(string $c) => $c === '*' ? "`{$this->table}`.*" : "`{$c}`", $this->columns));
+
+        $aggregates = $this->getAggregateSubqueries();
+        foreach ($aggregates as $agg) {
+            $cols .= ", ({$agg['sql']}) AS `{$agg['alias']}`";
+        }
+
         $sql = "SELECT {$cols} FROM `{$this->table}`";
 
         $sql .= $this->buildWhereClause();
@@ -263,5 +274,78 @@ class SelectQuery
         // Clean column name for param (alphanumeric only)
         $clean = preg_replace('/[^a-zA-Z0-9_]/', '', $column);
         return "p_{$clean}_{$this->paramCounter}";
+    }
+
+    /**
+     * Detect #[Aggregate] properties on the Resource class and build correlated subqueries.
+     *
+     * @return array{alias: string, sql: string}[]
+     */
+    private function getAggregateSubqueries(): array
+    {
+        if ($this->aggregateSubqueries !== null) {
+            return $this->aggregateSubqueries;
+        }
+
+        $this->aggregateSubqueries = [];
+        $ref = new \ReflectionClass($this->resourceClass);
+        $pk = $this->resolvePkColumn();
+
+        foreach ($ref->getProperties(\ReflectionProperty::IS_PUBLIC) as $prop) {
+            $attrs = $prop->getAttributes(Aggregate::class);
+            if ($attrs === []) {
+                continue;
+            }
+
+            /** @var Aggregate $agg */
+            $agg = $attrs[0]->newInstance();
+
+            $parts = explode('.', $agg->field, 2);
+            if (count($parts) !== 2) {
+                continue;
+            }
+
+            [$relatedTable, $relatedColumn] = $parts;
+            $function = strtoupper($agg->function);
+
+            $allowedFunctions = ['COUNT', 'SUM', 'AVG', 'MIN', 'MAX'];
+            if (!in_array($function, $allowedFunctions, true)) {
+                continue;
+            }
+
+            $foreignKey = $agg->foreignKey ?? $this->guessRelatedForeignKey($this->table);
+
+            $this->aggregateSubqueries[] = [
+                'alias' => $prop->getName(),
+                'sql' => "SELECT {$function}(`{$relatedTable}`.`{$relatedColumn}`) FROM `{$relatedTable}` WHERE `{$relatedTable}`.`{$foreignKey}` = `{$this->table}`.`{$pk}`",
+            ];
+        }
+
+        return $this->aggregateSubqueries;
+    }
+
+    /**
+     * Resolve the PK column name from the Resource class.
+     */
+    private function resolvePkColumn(): string
+    {
+        $ref = new \ReflectionClass($this->resourceClass);
+        foreach ($ref->getProperties() as $prop) {
+            if ($prop->getAttributes(PrimaryKey::class) !== []) {
+                return $prop->getName();
+            }
+        }
+        return 'id';
+    }
+
+    /**
+     * Guess FK column name on a related table pointing to the parent table.
+     * Convention: singular form of parent table + "_id".
+     * e.g. "orders" -> "order_id", "users" -> "user_id"
+     */
+    private function guessRelatedForeignKey(string $parentTable): string
+    {
+        $singular = rtrim($parentTable, 's');
+        return $singular . '_id';
     }
 }
