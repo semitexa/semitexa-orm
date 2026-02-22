@@ -195,8 +195,8 @@ class SchemaCollector
             isDeprecated: $isDeprecated,
         );
 
+        // Multiple Resources can map to the same table (e.g. base + projection); merge schema — skip column if already defined
         if ($table->getColumn($property->getName()) !== null) {
-            $this->errors[] = "Duplicate column '{$property->getName()}' in table '{$table->name}'.";
             return;
         }
 

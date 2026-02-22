@@ -21,7 +21,7 @@ class MysqlAdapter implements DatabaseAdapterInterface
     ];
 
     public function __construct(
-        private readonly ConnectionPool $pool,
+        private readonly ConnectionPoolInterface $pool,
     ) {
         $this->detectVersion();
     }

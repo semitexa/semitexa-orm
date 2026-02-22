@@ -7,8 +7,10 @@ namespace Semitexa\Orm;
 use Semitexa\Core\Environment;
 use Semitexa\Core\Util\ProjectRoot;
 use Semitexa\Orm\Adapter\ConnectionPool;
+use Semitexa\Orm\Adapter\ConnectionPoolInterface;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Adapter\MysqlAdapter;
+use Semitexa\Orm\Adapter\SingleConnectionPool;
 use Semitexa\Orm\Schema\SchemaCollector;
 use Semitexa\Orm\Schema\SchemaComparator;
 use Semitexa\Orm\Sync\AuditLogger;
@@ -18,7 +20,7 @@ use Semitexa\Orm\Transaction\TransactionManager;
 
 class OrmManager
 {
-    private ?ConnectionPool $pool = null;
+    private ?ConnectionPoolInterface $pool = null;
     private ?DatabaseAdapterInterface $adapter = null;
     private ?SchemaCollector $schemaCollector = null;
     private ?SchemaComparator $schemaComparator = null;
@@ -35,7 +37,7 @@ class OrmManager
         return $this->adapter;
     }
 
-    public function getPool(): ConnectionPool
+    public function getPool(): ConnectionPoolInterface
     {
         if ($this->pool === null) {
             $this->pool = $this->createPool();
@@ -111,12 +113,18 @@ class OrmManager
         $this->adapter = null;
     }
 
-    private function createPool(): ConnectionPool
+    private function createPool(): ConnectionPoolInterface
     {
-        $host = Environment::getEnvValue('DB_HOST', '127.0.0.1');
-        $port = Environment::getEnvValue('DB_PORT', '3306');
+        // Ensure .env is loaded in Swoole workers (getenv may be empty after fork)
+        if (defined('SEMITEXA_SWOOLE') && SEMITEXA_SWOOLE && class_exists(Environment::class)) {
+            ProjectRoot::reset();
+            Environment::syncEnvFromFiles();
+        }
+
+        $host = $this->resolveDbHost();
+        $port = $this->resolveDbPort();
         $database = Environment::getEnvValue('DB_DATABASE', 'semitexa');
-        $username = Environment::getEnvValue('DB_USERNAME', 'root');
+        $username = Environment::getEnvValue('DB_USERNAME') ?? Environment::getEnvValue('DB_USER', 'root');
         $password = Environment::getEnvValue('DB_PASSWORD', '');
         $charset = Environment::getEnvValue('DB_CHARSET', 'utf8mb4');
         $poolSize = (int) Environment::getEnvValue('DB_POOL_SIZE', '10');
@@ -133,6 +141,38 @@ class OrmManager
             return $pdo;
         };
 
-        return new ConnectionPool($poolSize, $factory);
+        if (class_exists(\Swoole\Coroutine\Channel::class, false)) {
+            return new ConnectionPool($poolSize, $factory);
+        }
+
+        return new SingleConnectionPool($factory);
+    }
+
+    /** When running on host (CLI), use DB_CLI_* so GUI/CLI connect to host port; inside Docker use DB_HOST/DB_PORT. */
+    private function resolveDbHost(): string
+    {
+        if (!$this->isRunningInDocker()) {
+            $cliHost = Environment::getEnvValue('DB_CLI_HOST');
+            if ($cliHost !== null && $cliHost !== '') {
+                return $cliHost;
+            }
+        }
+        return Environment::getEnvValue('DB_HOST', '127.0.0.1');
+    }
+
+    private function resolveDbPort(): string
+    {
+        if (!$this->isRunningInDocker()) {
+            $cliPort = Environment::getEnvValue('DB_CLI_PORT');
+            if ($cliPort !== null && $cliPort !== '') {
+                return $cliPort;
+            }
+        }
+        return Environment::getEnvValue('DB_PORT', '3306');
+    }
+
+    private function isRunningInDocker(): bool
+    {
+        return file_exists('/.dockerenv');
     }
 }

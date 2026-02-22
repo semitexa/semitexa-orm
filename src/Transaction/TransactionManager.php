@@ -4,13 +4,13 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Transaction;
 
-use Semitexa\Orm\Adapter\ConnectionPool;
+use Semitexa\Orm\Adapter\ConnectionPoolInterface;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 
 class TransactionManager
 {
     public function __construct(
-        private readonly ConnectionPool $pool,
+        private readonly ConnectionPoolInterface $pool,
         private readonly DatabaseAdapterInterface $adapter,
     ) {}
 

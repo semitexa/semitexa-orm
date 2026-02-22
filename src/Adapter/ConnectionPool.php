@@ -6,7 +6,7 @@ namespace Semitexa\Orm\Adapter;
 
 use Swoole\Coroutine\Channel;
 
-class ConnectionPool
+class ConnectionPool implements ConnectionPoolInterface
 {
     private Channel $pool;
     private int $created = 0;
