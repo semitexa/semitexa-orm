@@ -5,11 +5,9 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Sync;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
-use Semitexa\Orm\Attribute\FromTable;
-use Semitexa\Orm\Attribute\PrimaryKey;
 use Semitexa\Orm\Hydration\Hydrator;
-use Semitexa\Orm\Query\InsertQuery;
 use Semitexa\Orm\Query\UpdateQuery;
+use Semitexa\Orm\Schema\ResourceMetadata;
 
 class SmartUpsert
 {
@@ -27,6 +25,11 @@ class SmartUpsert
      * If PK exists in DB and data differs → UPDATE.
      * If PK not in DB → INSERT.
      *
+     * Uses a single SELECT … WHERE pk IN (…) to fetch all existing rows,
+     * then one batch INSERT for new records, and individual UPDATEs only for
+     * records that actually changed. Total queries: 1 + 1 + N_updates
+     * instead of the previous 2N per-record approach.
+     *
      * @param object[] $resources Resource instances (same class)
      * @return array{inserted: int, updated: int, unchanged: int}
      */
@@ -37,52 +40,112 @@ class SmartUpsert
         }
 
         $resourceClass = $resources[0]::class;
-        $tableName = $this->resolveTableName($resourceClass);
-        $pkColumn = $this->resolvePkColumn($resourceClass);
+        $meta          = ResourceMetadata::for($resourceClass);
+        $tableName     = $meta->getTableName();
+        $pkColumn      = $meta->getPkColumn();
 
-        $stats = ['inserted' => 0, 'updated' => 0, 'unchanged' => 0];
-
+        // Dehydrate all resources; skip any without a PK value.
+        /** @var array<string, array<string, mixed>> $dataByPk  pk → column data */
+        $dataByPk = [];
         foreach ($resources as $resource) {
-            $data = $this->hydrator->dehydrate($resource);
+            $data    = $this->hydrator->dehydrate($resource);
             $pkValue = $data[$pkColumn] ?? null;
-
             if ($pkValue === null) {
                 continue;
             }
+            $dataByPk[(string) $pkValue] = $data;
+        }
 
-            // Check if record exists
-            $existing = $this->findByPk($tableName, $pkColumn, $pkValue);
+        if ($dataByPk === []) {
+            return ['inserted' => 0, 'updated' => 0, 'unchanged' => 0];
+        }
+
+        // 1. Single SELECT to fetch all existing rows for these PKs.
+        $existingByPk = $this->findByPkIn($tableName, $pkColumn, array_keys($dataByPk));
+
+        $toInsert  = [];
+        $stats     = ['inserted' => 0, 'updated' => 0, 'unchanged' => 0];
+
+        foreach ($dataByPk as $pkValue => $data) {
+            $existing = $existingByPk[$pkValue] ?? null;
 
             if ($existing === null) {
-                // INSERT
-                (new InsertQuery($tableName, $this->adapter))->execute($data);
-                $stats['inserted']++;
+                $toInsert[] = $data;
+            } elseif ($this->hasChanges($data, $existing, $pkColumn)) {
+                (new UpdateQuery($tableName, $this->adapter))->execute($data, $pkColumn);
+                $stats['updated']++;
             } else {
-                // Compare data — update only if changed
-                if ($this->hasChanges($data, $existing, $pkColumn)) {
-                    (new UpdateQuery($tableName, $this->adapter))->execute($data, $pkColumn);
-                    $stats['updated']++;
-                } else {
-                    $stats['unchanged']++;
-                }
+                $stats['unchanged']++;
             }
+        }
+
+        // 2. Batch INSERT for all new records in one query.
+        if ($toInsert !== []) {
+            $this->batchInsert($tableName, $toInsert);
+            $stats['inserted'] = count($toInsert);
         }
 
         return $stats;
     }
 
     /**
-     * @return array<string, mixed>|null
+     * Fetch all rows whose PK is in the given list — single query.
+     *
+     * @param string[] $pkValues
+     * @return array<string, array<string, mixed>>  pk (string) → row
      */
-    private function findByPk(string $table, string $pkColumn, mixed $pkValue): ?array
+    private function findByPkIn(string $table, string $pkColumn, array $pkValues): array
     {
-        $stmt = $this->adapter->execute(
-            "SELECT * FROM `{$table}` WHERE `{$pkColumn}` = :pk LIMIT 1",
-            ['pk' => $pkValue],
+        if ($pkValues === []) {
+            return [];
+        }
+
+        $placeholders = [];
+        $params       = [];
+        foreach ($pkValues as $i => $value) {
+            $key                = "pk_{$i}";
+            $placeholders[]     = ":{$key}";
+            $params[$key]       = $value;
+        }
+
+        $inList = implode(', ', $placeholders);
+        $result = $this->adapter->execute(
+            "SELECT * FROM `{$table}` WHERE `{$pkColumn}` IN ({$inList})",
+            $params,
         );
 
-        $row = $stmt->fetch(\PDO::FETCH_ASSOC);
-        return $row !== false ? $row : null;
+        $map = [];
+        foreach ($result->rows as $row) {
+            $map[(string) ($row[$pkColumn])] = $row;
+        }
+
+        return $map;
+    }
+
+    /**
+     * Insert multiple rows in a single INSERT … VALUES (…),(…),… statement.
+     *
+     * @param array<int, array<string, mixed>> $rows
+     */
+    private function batchInsert(string $table, array $rows): void
+    {
+        $columns      = array_keys($rows[0]);
+        $colList      = implode(', ', array_map(fn(string $c) => "`{$c}`", $columns));
+        $valueSets    = [];
+        $params       = [];
+
+        foreach ($rows as $i => $row) {
+            $placeholders = [];
+            foreach ($columns as $col) {
+                $key            = "r{$i}_{$col}";
+                $placeholders[] = ":{$key}";
+                $params[$key]   = $row[$col] ?? null;
+            }
+            $valueSets[] = '(' . implode(', ', $placeholders) . ')';
+        }
+
+        $sql = "INSERT INTO `{$table}` ({$colList}) VALUES " . implode(', ', $valueSets);
+        $this->adapter->execute($sql, $params);
     }
 
     /**
@@ -123,26 +186,4 @@ class SmartUpsert
         return (string) $value;
     }
 
-    private function resolveTableName(string $resourceClass): string
-    {
-        $ref = new \ReflectionClass($resourceClass);
-        $attrs = $ref->getAttributes(FromTable::class);
-        if ($attrs === []) {
-            throw new \RuntimeException("Class {$resourceClass} has no #[FromTable] attribute.");
-        }
-        /** @var FromTable $ft */
-        $ft = $attrs[0]->newInstance();
-        return $ft->name;
-    }
-
-    private function resolvePkColumn(string $resourceClass): string
-    {
-        $ref = new \ReflectionClass($resourceClass);
-        foreach ($ref->getProperties() as $prop) {
-            if ($prop->getAttributes(PrimaryKey::class) !== []) {
-                return $prop->getName();
-            }
-        }
-        return 'id';
-    }
 }

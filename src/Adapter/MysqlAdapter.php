@@ -7,7 +7,6 @@ namespace Semitexa\Orm\Adapter;
 class MysqlAdapter implements DatabaseAdapterInterface
 {
     private string $serverVersion = '';
-    private string $lastInsertIdValue = '0';
 
     /** @var array<string, string> Minimum version required per capability */
     private const CAPABILITY_VERSIONS = [
@@ -42,41 +41,65 @@ class MysqlAdapter implements DatabaseAdapterInterface
         return $this->serverVersion;
     }
 
-    public function execute(string $sql, array $params = []): \PDOStatement
+    public function execute(string $sql, array $params = []): QueryResult
     {
         $connection = $this->pool->pop();
 
         try {
             $stmt = $connection->prepare($sql);
             $stmt->execute($params);
-            // Capture lastInsertId from the same connection that ran the query
-            $this->lastInsertIdValue = $connection->lastInsertId();
-            return $stmt;
+
+            // Materialize ALL data before returning connection to pool.
+            // This is critical for coroutine safety — after push(), another
+            // coroutine may reuse this PDO and invalidate the PDOStatement.
+            $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+            $rowCount = $stmt->rowCount();
+            $lastInsertId = $connection->lastInsertId();
+            $stmt->closeCursor();
+
+            return new QueryResult(
+                rows: $rows,
+                rowCount: $rowCount,
+                lastInsertId: $lastInsertId,
+            );
         } finally {
             $this->pool->push($connection);
         }
     }
 
-    public function query(string $sql): \PDOStatement
+    public function query(string $sql): QueryResult
     {
         $connection = $this->pool->pop();
 
         try {
-            return $connection->query($sql);
+            $stmt = $connection->query($sql);
+            $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+            $rowCount = $stmt->rowCount();
+            $lastInsertId = $connection->lastInsertId();
+            $stmt->closeCursor();
+
+            return new QueryResult(
+                rows: $rows,
+                rowCount: $rowCount,
+                lastInsertId: $lastInsertId,
+            );
         } finally {
             $this->pool->push($connection);
         }
     }
 
+    /**
+     * @deprecated Use QueryResult::$lastInsertId instead.
+     */
     public function lastInsertId(): string
     {
-        return $this->lastInsertIdValue;
+        return '0';
     }
 
     private function detectVersion(): void
     {
-        $stmt = $this->query('SELECT VERSION()');
-        $raw = $stmt->fetchColumn();
+        $result = $this->query('SELECT VERSION()');
+        $raw = $result->fetchColumn();
 
         // Parse version string — MySQL returns e.g. "8.0.35" or "8.0.35-0ubuntu0.22.04.1"
         if (preg_match('/^(\d+\.\d+\.\d+)/', (string) $raw, $matches)) {

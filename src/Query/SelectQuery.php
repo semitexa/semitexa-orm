@@ -6,9 +6,9 @@ namespace Semitexa\Orm\Query;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Attribute\Aggregate;
-use Semitexa\Orm\Attribute\PrimaryKey;
 use Semitexa\Orm\Hydration\StreamingHydrator;
 use Semitexa\Orm\Repository\PaginatedResult;
+use Semitexa\Orm\Schema\ResourceMetadata;
 
 class SelectQuery
 {
@@ -20,7 +20,17 @@ class SelectQuery
     /** @var string[] */
     private array $columns = ['*'];
 
-    /** @var array{column: string, operator: string, value: mixed}[] */
+    /**
+     * Each entry describes one WHERE condition:
+     *   connector  — 'AND' | 'OR' (how it joins with the previous condition)
+     *   type       — 'basic' | 'null' | 'in' | 'not_in' | 'like' | 'between' | 'raw'
+     *   column     — column name (unused for 'raw')
+     *   operator   — SQL operator string (used by 'basic' and 'null')
+     *   param      — named param key(s) or null ('null'/'raw' types)
+     *   sql        — raw SQL fragment ('raw' type only)
+     *   rawParams  — positional params for 'raw' type
+     * @var array<int, array<string, mixed>>
+     */
     private array $wheres = [];
 
     /** @var array{column: string, direction: string}[] */
@@ -28,6 +38,12 @@ class SelectQuery
 
     private ?int $limitValue = null;
     private ?int $offsetValue = null;
+
+    /**
+     * Relation filter: null = load all, [] = load none, ['prop', …] = load only listed.
+     * @var string[]|null
+     */
+    private ?array $withRelations = null;
 
     /** @var array<string, mixed> */
     private array $params = [];
@@ -61,9 +77,25 @@ class SelectQuery
     {
         $paramName = $this->nextParam($column);
         $this->wheres[] = [
-            'column' => $column,
-            'operator' => $operator,
-            'param' => $paramName,
+            'connector' => 'AND',
+            'type'      => 'basic',
+            'column'    => $column,
+            'operator'  => $operator,
+            'param'     => $paramName,
+        ];
+        $this->params[$paramName] = $value instanceof \BackedEnum ? $value->value : $value;
+        return $this;
+    }
+
+    public function orWhere(string $column, string $operator, mixed $value): self
+    {
+        $paramName = $this->nextParam($column);
+        $this->wheres[] = [
+            'connector' => 'OR',
+            'type'      => 'basic',
+            'column'    => $column,
+            'operator'  => $operator,
+            'param'     => $paramName,
         ];
         $this->params[$paramName] = $value instanceof \BackedEnum ? $value->value : $value;
         return $this;
@@ -72,9 +104,11 @@ class SelectQuery
     public function whereNull(string $column): self
     {
         $this->wheres[] = [
-            'column' => $column,
-            'operator' => 'IS NULL',
-            'param' => null,
+            'connector' => 'AND',
+            'type'      => 'null',
+            'column'    => $column,
+            'operator'  => 'IS NULL',
+            'param'     => null,
         ];
         return $this;
     }
@@ -82,9 +116,11 @@ class SelectQuery
     public function whereNotNull(string $column): self
     {
         $this->wheres[] = [
-            'column' => $column,
-            'operator' => 'IS NOT NULL',
-            'param' => null,
+            'connector' => 'AND',
+            'type'      => 'null',
+            'column'    => $column,
+            'operator'  => 'IS NOT NULL',
+            'param'     => null,
         ];
         return $this;
     }
@@ -96,15 +132,97 @@ class SelectQuery
     {
         $paramNames = [];
         foreach ($values as $val) {
-            $paramName = $this->nextParam($column);
+            $paramName    = $this->nextParam($column);
             $paramNames[] = ':' . $paramName;
             $this->params[$paramName] = $val instanceof \BackedEnum ? $val->value : $val;
         }
 
         $this->wheres[] = [
-            'column' => $column,
-            'operator' => 'IN',
-            'param' => $paramNames,
+            'connector' => 'AND',
+            'type'      => 'in',
+            'column'    => $column,
+            'operator'  => 'IN',
+            'param'     => $paramNames,
+        ];
+        return $this;
+    }
+
+    /**
+     * @param list<mixed> $values
+     */
+    public function whereNotIn(string $column, array $values): self
+    {
+        $paramNames = [];
+        foreach ($values as $val) {
+            $paramName    = $this->nextParam($column);
+            $paramNames[] = ':' . $paramName;
+            $this->params[$paramName] = $val instanceof \BackedEnum ? $val->value : $val;
+        }
+
+        $this->wheres[] = [
+            'connector' => 'AND',
+            'type'      => 'not_in',
+            'column'    => $column,
+            'operator'  => 'NOT IN',
+            'param'     => $paramNames,
+        ];
+        return $this;
+    }
+
+    public function whereLike(string $column, string $pattern): self
+    {
+        $paramName = $this->nextParam($column);
+        $this->wheres[] = [
+            'connector' => 'AND',
+            'type'      => 'like',
+            'column'    => $column,
+            'operator'  => 'LIKE',
+            'param'     => $paramName,
+        ];
+        $this->params[$paramName] = $pattern;
+        return $this;
+    }
+
+    public function whereBetween(string $column, mixed $from, mixed $to): self
+    {
+        $paramFrom = $this->nextParam($column . '_from');
+        $paramTo   = $this->nextParam($column . '_to');
+        $this->wheres[] = [
+            'connector' => 'AND',
+            'type'      => 'between',
+            'column'    => $column,
+            'param'     => [$paramFrom, $paramTo],
+        ];
+        $this->params[$paramFrom] = $from;
+        $this->params[$paramTo]   = $to;
+        return $this;
+    }
+
+    /**
+     * Append a raw SQL fragment to the WHERE clause (joined with AND).
+     * Use positional ? placeholders — values are bound immediately.
+     *
+     * Example:
+     *   ->whereRaw('MATCH(`title`) AGAINST(? IN BOOLEAN MODE)', [$term])
+     *   ->whereRaw('`created_at` > DATE_SUB(NOW(), INTERVAL ? DAY)', [30])
+     *
+     * @param list<mixed> $bindings
+     */
+    public function whereRaw(string $sql, array $bindings = []): self
+    {
+        // Convert positional ? to named params immediately so that
+        // buildWhereClause() stays idempotent (it may be called multiple
+        // times — e.g. once for COUNT and once for the data query in paginate).
+        foreach ($bindings as $val) {
+            $key                = $this->nextParam('raw');
+            $sql                = preg_replace('/\?/', ":{$key}", $sql, 1);
+            $this->params[$key] = $val;
+        }
+
+        $this->wheres[] = [
+            'connector' => 'AND',
+            'type'      => 'raw',
+            'sql'       => $sql,
         ];
         return $this;
     }
@@ -133,6 +251,28 @@ class SelectQuery
     }
 
     /**
+     * Load only the specified relation properties.
+     * Call with no arguments or with an explicit list:
+     *   ->with('author', 'tags')   // load only author + tags
+     *   ->with()                   // same as default: load all (resets any previous filter)
+     */
+    public function with(string ...$relations): self
+    {
+        $this->withRelations = $relations === [] ? null : array_values($relations);
+        return $this;
+    }
+
+    /**
+     * Skip all relation loading for this query.
+     * Useful when only base columns are needed and relations are expensive.
+     */
+    public function withoutRelations(): self
+    {
+        $this->withRelations = [];
+        return $this;
+    }
+
+    /**
      * Execute and return all results as Domain objects.
      *
      * @return object[]
@@ -140,10 +280,9 @@ class SelectQuery
     public function fetchAll(): array
     {
         $sql = $this->buildSql();
-        $stmt = $this->adapter->execute($sql, $this->params);
-        $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+        $result = $this->adapter->execute($sql, $this->params);
 
-        return $this->hydrator->hydrateAllToDomain($rows, $this->resourceClass);
+        return $this->hydrator->hydrateAllToDomain($result->rows, $this->resourceClass, $this->withRelations);
     }
 
     /**
@@ -151,16 +290,18 @@ class SelectQuery
      */
     public function fetchOne(): ?object
     {
-        $this->limitValue = 1;
-        $sql = $this->buildSql();
-        $stmt = $this->adapter->execute($sql, $this->params);
-        $row = $stmt->fetch(\PDO::FETCH_ASSOC);
+        // Build SQL with LIMIT 1 without mutating internal state.
+        // Uses buildCoreSql() (no LIMIT/OFFSET) so any ->limit() set on the
+        // query object does not bleed into this single-row fetch.
+        $sql = $this->buildCoreSql() . ' LIMIT 1';
+        $result = $this->adapter->execute($sql, $this->params);
+        $row = $result->fetchOne();
 
-        if ($row === false) {
+        if ($row === null) {
             return null;
         }
 
-        return $this->hydrator->hydrateToDomain($row, $this->resourceClass);
+        return $this->hydrator->hydrateToDomain($row, $this->resourceClass, $this->withRelations);
     }
 
     /**
@@ -168,20 +309,17 @@ class SelectQuery
      */
     public function paginate(int $page, int $perPage = 20): PaginatedResult
     {
-        // Count total
+        // Count total — uses current WHERE but no LIMIT/OFFSET
         $countSql = $this->buildCountSql();
-        $countStmt = $this->adapter->execute($countSql, $this->params);
-        $total = (int) $countStmt->fetchColumn();
+        $countResult = $this->adapter->execute($countSql, $this->params);
+        $total = (int) $countResult->fetchColumn();
 
-        // Fetch page
-        $this->limitValue = $perPage;
-        $this->offsetValue = ($page - 1) * $perPage;
+        // Build page SQL without mutating internal state: use buildCoreSql()
+        // (no LIMIT/OFFSET) and append pagination clauses directly.
+        $sql = $this->buildCoreSql() . sprintf(' LIMIT %d OFFSET %d', $perPage, ($page - 1) * $perPage);
+        $result = $this->adapter->execute($sql, $this->params);
 
-        $sql = $this->buildSql();
-        $stmt = $this->adapter->execute($sql, $this->params);
-        $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
-
-        $items = $this->hydrator->hydrateAllToDomain($rows, $this->resourceClass);
+        $items = $this->hydrator->hydrateAllToDomain($result->rows, $this->resourceClass, $this->withRelations);
 
         return new PaginatedResult(
             items: $items,
@@ -197,11 +335,30 @@ class SelectQuery
     public function count(): int
     {
         $sql = $this->buildCountSql();
-        $stmt = $this->adapter->execute($sql, $this->params);
-        return (int) $stmt->fetchColumn();
+        $result = $this->adapter->execute($sql, $this->params);
+        return (int) $result->fetchColumn();
     }
 
     public function buildSql(): string
+    {
+        $sql = $this->buildCoreSql();
+
+        if ($this->limitValue !== null) {
+            $sql .= " LIMIT {$this->limitValue}";
+        }
+        if ($this->offsetValue !== null) {
+            $sql .= " OFFSET {$this->offsetValue}";
+        }
+
+        return $sql;
+    }
+
+    /**
+     * Build SELECT … FROM … WHERE … ORDER BY — without LIMIT/OFFSET.
+     * Used internally by fetchOne() and paginate() to append their own
+     * pagination clauses without touching $this->limitValue/$this->offsetValue.
+     */
+    private function buildCoreSql(): string
     {
         $cols = implode(', ', array_map(fn(string $c) => $c === '*' ? "`{$this->table}`.*" : "`{$c}`", $this->columns));
 
@@ -211,16 +368,8 @@ class SelectQuery
         }
 
         $sql = "SELECT {$cols} FROM `{$this->table}`";
-
         $sql .= $this->buildWhereClause();
         $sql .= $this->buildOrderByClause();
-
-        if ($this->limitValue !== null) {
-            $sql .= " LIMIT {$this->limitValue}";
-        }
-        if ($this->offsetValue !== null) {
-            $sql .= " OFFSET {$this->offsetValue}";
-        }
 
         return $sql;
     }
@@ -236,22 +385,45 @@ class SelectQuery
             return '';
         }
 
-        $conditions = [];
-        foreach ($this->wheres as $where) {
-            $col = "`{$where['column']}`";
-
-            if ($where['param'] === null) {
-                // IS NULL / IS NOT NULL
-                $conditions[] = "{$col} {$where['operator']}";
-            } elseif ($where['operator'] === 'IN') {
-                $inList = implode(', ', $where['param']);
-                $conditions[] = "{$col} IN ({$inList})";
-            } else {
-                $conditions[] = "{$col} {$where['operator']} :{$where['param']}";
-            }
+        $parts = [];
+        foreach ($this->wheres as $i => $where) {
+            $connector = $i === 0 ? '' : " {$where['connector']} ";
+            $parts[]   = $connector . $this->buildWhereCondition($where);
         }
 
-        return ' WHERE ' . implode(' AND ', $conditions);
+        return ' WHERE ' . implode('', $parts);
+    }
+
+    /**
+     * @param array<string, mixed> $where
+     */
+    private function buildWhereCondition(array $where): string
+    {
+        $type = $where['type'];
+
+        if ($type === 'raw') {
+            // Bindings already converted to named params in whereRaw().
+            return $where['sql'];
+        }
+
+        $col = "`{$where['column']}`";
+
+        if ($type === 'null') {
+            return "{$col} {$where['operator']}";
+        }
+
+        if ($type === 'in' || $type === 'not_in') {
+            $inList = implode(', ', $where['param']);
+            return "{$col} {$where['operator']} ({$inList})";
+        }
+
+        if ($type === 'between') {
+            [$paramFrom, $paramTo] = $where['param'];
+            return "{$col} BETWEEN :{$paramFrom} AND :{$paramTo}";
+        }
+
+        // basic / like
+        return "{$col} {$where['operator']} :{$where['param']}";
     }
 
     private function buildOrderByClause(): string
@@ -289,7 +461,7 @@ class SelectQuery
 
         $this->aggregateSubqueries = [];
         $ref = new \ReflectionClass($this->resourceClass);
-        $pk = $this->resolvePkColumn();
+        $pk  = ResourceMetadata::for($this->resourceClass)->getPkColumn();
 
         foreach ($ref->getProperties(\ReflectionProperty::IS_PUBLIC) as $prop) {
             $attrs = $prop->getAttributes(Aggregate::class);
@@ -322,20 +494,6 @@ class SelectQuery
         }
 
         return $this->aggregateSubqueries;
-    }
-
-    /**
-     * Resolve the PK column name from the Resource class.
-     */
-    private function resolvePkColumn(): string
-    {
-        $ref = new \ReflectionClass($this->resourceClass);
-        foreach ($ref->getProperties() as $prop) {
-            if ($prop->getAttributes(PrimaryKey::class) !== []) {
-                return $prop->getName();
-            }
-        }
-        return 'id';
     }
 
     /**

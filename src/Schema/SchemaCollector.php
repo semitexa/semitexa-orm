@@ -80,6 +80,8 @@ class SchemaCollector
         $fromTable = $fromTableAttrs[0]->newInstance();
         $tableName = $fromTable->name;
 
+        $this->assertValidIdentifier($tableName, "table name in '{$className}'");
+
         if ($fromTable->mapTo !== null && !is_subclass_of($className, DomainMappable::class)) {
             $this->errors[] = "Class '{$className}' has mapTo='{$fromTable->mapTo}' but does not implement DomainMappable.";
         }
@@ -181,6 +183,8 @@ class SchemaCollector
 
         $nullable = $column->nullable || ($property->getType() instanceof \ReflectionNamedType && $property->getType()->allowsNull());
 
+        $this->assertValidIdentifier($property->getName(), "column '{$property->getName()}' in '{$className}'");
+
         $colDef = new ColumnDefinition(
             name: $property->getName(),
             type: $column->type,
@@ -280,6 +284,23 @@ class SchemaCollector
 
         if (!$valid) {
             $this->errors[] = "Property '{$propName}' in '{$className}': PHP type '{$phpType}' is incompatible with MySQL type '{$sqlType->value}'.";
+        }
+    }
+
+    /**
+     * Validate that a SQL identifier (table or column name) contains only
+     * safe characters: letters, digits, and underscores, starting with a
+     * letter or underscore. Identifiers come from PHP attributes, not user
+     * input, but a typo or malformed name would silently produce broken SQL.
+     * Throwing early gives a clear error at schema-collect time.
+     */
+    private function assertValidIdentifier(string $name, string $context): void
+    {
+        if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $name)) {
+            throw new \InvalidArgumentException(
+                "Invalid SQL identifier for {$context}: '{$name}'. "
+                . "Only letters, digits and underscores are allowed, starting with a letter or underscore."
+            );
         }
     }
 

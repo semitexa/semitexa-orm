@@ -28,15 +28,15 @@ class StreamingHydrator
      * Resource is not kept in memory after conversion.
      *
      * @param array<string, mixed> $row
-     * @param class-string $resourceClass
+     * @param class-string         $resourceClass
+     * @param string[]|null        $withRelations  Property names to load; null = all; [] = none.
      * @return object Domain object
      */
-    public function hydrateToDomain(array $row, string $resourceClass): object
+    public function hydrateToDomain(array $row, string $resourceClass, ?array $withRelations = null): object
     {
         $resource = $this->hydrator->hydrate($row, $resourceClass);
 
-        // Load relations for a single resource
-        $this->relationLoader?->loadRelations([$resource], $resourceClass);
+        $this->relationLoader?->loadRelations([$resource], $resourceClass, $withRelations);
 
         if ($resource instanceof DomainMappable) {
             return $resource->toDomain();
@@ -50,10 +50,11 @@ class StreamingHydrator
      * Batch-loads relations for all resources at once (avoids N+1).
      *
      * @param array<int, array<string, mixed>> $rows
-     * @param class-string $resourceClass
+     * @param class-string                     $resourceClass
+     * @param string[]|null                    $withRelations  Property names to load; null = all; [] = none.
      * @return object[]
      */
-    public function hydrateAllToDomain(array $rows, string $resourceClass): array
+    public function hydrateAllToDomain(array $rows, string $resourceClass, ?array $withRelations = null): array
     {
         if ($rows === []) {
             return [];
@@ -65,8 +66,8 @@ class StreamingHydrator
             $resources[] = $this->hydrator->hydrate($row, $resourceClass);
         }
 
-        // Step 2: Batch-load relations on all Resources (one query per relation type)
-        $this->relationLoader?->loadRelations($resources, $resourceClass);
+        // Step 2: Batch-load selected relations on all Resources (one query per relation type)
+        $this->relationLoader?->loadRelations($resources, $resourceClass, $withRelations);
 
         // Step 3: Convert each Resource to Domain and discard Resource
         $result = [];

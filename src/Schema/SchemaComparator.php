@@ -56,7 +56,7 @@ class SchemaComparator
         $tables = [];
 
         // Read columns
-        $stmt = $this->adapter->execute(
+        $result = $this->adapter->execute(
             'SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT,
                     COLUMN_KEY, EXTRA, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH,
                     NUMERIC_PRECISION, NUMERIC_SCALE, COLUMN_COMMENT
@@ -66,7 +66,7 @@ class SchemaComparator
             ['db' => $this->database],
         );
 
-        foreach ($stmt->fetchAll(\PDO::FETCH_ASSOC) as $row) {
+        foreach ($result->rows as $row) {
             $tableName = $row['TABLE_NAME'];
             if (!isset($tables[$tableName])) {
                 $tables[$tableName] = new DbTableState($tableName);
@@ -87,7 +87,7 @@ class SchemaComparator
         }
 
         // Read indexes
-        $stmt = $this->adapter->execute(
+        $indexResult = $this->adapter->execute(
             'SELECT TABLE_NAME, INDEX_NAME, COLUMN_NAME, NON_UNIQUE, SEQ_IN_INDEX
              FROM INFORMATION_SCHEMA.STATISTICS
              WHERE TABLE_SCHEMA = :db
@@ -96,7 +96,7 @@ class SchemaComparator
         );
 
         $indexGroups = [];
-        foreach ($stmt->fetchAll(\PDO::FETCH_ASSOC) as $row) {
+        foreach ($indexResult->rows as $row) {
             $key = $row['TABLE_NAME'] . '.' . $row['INDEX_NAME'];
             if (!isset($indexGroups[$key])) {
                 $indexGroups[$key] = [
@@ -152,7 +152,7 @@ class SchemaComparator
         // Columns in DB but not in code → DROP COLUMN
         foreach ($dbColumns as $colName => $dbCol) {
             if (!isset($codeColumns[$colName])) {
-                $diff->addDropColumn($tableName, $colName, $dbCol->comment);
+                $diff->addDropColumn($tableName, $colName, $dbCol->comment, $dbCol);
             }
         }
 

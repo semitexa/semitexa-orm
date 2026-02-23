@@ -6,15 +6,14 @@ namespace Semitexa\Orm\Repository;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Attribute\BelongsTo;
-use Semitexa\Orm\Attribute\FromTable;
 use Semitexa\Orm\Attribute\HasMany;
 use Semitexa\Orm\Attribute\ManyToMany;
 use Semitexa\Orm\Attribute\OneToOne;
-use Semitexa\Orm\Attribute\PrimaryKey;
 use Semitexa\Orm\Hydration\Hydrator;
 use Semitexa\Orm\Query\DeleteQuery;
 use Semitexa\Orm\Query\InsertQuery;
 use Semitexa\Orm\Query\UpdateQuery;
+use Semitexa\Orm\Schema\ResourceMetadata;
 
 class CascadeSaver
 {
@@ -31,7 +30,7 @@ class CascadeSaver
     public function saveTouchedRelations(object $resource): void
     {
         $ref = new \ReflectionClass($resource);
-        $parentPk = $this->resolvePkValue($resource);
+        $parentPk = ResourceMetadata::for($resource::class)->getPkValue($resource);
 
         foreach ($ref->getProperties(\ReflectionProperty::IS_PUBLIC) as $prop) {
             if (!$prop->isInitialized($resource)) {
@@ -78,8 +77,9 @@ class CascadeSaver
      */
     private function saveHasMany(array $children, HasMany $hm, mixed $parentPk): void
     {
-        $targetTable = $this->resolveTableName($hm->target);
-        $targetPkCol = $this->resolvePkColumn($hm->target);
+        $meta        = ResourceMetadata::for($hm->target);
+        $targetTable = $meta->getTableName();
+        $targetPkCol = $meta->getPkColumn();
 
         foreach ($children as $child) {
             // Set FK on child
@@ -92,8 +92,9 @@ class CascadeSaver
 
     private function saveOneToOne(object $related, OneToOne $oo, mixed $parentPk): void
     {
-        $targetTable = $this->resolveTableName($oo->target);
-        $targetPkCol = $this->resolvePkColumn($oo->target);
+        $meta        = ResourceMetadata::for($oo->target);
+        $targetTable = $meta->getTableName();
+        $targetPkCol = $meta->getPkColumn();
 
         // Set FK on related
         $fkProp = new \ReflectionProperty($related, $oo->foreignKey);
@@ -107,7 +108,7 @@ class CascadeSaver
      */
     private function saveManyToMany(array $relatedItems, ManyToMany $mm, mixed $parentPk): void
     {
-        $targetPkCol = $this->resolvePkColumn($mm->target);
+        $targetPkCol = ResourceMetadata::for($mm->target)->getPkColumn();
 
         // Delete existing pivot rows for this parent
         $this->adapter->execute(
@@ -117,7 +118,7 @@ class CascadeSaver
 
         // Insert new pivot rows
         foreach ($relatedItems as $related) {
-            $relatedPk = $this->resolvePkValue($related);
+            $relatedPk = ResourceMetadata::for($related::class)->getPkValue($related);
             if ($relatedPk === null) {
                 continue;
             }
@@ -151,42 +152,4 @@ class CascadeSaver
         }
     }
 
-    private function resolvePkValue(object $resource): mixed
-    {
-        $ref = new \ReflectionClass($resource);
-        foreach ($ref->getProperties() as $prop) {
-            if ($prop->getAttributes(PrimaryKey::class) !== []) {
-                return $prop->isInitialized($resource) ? $prop->getValue($resource) : null;
-            }
-        }
-        // Fallback to 'id'
-        if ($ref->hasProperty('id')) {
-            $prop = $ref->getProperty('id');
-            return $prop->isInitialized($resource) ? $prop->getValue($resource) : null;
-        }
-        return null;
-    }
-
-    private function resolveTableName(string $resourceClass): string
-    {
-        $ref = new \ReflectionClass($resourceClass);
-        $attrs = $ref->getAttributes(FromTable::class);
-        if ($attrs === []) {
-            throw new \RuntimeException("Class {$resourceClass} has no #[FromTable] attribute.");
-        }
-        /** @var FromTable $ft */
-        $ft = $attrs[0]->newInstance();
-        return $ft->name;
-    }
-
-    private function resolvePkColumn(string $resourceClass): string
-    {
-        $ref = new \ReflectionClass($resourceClass);
-        foreach ($ref->getProperties() as $prop) {
-            if ($prop->getAttributes(PrimaryKey::class) !== []) {
-                return $prop->getName();
-            }
-        }
-        return 'id';
-    }
 }

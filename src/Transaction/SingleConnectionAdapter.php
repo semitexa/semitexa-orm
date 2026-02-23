@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Transaction;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
+use Semitexa\Orm\Adapter\QueryResult;
 use Semitexa\Orm\Adapter\ServerCapability;
 
 /**
@@ -13,7 +14,16 @@ use Semitexa\Orm\Adapter\ServerCapability;
  */
 class SingleConnectionAdapter implements DatabaseAdapterInterface
 {
-    private string $lastInsertIdValue = '0';
+    /** @var array<string, string> */
+    private const CAPABILITY_VERSIONS = [
+        'atomic_ddl'    => '8.0.0',
+        'check'         => '8.0.16',
+        'default_expr'  => '8.0.13',
+        'invisible_col' => '8.0.23',
+        'json_table'    => '8.0.4',
+        'window_func'   => '8.0.0',
+        'desc_index'    => '8.0.0',
+    ];
 
     public function __construct(
         private readonly \PDO $connection,
@@ -22,18 +32,7 @@ class SingleConnectionAdapter implements DatabaseAdapterInterface
 
     public function supports(ServerCapability $capability): bool
     {
-        // Delegate to version check — same logic as MysqlAdapter
-        $minVersions = [
-            'atomic_ddl'    => '8.0.0',
-            'check'         => '8.0.16',
-            'default_expr'  => '8.0.13',
-            'invisible_col' => '8.0.23',
-            'json_table'    => '8.0.4',
-            'window_func'   => '8.0.0',
-            'desc_index'    => '8.0.0',
-        ];
-
-        $minVersion = $minVersions[$capability->value] ?? null;
+        $minVersion = self::CAPABILITY_VERSIONS[$capability->value] ?? null;
         if ($minVersion === null) {
             return false;
         }
@@ -46,22 +45,43 @@ class SingleConnectionAdapter implements DatabaseAdapterInterface
         return $this->serverVersion;
     }
 
-    public function execute(string $sql, array $params = []): \PDOStatement
+    public function execute(string $sql, array $params = []): QueryResult
     {
         $stmt = $this->connection->prepare($sql);
         $stmt->execute($params);
-        $this->lastInsertIdValue = $this->connection->lastInsertId();
-        return $stmt;
+
+        $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+        $rowCount = $stmt->rowCount();
+        $lastInsertId = $this->connection->lastInsertId();
+        $stmt->closeCursor();
+
+        return new QueryResult(
+            rows: $rows,
+            rowCount: $rowCount,
+            lastInsertId: $lastInsertId,
+        );
     }
 
-    public function query(string $sql): \PDOStatement
+    public function query(string $sql): QueryResult
     {
-        return $this->connection->query($sql);
+        $stmt = $this->connection->query($sql);
+        $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+        $rowCount = $stmt->rowCount();
+        $stmt->closeCursor();
+
+        return new QueryResult(
+            rows: $rows,
+            rowCount: $rowCount,
+            lastInsertId: $this->connection->lastInsertId(),
+        );
     }
 
+    /**
+     * @deprecated Use QueryResult::$lastInsertId instead.
+     */
     public function lastInsertId(): string
     {
-        return $this->lastInsertIdValue;
+        return $this->connection->lastInsertId();
     }
 
     public function getConnection(): \PDO

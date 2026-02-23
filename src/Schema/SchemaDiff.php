@@ -18,7 +18,7 @@ class SchemaDiff
     /** @var array<string, array{column: ColumnDefinition, changes: string[]}[]> Table name → altered columns */
     private array $alterColumns = [];
 
-    /** @var array<string, array{name: string, comment: string}[]> Table name → columns to drop */
+    /** @var array<string, array{name: string, comment: string, dbState: DbColumnState}[]> Table name → columns to drop */
     private array $dropColumns = [];
 
     /** @var array<string, array{index: IndexDefinition, name: string}[]> Table name → indexes to add */
@@ -50,9 +50,9 @@ class SchemaDiff
         $this->alterColumns[$tableName][] = ['column' => $column, 'changes' => $changes];
     }
 
-    public function addDropColumn(string $tableName, string $columnName, string $comment = ''): void
+    public function addDropColumn(string $tableName, string $columnName, string $comment, DbColumnState $dbState): void
     {
-        $this->dropColumns[$tableName][] = ['name' => $columnName, 'comment' => $comment];
+        $this->dropColumns[$tableName][] = ['name' => $columnName, 'comment' => $comment, 'dbState' => $dbState];
     }
 
     public function addAddIndex(string $tableName, IndexDefinition $index, string $name): void
@@ -89,7 +89,7 @@ class SchemaDiff
         return $this->alterColumns;
     }
 
-    /** @return array<string, array{name: string, comment: string}[]> */
+    /** @return array<string, array{name: string, comment: string, dbState: DbColumnState}[]> */
     public function getDropColumns(): array
     {
         return $this->dropColumns;

@@ -159,10 +159,9 @@ abstract class AbstractRepository implements RepositoryInterface
      */
     protected function raw(string $sql, array $params = []): array
     {
-        $stmt = $this->getActiveAdapter()->execute($sql, $params);
-        $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+        $result = $this->getActiveAdapter()->execute($sql, $params);
 
-        return $this->streamingHydrator->hydrateAllToDomain($rows, $this->getResourceClass());
+        return $this->streamingHydrator->hydrateAllToDomain($result->rows, $this->getResourceClass());
     }
 
     /**

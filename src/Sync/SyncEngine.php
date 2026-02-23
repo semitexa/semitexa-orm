@@ -7,6 +7,7 @@ namespace Semitexa\Orm\Sync;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Adapter\MySqlType;
 use Semitexa\Orm\Schema\ColumnDefinition;
+use Semitexa\Orm\Schema\DbColumnState;
 use Semitexa\Orm\Schema\SchemaDiff;
 use Semitexa\Orm\Schema\TableDefinition;
 
@@ -97,12 +98,14 @@ class SyncEngine
         foreach ($diff->getDropColumns() as $tableName => $columns) {
             foreach ($columns as $colInfo) {
                 $columnName = $colInfo['name'];
-                $comment = $colInfo['comment'];
+                $comment    = $colInfo['comment'];
+                $dbState    = $colInfo['dbState'];
 
                 if ($comment !== self::DEPRECATED_COMMENT) {
-                    // Column was not previously marked as deprecated → block drop, add deprecation comment instead
+                    // Column was not previously marked as deprecated → block drop, add deprecation comment instead.
+                    // MODIFY COLUMN requires the full column definition — reconstruct it from DbColumnState.
                     $plan->addOperation(new DdlOperation(
-                        sql: "ALTER TABLE `{$tableName}` MODIFY COLUMN `{$columnName}` COMMENT '" . self::DEPRECATED_COMMENT . "'",
+                        sql: $this->generateDeprecationDdl($tableName, $dbState),
                         type: DdlOperationType::AlterColumn,
                         tableName: $tableName,
                         isDestructive: false,
@@ -245,6 +248,35 @@ class SyncEngine
     private function generateAlterColumn(string $tableName, ColumnDefinition $col): string
     {
         $ddl = $this->generateColumnDdl($col);
+        return "ALTER TABLE `{$tableName}` MODIFY COLUMN {$ddl}";
+    }
+
+    /**
+     * Generate MODIFY COLUMN DDL that marks a live DB column as deprecated.
+     *
+     * MySQL MODIFY COLUMN requires the complete column definition — omitting
+     * the type causes MySQL to silently reset it to a default. We reconstruct
+     * the full definition from DbColumnState (the live DB snapshot read via
+     * INFORMATION_SCHEMA) and append the deprecation comment.
+     */
+    private function generateDeprecationDdl(string $tableName, DbColumnState $col): string
+    {
+        // columnType from INFORMATION_SCHEMA is the authoritative full type string
+        // (e.g. "varchar(255)", "decimal(10,2)", "tinyint(1)") — use it verbatim.
+        $null    = $col->nullable ? 'NULL' : 'NOT NULL';
+        $auto    = $col->isAutoIncrement ? ' AUTO_INCREMENT' : '';
+        $default = '';
+
+        if ($col->defaultValue !== null) {
+            $default = " DEFAULT '" . addslashes($col->defaultValue) . "'";
+        } elseif ($col->nullable) {
+            $default = ' DEFAULT NULL';
+        }
+
+        $comment = " COMMENT '" . self::DEPRECATED_COMMENT . "'";
+
+        $ddl = "`{$col->name}` {$col->columnType} {$null}{$auto}{$default}{$comment}";
+
         return "ALTER TABLE `{$tableName}` MODIFY COLUMN {$ddl}";
     }
 

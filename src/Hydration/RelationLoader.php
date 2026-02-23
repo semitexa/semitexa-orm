@@ -6,11 +6,10 @@ namespace Semitexa\Orm\Hydration;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Attribute\BelongsTo;
-use Semitexa\Orm\Attribute\FromTable;
 use Semitexa\Orm\Attribute\HasMany;
 use Semitexa\Orm\Attribute\ManyToMany;
 use Semitexa\Orm\Attribute\OneToOne;
-use Semitexa\Orm\Attribute\PrimaryKey;
+use Semitexa\Orm\Schema\ResourceMetadata;
 
 class RelationLoader
 {
@@ -23,13 +22,15 @@ class RelationLoader
     ) {}
 
     /**
-     * Load all declared relations for a batch of hydrated Resources.
+     * Load relations for a batch of hydrated Resources.
      * Modifies Resources in-place (sets relation properties).
      *
-     * @param object[] $resources Hydrated Resource objects (same class)
+     * @param object[]    $resources     Hydrated Resource objects (same class)
      * @param class-string $resourceClass
+     * @param string[]|null $only        Property names to load; null = load all.
+     *                                   Pass an empty array to skip all relations.
      */
-    public function loadRelations(array $resources, string $resourceClass): void
+    public function loadRelations(array $resources, string $resourceClass, ?array $only = null): void
     {
         if ($resources === []) {
             return;
@@ -38,10 +39,14 @@ class RelationLoader
         $relations = $this->getRelationMeta($resourceClass);
 
         foreach ($relations as $meta) {
+            if ($only !== null && !in_array($meta->property, $only, true)) {
+                continue;
+            }
+
             match ($meta->type) {
-                'belongs_to' => $this->loadBelongsTo($resources, $meta),
-                'has_many' => $this->loadHasMany($resources, $meta),
-                'one_to_one' => $this->loadOneToOne($resources, $meta),
+                'belongs_to'   => $this->loadBelongsTo($resources, $meta),
+                'has_many'     => $this->loadHasMany($resources, $meta),
+                'one_to_one'   => $this->loadOneToOne($resources, $meta),
                 'many_to_many' => $this->loadManyToMany($resources, $meta),
             };
         }
@@ -58,13 +63,14 @@ class RelationLoader
             return;
         }
 
-        $targetTable = $this->resolveTableName($meta->targetClass);
-        $targetPk = $this->resolvePkColumn($meta->targetClass);
+        $targetMeta  = ResourceMetadata::for($meta->targetClass);
+        $targetTable = $targetMeta->getTableName();
+        $targetPk    = $targetMeta->getPkColumn();
 
         $placeholders = $this->buildInPlaceholders($fkValues);
         $sql = "SELECT * FROM `{$targetTable}` WHERE `{$targetPk}` IN ({$placeholders})";
-        $stmt = $this->adapter->execute($sql, array_values($fkValues));
-        $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+        $result = $this->adapter->execute($sql, array_values($fkValues));
+        $rows = $result->rows;
 
         // Index by PK
         $indexed = [];
@@ -93,18 +99,18 @@ class RelationLoader
      */
     private function loadHasMany(array $resources, RelationMeta $meta): void
     {
-        $parentPk = $this->resolvePkColumn($resources[0]::class);
+        $parentPk = ResourceMetadata::for($resources[0]::class)->getPkColumn();
         $pkValues = $this->collectValues($resources, $parentPk);
         if ($pkValues === []) {
             return;
         }
 
-        $targetTable = $this->resolveTableName($meta->targetClass);
+        $targetTable = ResourceMetadata::for($meta->targetClass)->getTableName();
 
         $placeholders = $this->buildInPlaceholders($pkValues);
         $sql = "SELECT * FROM `{$targetTable}` WHERE `{$meta->foreignKey}` IN ({$placeholders})";
-        $stmt = $this->adapter->execute($sql, array_values($pkValues));
-        $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+        $result = $this->adapter->execute($sql, array_values($pkValues));
+        $rows = $result->rows;
 
         // Group by FK
         $grouped = [];
@@ -128,18 +134,18 @@ class RelationLoader
      */
     private function loadOneToOne(array $resources, RelationMeta $meta): void
     {
-        $parentPk = $this->resolvePkColumn($resources[0]::class);
+        $parentPk = ResourceMetadata::for($resources[0]::class)->getPkColumn();
         $pkValues = $this->collectValues($resources, $parentPk);
         if ($pkValues === []) {
             return;
         }
 
-        $targetTable = $this->resolveTableName($meta->targetClass);
+        $targetTable = ResourceMetadata::for($meta->targetClass)->getTableName();
 
         $placeholders = $this->buildInPlaceholders($pkValues);
         $sql = "SELECT * FROM `{$targetTable}` WHERE `{$meta->foreignKey}` IN ({$placeholders})";
-        $stmt = $this->adapter->execute($sql, array_values($pkValues));
-        $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+        $result = $this->adapter->execute($sql, array_values($pkValues));
+        $rows = $result->rows;
 
         // Index by FK (one per parent)
         $indexed = [];
@@ -165,20 +171,21 @@ class RelationLoader
      */
     private function loadManyToMany(array $resources, RelationMeta $meta): void
     {
-        $parentPk = $this->resolvePkColumn($resources[0]::class);
-        $pkValues = $this->collectValues($resources, $parentPk);
+        $parentPk    = ResourceMetadata::for($resources[0]::class)->getPkColumn();
+        $pkValues    = $this->collectValues($resources, $parentPk);
         if ($pkValues === []) {
             return;
         }
 
-        $targetTable = $this->resolveTableName($meta->targetClass);
-        $targetPk = $this->resolvePkColumn($meta->targetClass);
+        $targetMeta  = ResourceMetadata::for($meta->targetClass);
+        $targetTable = $targetMeta->getTableName();
+        $targetPk    = $targetMeta->getPkColumn();
 
         // Query pivot table
         $placeholders = $this->buildInPlaceholders($pkValues);
         $pivotSql = "SELECT `{$meta->foreignKey}`, `{$meta->relatedKey}` FROM `{$meta->pivotTable}` WHERE `{$meta->foreignKey}` IN ({$placeholders})";
-        $pivotStmt = $this->adapter->execute($pivotSql, array_values($pkValues));
-        $pivotRows = $pivotStmt->fetchAll(\PDO::FETCH_ASSOC);
+        $pivotResult = $this->adapter->execute($pivotSql, array_values($pkValues));
+        $pivotRows = $pivotResult->rows;
 
         if ($pivotRows === []) {
             // No relations — set empty arrays
@@ -202,8 +209,8 @@ class RelationLoader
         // Query related table
         $relPlaceholders = $this->buildInPlaceholders($relatedIds);
         $relSql = "SELECT * FROM `{$targetTable}` WHERE `{$targetPk}` IN ({$relPlaceholders})";
-        $relStmt = $this->adapter->execute($relSql, array_values($relatedIds));
-        $relRows = $relStmt->fetchAll(\PDO::FETCH_ASSOC);
+        $relResult = $this->adapter->execute($relSql, array_values($relatedIds));
+        $relRows = $relResult->rows;
 
         // Index related by PK
         $relatedIndex = [];
@@ -320,26 +327,4 @@ class RelationLoader
         return $relations;
     }
 
-    private function resolveTableName(string $resourceClass): string
-    {
-        $ref = new \ReflectionClass($resourceClass);
-        $attrs = $ref->getAttributes(FromTable::class);
-        if ($attrs === []) {
-            throw new \RuntimeException("Class {$resourceClass} has no #[FromTable] attribute.");
-        }
-        /** @var FromTable $ft */
-        $ft = $attrs[0]->newInstance();
-        return $ft->name;
-    }
-
-    private function resolvePkColumn(string $resourceClass): string
-    {
-        $ref = new \ReflectionClass($resourceClass);
-        foreach ($ref->getProperties() as $prop) {
-            if ($prop->getAttributes(PrimaryKey::class) !== []) {
-                return $prop->getName();
-            }
-        }
-        return 'id';
-    }
 }

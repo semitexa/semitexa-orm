@@ -10,9 +10,27 @@ interface DatabaseAdapterInterface
 
     public function getServerVersion(): string;
 
-    public function execute(string $sql, array $params = []): \PDOStatement;
+    /**
+     * Execute a prepared SQL statement.
+     *
+     * Returns a QueryResult containing all fetched rows, rowCount, and lastInsertId.
+     * All data is materialized before the connection returns to the pool,
+     * ensuring coroutine safety in Swoole environments.
+     *
+     * @param array<string, mixed> $params
+     */
+    public function execute(string $sql, array $params = []): QueryResult;
 
-    public function query(string $sql): \PDOStatement;
+    /**
+     * Execute a raw SQL query (no parameters).
+     */
+    public function query(string $sql): QueryResult;
 
+    /**
+     * Get the last auto-generated ID from the most recent INSERT on this adapter.
+     *
+     * @deprecated Use QueryResult::$lastInsertId from execute() instead.
+     *             Kept for backward compatibility during transition.
+     */
     public function lastInsertId(): string;
 }

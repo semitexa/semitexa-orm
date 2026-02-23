@@ -28,8 +28,8 @@ class InsertQuery
         $phList = implode(', ', $placeholders);
 
         $sql = "INSERT INTO `{$this->table}` ({$colList}) VALUES ({$phList})";
-        $this->adapter->execute($sql, $data);
+        $result = $this->adapter->execute($sql, $data);
 
-        return $this->adapter->lastInsertId();
+        return $result->lastInsertId;
     }
 }
