@@ -73,8 +73,11 @@ class SelectQuery
         return $this;
     }
 
+    private const VALID_OPERATORS = ['=', '!=', '<>', '<', '>', '<=', '>=', 'LIKE', 'NOT LIKE'];
+
     public function where(string $column, string $operator, mixed $value): self
     {
+        $this->assertValidOperator($operator);
         $paramName = $this->nextParam($column);
         $this->wheres[] = [
             'connector' => 'AND',
@@ -89,6 +92,7 @@ class SelectQuery
 
     public function orWhere(string $column, string $operator, mixed $value): self
     {
+        $this->assertValidOperator($operator);
         $paramName = $this->nextParam($column);
         $this->wheres[] = [
             'connector' => 'OR',
@@ -99,6 +103,15 @@ class SelectQuery
         ];
         $this->params[$paramName] = $value instanceof \BackedEnum ? $value->value : $value;
         return $this;
+    }
+
+    private function assertValidOperator(string $operator): void
+    {
+        if (!in_array(strtoupper($operator), self::VALID_OPERATORS, true)) {
+            throw new \InvalidArgumentException(
+                "Invalid WHERE operator '{$operator}'. Allowed: " . implode(', ', self::VALID_OPERATORS)
+            );
+        }
     }
 
     public function whereNull(string $column): self

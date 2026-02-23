@@ -108,25 +108,59 @@ class CascadeSaver
      */
     private function saveManyToMany(array $relatedItems, ManyToMany $mm, mixed $parentPk): void
     {
-        $targetPkCol = ResourceMetadata::for($mm->target)->getPkColumn();
-
-        // Delete existing pivot rows for this parent
-        $this->adapter->execute(
-            "DELETE FROM `{$mm->pivotTable}` WHERE `{$mm->foreignKey}` = :parent_pk",
-            ['parent_pk' => $parentPk],
-        );
-
-        // Insert new pivot rows
+        // Collect non-null related PKs up front so we know the full batch
+        // before touching the DB.
+        $relatedPks = [];
         foreach ($relatedItems as $related) {
-            $relatedPk = ResourceMetadata::for($related::class)->getPkValue($related);
-            if ($relatedPk === null) {
-                continue;
+            $pk = ResourceMetadata::for($related::class)->getPkValue($related);
+            if ($pk !== null) {
+                $relatedPks[] = $pk;
+            }
+        }
+
+        // Wrap DELETE + INSERT in an explicit transaction so that a crash or
+        // coroutine switch between the two statements cannot leave the pivot
+        // table in a half-empty state.
+        // If the caller already started a transaction (e.g. via TransactionManager),
+        // START TRANSACTION will implicitly commit it — so we only open our own
+        // transaction when we are not already inside one.
+        $ownTransaction = !$this->adapter->query('SELECT @@in_transaction')->fetchColumn();
+
+        try {
+            if ($ownTransaction) {
+                $this->adapter->query('START TRANSACTION');
             }
 
             $this->adapter->execute(
-                "INSERT INTO `{$mm->pivotTable}` (`{$mm->foreignKey}`, `{$mm->relatedKey}`) VALUES (:parent_pk, :related_pk)",
-                ['parent_pk' => $parentPk, 'related_pk' => $relatedPk],
+                "DELETE FROM `{$mm->pivotTable}` WHERE `{$mm->foreignKey}` = :parent_pk",
+                ['parent_pk' => $parentPk],
             );
+
+            if ($relatedPks !== []) {
+                // Single batch INSERT instead of N individual inserts.
+                $valueSets = [];
+                $params    = ['parent_pk' => $parentPk];
+                foreach ($relatedPks as $i => $relatedPk) {
+                    $key          = "rk_{$i}";
+                    $valueSets[]  = "(:parent_pk, :{$key})";
+                    $params[$key] = $relatedPk;
+                }
+
+                $this->adapter->execute(
+                    "INSERT INTO `{$mm->pivotTable}` (`{$mm->foreignKey}`, `{$mm->relatedKey}`) VALUES "
+                        . implode(', ', $valueSets),
+                    $params,
+                );
+            }
+
+            if ($ownTransaction) {
+                $this->adapter->query('COMMIT');
+            }
+        } catch (\Throwable $e) {
+            if ($ownTransaction) {
+                $this->adapter->query('ROLLBACK');
+            }
+            throw $e;
         }
     }
 

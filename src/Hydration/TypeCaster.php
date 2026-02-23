@@ -108,14 +108,23 @@ class TypeCaster
         return json_decode((string) $value, true) ?? [];
     }
 
+    /**
+     * Cache: phpType → true (backed enum) | false (not a backed enum).
+     * Populated on first encounter; ReflectionEnum is never constructed twice
+     * for the same type, regardless of how many rows are hydrated.
+     *
+     * @var array<string, bool>
+     */
+    private static array $enumCache = [];
+
     private function castToEnum(mixed $value, string $phpType): mixed
     {
-        if (!enum_exists($phpType)) {
-            return $value;
+        if (!isset(self::$enumCache[$phpType])) {
+            self::$enumCache[$phpType] = enum_exists($phpType)
+                && (new \ReflectionEnum($phpType))->isBacked();
         }
 
-        $ref = new \ReflectionEnum($phpType);
-        if (!$ref->isBacked()) {
+        if (!self::$enumCache[$phpType]) {
             return $value;
         }
 
