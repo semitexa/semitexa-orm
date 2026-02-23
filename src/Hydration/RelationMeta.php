@@ -7,11 +7,11 @@ namespace Semitexa\Orm\Hydration;
 readonly class RelationMeta
 {
     public function __construct(
-        public string $property,
-        public string $type,
-        public string $targetClass,
-        public string $foreignKey,
-        public ?string $pivotTable = null,
-        public ?string $relatedKey = null,
+        public string       $property,
+        public RelationType $type,
+        public string       $targetClass,
+        public string       $foreignKey,
+        public ?string      $pivotTable = null,
+        public ?string      $relatedKey = null,
     ) {}
 }

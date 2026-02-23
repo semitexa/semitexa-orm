@@ -44,10 +44,10 @@ class RelationLoader
             }
 
             match ($meta->type) {
-                'belongs_to'   => $this->loadBelongsTo($resources, $meta),
-                'has_many'     => $this->loadHasMany($resources, $meta),
-                'one_to_one'   => $this->loadOneToOne($resources, $meta),
-                'many_to_many' => $this->loadManyToMany($resources, $meta),
+                RelationType::BelongsTo  => $this->loadBelongsTo($resources, $meta),
+                RelationType::HasMany    => $this->loadHasMany($resources, $meta),
+                RelationType::OneToOne   => $this->loadOneToOne($resources, $meta),
+                RelationType::ManyToMany => $this->loadManyToMany($resources, $meta),
             };
         }
     }
@@ -281,7 +281,7 @@ class RelationLoader
                 $bt = $attr->newInstance();
                 $relations[] = new RelationMeta(
                     property: $prop->getName(),
-                    type: 'belongs_to',
+                    type: RelationType::BelongsTo,
                     targetClass: $bt->target,
                     foreignKey: $bt->foreignKey,
                 );
@@ -292,7 +292,7 @@ class RelationLoader
                 $hm = $attr->newInstance();
                 $relations[] = new RelationMeta(
                     property: $prop->getName(),
-                    type: 'has_many',
+                    type: RelationType::HasMany,
                     targetClass: $hm->target,
                     foreignKey: $hm->foreignKey,
                 );
@@ -303,7 +303,7 @@ class RelationLoader
                 $oo = $attr->newInstance();
                 $relations[] = new RelationMeta(
                     property: $prop->getName(),
-                    type: 'one_to_one',
+                    type: RelationType::OneToOne,
                     targetClass: $oo->target,
                     foreignKey: $oo->foreignKey,
                 );
@@ -314,7 +314,7 @@ class RelationLoader
                 $mm = $attr->newInstance();
                 $relations[] = new RelationMeta(
                     property: $prop->getName(),
-                    type: 'many_to_many',
+                    type: RelationType::ManyToMany,
                     targetClass: $mm->target,
                     foreignKey: $mm->foreignKey,
                     pivotTable: $mm->pivotTable,
