@@ -13,12 +13,12 @@ interface RepositoryInterface
     public function findById(int|string $id): ?object;
 
     /**
-     * Find all entities.
+     * Find all entities up to $limit rows.
      * Returns array of Domain objects.
      *
      * @return object[]
      */
-    public function findAll(): array;
+    public function findAll(int $limit = 1000): array;
 
     /**
      * Find entities by criteria (column => value pairs).
@@ -28,6 +28,14 @@ interface RepositoryInterface
      * @return object[]
      */
     public function findBy(array $criteria): array;
+
+    /**
+     * Find a single entity matching criteria.
+     * Returns the first match or null.
+     *
+     * @param array<string, mixed> $criteria
+     */
+    public function findOneBy(array $criteria): ?object;
 
     /**
      * Save (insert or update) an entity.

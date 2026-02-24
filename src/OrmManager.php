@@ -113,6 +113,29 @@ class OrmManager
         $this->adapter = null;
     }
 
+    public function __destruct()
+    {
+        $this->shutdown();
+    }
+
+    /**
+     * Run a callback with a managed OrmManager instance.
+     * shutdown() is guaranteed via finally — even if the callback throws.
+     *
+     * @template T
+     * @param callable(OrmManager): T $callback
+     * @return T
+     */
+    public static function run(callable $callback): mixed
+    {
+        $orm = new self();
+        try {
+            return $callback($orm);
+        } finally {
+            $orm->shutdown();
+        }
+    }
+
     private function createPool(): ConnectionPoolInterface
     {
         // Ensure .env is loaded in Swoole workers (getenv may be empty after fork)

@@ -179,6 +179,24 @@ class SchemaComparator
             $changes[] = "nullable: " . ($db->nullable ? 'NULL' : 'NOT NULL') . " → {$nullStr}";
         }
 
+        // Compare AUTO_INCREMENT
+        $codeAutoIncrement = $code->isPrimaryKey
+            && $code->pkStrategy === 'auto'
+            && in_array($code->type, [MySqlType::Int, MySqlType::Bigint], true);
+        if ($codeAutoIncrement !== $db->isAutoIncrement) {
+            $changes[] = 'auto_increment: ' . ($db->isAutoIncrement ? 'yes' : 'no') . ' → ' . ($codeAutoIncrement ? 'yes' : 'no');
+        }
+
+        // Compare default value.
+        // Normalize code default to the string form MySQL stores in INFORMATION_SCHEMA
+        // (no quotes, booleans as '1'/'0').
+        $codeDefault = $this->normalizeDefault($code->default);
+        if ($codeDefault !== $db->defaultValue) {
+            $fromStr = $db->defaultValue === null ? 'none' : "'{$db->defaultValue}'";
+            $toStr   = $codeDefault      === null ? 'none' : "'{$codeDefault}'";
+            $changes[] = "default: {$fromStr} → {$toStr}";
+        }
+
         return $changes;
     }
 
@@ -196,6 +214,22 @@ class SchemaComparator
             MySqlType::Date => 'date',
             MySqlType::Json => 'json',
         };
+    }
+
+    /**
+     * Convert a code-side default value to the string form MySQL stores in
+     * INFORMATION_SCHEMA.COLUMNS (COLUMN_DEFAULT): no surrounding quotes,
+     * booleans as '1'/'0', null means "no default".
+     */
+    private function normalizeDefault(mixed $default): ?string
+    {
+        if ($default === null) {
+            return null;
+        }
+        if (is_bool($default)) {
+            return $default ? '1' : '0';
+        }
+        return (string) $default;
     }
 
     private function normalizeType(string $type): string

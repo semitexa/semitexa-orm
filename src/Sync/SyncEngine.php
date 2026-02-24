@@ -382,9 +382,30 @@ class SyncEngine
         $old = strtolower(trim($matches[1]));
         $new = strtolower(trim($matches[2]));
 
-        // VARCHAR widening
-        if (preg_match('/varchar\((\d+)\)/', $old, $oldM) && preg_match('/varchar\((\d+)\)/', $new, $newM)) {
+        // VARCHAR(N) → VARCHAR(M) where M >= N
+        if (preg_match('/^varchar\((\d+)\)$/', $old, $oldM) && preg_match('/^varchar\((\d+)\)$/', $new, $newM)) {
             return (int) $newM[1] >= (int) $oldM[1];
+        }
+
+        // VARCHAR(any) → TEXT/MEDIUMTEXT/LONGTEXT — always wider
+        if (str_starts_with($old, 'varchar(') && in_array($new, ['text', 'mediumtext', 'longtext'], true)) {
+            return true;
+        }
+
+        // TEXT → MEDIUMTEXT → LONGTEXT
+        $textOrder = ['text' => 0, 'mediumtext' => 1, 'longtext' => 2];
+        if (isset($textOrder[$old], $textOrder[$new])) {
+            return $textOrder[$new] >= $textOrder[$old];
+        }
+
+        // INT → BIGINT
+        if ($old === 'int' && $new === 'bigint') {
+            return true;
+        }
+
+        // TINYINT(1) → INT or BIGINT
+        if ($old === 'tinyint(1)' && in_array($new, ['int', 'bigint'], true)) {
+            return true;
         }
 
         return false;

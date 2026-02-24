@@ -14,6 +14,12 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 
 class OrmSyncCommand extends BaseCommand
 {
+    public function __construct(
+        private readonly OrmManager $orm,
+    ) {
+        parent::__construct();
+    }
+
     protected function configure(): void
     {
         $this->setName('orm:sync')
@@ -31,7 +37,7 @@ class OrmSyncCommand extends BaseCommand
         $outputFile = $input->getOption('output');
 
         try {
-            $orm = new OrmManager();
+            $orm = $this->orm;
 
             // 1. Collect schema from code
             $io->section('Collecting schema from code...');
@@ -60,7 +66,7 @@ class OrmSyncCommand extends BaseCommand
 
             if ($diff->isEmpty()) {
                 $io->success('Database is up to date. No changes needed.');
-                $orm->shutdown();
+
                 return Command::SUCCESS;
             }
 
@@ -110,7 +116,7 @@ class OrmSyncCommand extends BaseCommand
             // Execute if not dry-run
             if ($dryRun) {
                 $io->note('Dry run mode — no changes applied.');
-                $orm->shutdown();
+
                 return Command::SUCCESS;
             }
 

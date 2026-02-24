@@ -13,7 +13,6 @@ use Semitexa\Orm\Hydration\StreamingHydrator;
 use Semitexa\Orm\Query\DeleteQuery;
 use Semitexa\Orm\Query\InsertQuery;
 use Semitexa\Orm\Query\SelectQuery;
-use Semitexa\Orm\Query\UpdateQuery;
 
 abstract class AbstractRepository implements RepositoryInterface
 {
@@ -47,9 +46,29 @@ abstract class AbstractRepository implements RepositoryInterface
             ->fetchOne();
     }
 
-    public function findAll(): array
+    public function findAll(int $limit = 1000): array
     {
-        return $this->select()->fetchAll();
+        return $this->select()->limit($limit)->fetchAll();
+    }
+
+    /**
+     * @param array<string, mixed> $criteria
+     */
+    public function findOneBy(array $criteria): ?object
+    {
+        $query = $this->select();
+
+        foreach ($criteria as $column => $value) {
+            if ($value === null) {
+                $query->whereNull($column);
+            } elseif (is_array($value)) {
+                $query->whereIn($column, $value);
+            } else {
+                $query->where($column, '=', $value);
+            }
+        }
+
+        return $query->fetchOne();
     }
 
     /**
@@ -87,8 +106,8 @@ abstract class AbstractRepository implements RepositoryInterface
 
         $pkValue = $data[$this->pkColumn] ?? null;
 
-        if ($pkValue === null || $pkValue === 0 || $pkValue === '') {
-            // INSERT — remove PK if it's auto-increment with no value
+        if ($pkValue === null) {
+            // Auto-increment INSERT — exclude PK so the DB assigns it
             unset($data[$this->pkColumn]);
             $insertId = (new InsertQuery($this->tableName, $activeAdapter))->execute($data);
 
@@ -107,8 +126,10 @@ abstract class AbstractRepository implements RepositoryInterface
                 }
             }
         } else {
-            // UPDATE
-            (new UpdateQuery($this->tableName, $activeAdapter))->execute($data, $this->pkColumn);
+            // PK is set — use INSERT … ON DUPLICATE KEY UPDATE so both new records
+            // (pre-assigned UUID / explicit ID) and existing records are handled
+            // with a single query and no racy SELECT-then-INSERT.
+            (new InsertQuery($this->tableName, $activeAdapter))->execute($data, upsert: true);
         }
 
         // Cascade save for "touched" relation fields (MVP)
@@ -118,11 +139,14 @@ abstract class AbstractRepository implements RepositoryInterface
 
     public function delete(object $entity): void
     {
-        $resource = $this->toResource($entity);
-        $ref = new \ReflectionProperty($resource, $this->pkColumn);
-        $pkValue = $ref->getValue($resource);
+        $resource      = $this->toResource($entity);
+        $activeAdapter = $this->getActiveAdapter();
+        $pkValue       = (new \ReflectionProperty($resource, $this->pkColumn))->getValue($resource);
 
-        (new DeleteQuery($this->tableName, $this->getActiveAdapter()))->execute($this->pkColumn, $pkValue);
+        // Cascade-delete children / pivot rows before removing the main record.
+        (new CascadeDeleter($activeAdapter))->deleteRelations($resource);
+
+        (new DeleteQuery($this->tableName, $activeAdapter))->execute($this->pkColumn, $pkValue);
     }
 
     /**

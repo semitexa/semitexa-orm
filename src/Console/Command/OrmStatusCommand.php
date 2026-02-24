@@ -14,6 +14,12 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 
 class OrmStatusCommand extends BaseCommand
 {
+    public function __construct(
+        private readonly OrmManager $orm,
+    ) {
+        parent::__construct();
+    }
+
     protected function configure(): void
     {
         $this->setName('orm:status')
@@ -25,7 +31,7 @@ class OrmStatusCommand extends BaseCommand
         $io = new SymfonyStyle($input, $output);
 
         try {
-            $orm = new OrmManager();
+            $orm = $this->orm;
             $adapter = $orm->getAdapter();
 
             // Server info
@@ -96,7 +102,7 @@ class OrmStatusCommand extends BaseCommand
                 $io->text($plan->getSummary());
             }
 
-            $orm->shutdown();
+
             return Command::SUCCESS;
         } catch (\Throwable $e) {
             $io->error('Status check failed: ' . $e->getMessage());

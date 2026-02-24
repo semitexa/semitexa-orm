@@ -322,6 +322,13 @@ class SelectQuery
      */
     public function paginate(int $page, int $perPage = 20): PaginatedResult
     {
+        if ($page < 1) {
+            throw new \InvalidArgumentException("Page must be >= 1, got {$page}.");
+        }
+        if ($perPage < 1) {
+            throw new \InvalidArgumentException("PerPage must be >= 1, got {$perPage}.");
+        }
+
         // Count total — uses current WHERE but no LIMIT/OFFSET
         $countSql = $this->buildCountSql();
         $countResult = $this->adapter->execute($countSql, $this->params);

@@ -13,6 +13,12 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 
 class OrmSeedCommand extends BaseCommand
 {
+    public function __construct(
+        private readonly OrmManager $orm,
+    ) {
+        parent::__construct();
+    }
+
     protected function configure(): void
     {
         $this->setName('orm:seed')
@@ -24,7 +30,7 @@ class OrmSeedCommand extends BaseCommand
         $io = new SymfonyStyle($input, $output);
 
         try {
-            $orm = new OrmManager();
+            $orm = $this->orm;
 
             $io->section('Running seed (defaults) upsert...');
 
@@ -32,7 +38,7 @@ class OrmSeedCommand extends BaseCommand
 
             if ($results === []) {
                 $io->note('No Resource classes with defaults() found.');
-                $orm->shutdown();
+    
                 return Command::SUCCESS;
             }
 
@@ -61,7 +67,7 @@ class OrmSeedCommand extends BaseCommand
                 count($results),
             ));
 
-            $orm->shutdown();
+
             return Command::SUCCESS;
         } catch (\Throwable $e) {
             $io->error('Seed failed: ' . $e->getMessage());

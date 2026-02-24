@@ -13,6 +13,12 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 
 class OrmDiffCommand extends BaseCommand
 {
+    public function __construct(
+        private readonly OrmManager $orm,
+    ) {
+        parent::__construct();
+    }
+
     protected function configure(): void
     {
         $this->setName('orm:diff')
@@ -24,7 +30,7 @@ class OrmDiffCommand extends BaseCommand
         $io = new SymfonyStyle($input, $output);
 
         try {
-            $orm = new OrmManager();
+            $orm = $this->orm;
 
             // 1. Collect schema from code
             $collector = $orm->getSchemaCollector();
@@ -43,7 +49,7 @@ class OrmDiffCommand extends BaseCommand
 
             if ($diff->isEmpty()) {
                 $io->success('No differences. Database matches code schema.');
-                $orm->shutdown();
+    
                 return Command::SUCCESS;
             }
 
@@ -99,7 +105,7 @@ class OrmDiffCommand extends BaseCommand
                 $io->section("- DROP TABLE `{$tableName}`");
             }
 
-            $orm->shutdown();
+
             return Command::SUCCESS;
         } catch (\Throwable $e) {
             $io->error('Diff failed: ' . $e->getMessage());
