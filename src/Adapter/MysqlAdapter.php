@@ -54,7 +54,7 @@ class MysqlAdapter implements DatabaseAdapterInterface
             // coroutine may reuse this PDO and invalidate the PDOStatement.
             $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
             $rowCount = $stmt->rowCount();
-            $lastInsertId = $connection->lastInsertId();
+            $lastInsertId = $connection->lastInsertId() ?: '0';
             $stmt->closeCursor();
 
             return new QueryResult(
@@ -73,9 +73,12 @@ class MysqlAdapter implements DatabaseAdapterInterface
 
         try {
             $stmt = $connection->query($sql);
+            if ($stmt === false) {
+                throw new \RuntimeException("Query failed: {$sql}");
+            }
             $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
             $rowCount = $stmt->rowCount();
-            $lastInsertId = $connection->lastInsertId();
+            $lastInsertId = $connection->lastInsertId() ?: '0';
             $stmt->closeCursor();
 
             return new QueryResult(
