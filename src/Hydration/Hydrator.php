@@ -13,8 +13,15 @@ class Hydrator
     /** @var array<string, \ReflectionProperty[]> Cached property reflections per class */
     private array $propertyCache = [];
 
-    /** @var array<string, array<string, \ReflectionAttribute<Column>>> Column attributes cache */
+    /** @var array<string, array<string, \ReflectionAttribute<Column>>> Column attributes cache, keyed by property name */
     private array $columnAttrCache = [];
+
+    /**
+     * Map: class → [dbColumnName => ReflectionProperty]
+     * Needed for hydrate() to look up the row key by DB column name.
+     * @var array<string, array<string, \ReflectionProperty>>
+     */
+    private array $dbColumnToPropertyCache = [];
 
     public function __construct(?TypeCaster $typeCaster = null)
     {
@@ -32,17 +39,15 @@ class Hydrator
     public function hydrate(array $row, string $resourceClass): object
     {
         $resource = new $resourceClass();
-        $properties = $this->getProperties($resourceClass);
+        $dbColumnMap = $this->getDbColumnToPropertyMap($resourceClass);
 
-        foreach ($properties as $property) {
-            $propertyName = $property->getName();
-
-            if (!array_key_exists($propertyName, $row)) {
+        foreach ($dbColumnMap as $dbColumnName => $property) {
+            if (!array_key_exists($dbColumnName, $row)) {
                 continue;
             }
 
-            $value = $row[$propertyName];
-            $phpType = $this->resolvePhpType($property);
+            $value    = $row[$dbColumnName];
+            $phpType  = $this->resolvePhpType($property);
             $nullable = $property->getType() instanceof \ReflectionNamedType && $property->getType()->allowsNull();
 
             $castedValue = $this->typeCaster->castToPropertyType($value, $phpType, $nullable);
@@ -63,10 +68,9 @@ class Hydrator
     {
         $data = [];
         $resourceClass = $resource::class;
-        $properties = $this->getProperties($resourceClass);
         $columnAttrs = $this->getColumnAttributes($resourceClass);
 
-        foreach ($properties as $property) {
+        foreach ($this->getDbColumnToPropertyMap($resourceClass) as $dbColumnName => $property) {
             $propertyName = $property->getName();
 
             if (!isset($columnAttrs[$propertyName])) {
@@ -79,10 +83,10 @@ class Hydrator
 
             /** @var Column $column */
             $column = $columnAttrs[$propertyName]->newInstance();
-            $value = $property->getValue($resource);
+            $value  = $property->getValue($resource);
 
-            $data[$propertyName] = $this->typeCaster->castToDb($value, new \Semitexa\Orm\Schema\ColumnDefinition(
-                name: $propertyName,
+            $data[$dbColumnName] = $this->typeCaster->castToDb($value, new \Semitexa\Orm\Schema\ColumnDefinition(
+                name: $dbColumnName,
                 type: $column->type,
                 phpType: $this->resolvePhpType($property),
                 nullable: $column->nullable || ($property->getType() instanceof \ReflectionNamedType && $property->getType()->allowsNull()),
@@ -110,21 +114,47 @@ class Hydrator
     }
 
     /**
-     * @return array<string, \ReflectionAttribute<Column>>
+     * @return array<string, \ReflectionAttribute<Column>> Keyed by PHP property name
      */
     private function getColumnAttributes(string $className): array
     {
         if (!isset($this->columnAttrCache[$className])) {
-            $this->columnAttrCache[$className] = [];
-            foreach ($this->getProperties($className) as $prop) {
-                $attrs = $prop->getAttributes(Column::class);
-                if ($attrs !== []) {
-                    $this->columnAttrCache[$className][$prop->getName()] = $attrs[0];
-                }
-            }
+            $this->buildColumnCaches($className);
         }
 
         return $this->columnAttrCache[$className];
+    }
+
+    /**
+     * @return array<string, \ReflectionProperty> Keyed by DB column name
+     */
+    private function getDbColumnToPropertyMap(string $className): array
+    {
+        if (!isset($this->dbColumnToPropertyCache[$className])) {
+            $this->buildColumnCaches($className);
+        }
+
+        return $this->dbColumnToPropertyCache[$className];
+    }
+
+    private function buildColumnCaches(string $className): void
+    {
+        $this->columnAttrCache[$className] = [];
+        $this->dbColumnToPropertyCache[$className] = [];
+
+        foreach ($this->getProperties($className) as $prop) {
+            $attrs = $prop->getAttributes(Column::class);
+            if ($attrs === []) {
+                continue;
+            }
+            $attrInstance = $attrs[0];
+            /** @var Column $colAttr */
+            $colAttr = $attrInstance->newInstance();
+            $dbName  = $colAttr->name ?? $prop->getName();
+
+            $this->columnAttrCache[$className][$prop->getName()]   = $attrInstance;
+            $this->dbColumnToPropertyCache[$className][$dbName]    = $prop;
+        }
     }
 
     private function resolvePhpType(\ReflectionProperty $property): string

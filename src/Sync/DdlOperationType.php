@@ -13,4 +13,6 @@ enum DdlOperationType: string
     case DropColumn = 'drop_column';
     case AddIndex = 'add_index';
     case DropIndex = 'drop_index';
+    case AddForeignKey = 'add_foreign_key';
+    case DropForeignKey = 'drop_foreign_key';
 }

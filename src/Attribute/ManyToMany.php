@@ -14,5 +14,7 @@ readonly class ManyToMany
         public string $pivotTable,
         public string $foreignKey,
         public string $relatedKey,
+        public ?\Semitexa\Orm\Schema\ForeignKeyAction $onDelete = null,
+        public ?\Semitexa\Orm\Schema\ForeignKeyAction $onUpdate = null,
     ) {}
 }

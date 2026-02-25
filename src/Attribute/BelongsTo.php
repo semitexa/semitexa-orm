@@ -12,5 +12,7 @@ readonly class BelongsTo
     public function __construct(
         public string $target,
         public string $foreignKey,
+        public ?\Semitexa\Orm\Schema\ForeignKeyAction $onDelete = null,
+        public ?\Semitexa\Orm\Schema\ForeignKeyAction $onUpdate = null,
     ) {}
 }

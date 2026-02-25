@@ -9,9 +9,11 @@ use Semitexa\Orm\Adapter\MySqlType;
 
 class SchemaComparator
 {
+    /** @param string[] $ignoreTables Table names to exclude from DROP detection */
     public function __construct(
         private readonly DatabaseAdapterInterface $adapter,
         private readonly string $database,
+        private readonly array $ignoreTables = [],
     ) {}
 
     /**
@@ -36,12 +38,15 @@ class SchemaComparator
             $this->compareTable($tableDefinition, $dbSchema[$tableName], $diff);
         }
 
-        // Tables in DB but not in code → DROP
+        // Tables in DB but not in code → DROP (skip ignored tables)
         foreach ($dbSchema as $tableName => $dbTable) {
-            if (!isset($codeSchema[$tableName])) {
-                $diff->addDropTable($tableName);
+            if (!isset($codeSchema[$tableName]) && !in_array($tableName, $this->ignoreTables, true)) {
+                $diff->addDropTable($dbTable);
             }
         }
+
+        // Compare foreign keys
+        $this->compareForeignKeys($codeSchema, $diff);
 
         return $diff;
     }
@@ -54,6 +59,18 @@ class SchemaComparator
     private function readDatabaseSchema(): array
     {
         $tables = [];
+
+        // Read table comments (needed for two-phase DROP TABLE detection)
+        $tableComments = [];
+        $tableResult = $this->adapter->execute(
+            'SELECT TABLE_NAME, TABLE_COMMENT
+             FROM INFORMATION_SCHEMA.TABLES
+             WHERE TABLE_SCHEMA = :db AND TABLE_TYPE = \'BASE TABLE\'',
+            ['db' => $this->database],
+        );
+        foreach ($tableResult->rows as $row) {
+            $tableComments[$row['TABLE_NAME']] = $row['TABLE_COMMENT'];
+        }
 
         // Read columns
         $result = $this->adapter->execute(
@@ -68,8 +85,11 @@ class SchemaComparator
 
         foreach ($result->rows as $row) {
             $tableName = $row['TABLE_NAME'];
+            if (in_array($tableName, $this->ignoreTables, true)) {
+                continue;
+            }
             if (!isset($tables[$tableName])) {
-                $tables[$tableName] = new DbTableState($tableName);
+                $tables[$tableName] = new DbTableState($tableName, $tableComments[$tableName] ?? '');
             }
             $tables[$tableName]->addColumn(new DbColumnState(
                 name: $row['COLUMN_NAME'],
@@ -288,5 +308,93 @@ class SchemaComparator
     {
         $prefix = $unique ? 'uniq' : 'idx';
         return $prefix . '_' . $tableName . '_' . implode('_', $columns);
+    }
+
+    /**
+     * Compare FK constraints: code schema vs DB.
+     * - FK in code but not in DB → ADD CONSTRAINT
+     * - FK in DB but not in code → DROP CONSTRAINT
+     * - FK exists in both but definition differs → DROP + ADD
+     *
+     * @param array<string, TableDefinition> $codeSchema
+     */
+    private function compareForeignKeys(array $codeSchema, SchemaDiff $diff): void
+    {
+        $dbFks = $this->readDbForeignKeys();
+
+        // Collect all code FKs keyed by constraint name
+        $codeFks = [];
+        foreach ($codeSchema as $table) {
+            foreach ($table->getForeignKeys() as $fk) {
+                $codeFks[$fk->constraintName()] = $fk;
+            }
+        }
+
+        // FK in code but missing or different in DB → ADD
+        foreach ($codeFks as $name => $fk) {
+            if (!isset($dbFks[$name])) {
+                $diff->addForeignKey($fk);
+                continue;
+            }
+
+            // Check if definition changed
+            $db = $dbFks[$name];
+            if (
+                $db['referencedTable'] !== $fk->referencedTable
+                || $db['referencedColumn'] !== $fk->referencedColumn
+                || strtoupper($db['onDelete']) !== $fk->onDelete->value
+                || strtoupper($db['onUpdate']) !== $fk->onUpdate->value
+            ) {
+                $diff->addDropForeignKey($fk->table, $name);
+                $diff->addForeignKey($fk);
+            }
+        }
+
+        // FK in DB but not in code → DROP (only for managed tables, skip ignored)
+        foreach ($dbFks as $name => $db) {
+            if (!isset($codeFks[$name]) && !in_array($db['table'], $this->ignoreTables, true)) {
+                $diff->addDropForeignKey($db['table'], $name);
+            }
+        }
+    }
+
+    /**
+     * Read existing FK constraints from INFORMATION_SCHEMA.
+     *
+     * @return array<string, array{table: string, column: string, referencedTable: string, referencedColumn: string, onDelete: string, onUpdate: string}>
+     */
+    private function readDbForeignKeys(): array
+    {
+        $result = $this->adapter->execute(
+            'SELECT
+                kcu.CONSTRAINT_NAME,
+                kcu.TABLE_NAME,
+                kcu.COLUMN_NAME,
+                kcu.REFERENCED_TABLE_NAME,
+                kcu.REFERENCED_COLUMN_NAME,
+                rc.DELETE_RULE,
+                rc.UPDATE_RULE
+             FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
+             JOIN INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS rc
+               ON rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+              AND rc.CONSTRAINT_SCHEMA = kcu.TABLE_SCHEMA
+             WHERE kcu.TABLE_SCHEMA = :db
+               AND kcu.REFERENCED_TABLE_NAME IS NOT NULL',
+            ['db' => $this->database],
+        );
+
+        $fks = [];
+        foreach ($result->rows as $row) {
+            $fks[$row['CONSTRAINT_NAME']] = [
+                'table'            => $row['TABLE_NAME'],
+                'column'           => $row['COLUMN_NAME'],
+                'referencedTable'  => $row['REFERENCED_TABLE_NAME'],
+                'referencedColumn' => $row['REFERENCED_COLUMN_NAME'],
+                'onDelete'         => $row['DELETE_RULE'],
+                'onUpdate'         => $row['UPDATE_RULE'],
+            ];
+        }
+
+        return $fks;
     }
 }

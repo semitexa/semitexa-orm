@@ -23,7 +23,8 @@ class AuditLogger
             mkdir($this->historyDir, 0755, true);
         }
 
-        $timestamp = date('Y-m-d_H-i-s');
+        $now = \DateTimeImmutable::createFromFormat('U.u', sprintf('%.6F', microtime(true)));
+        $timestamp = $now !== false ? $now->format('Y-m-d_H-i-s.v') : date('Y-m-d_H-i-s') . '.' . substr((string) microtime(), 2, 3);
         $filename = $this->historyDir . '/' . $timestamp . '_sync.json';
 
         $entries = [];
@@ -46,7 +47,7 @@ class AuditLogger
         file_put_contents($filename, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
 
         // Also write a .sql file for DevOps convenience
-        $sqlFilename = $this->historyDir . '/' . $timestamp . '_sync.sql';
+        $sqlFilename  = $this->historyDir . '/' . $timestamp . '_sync.sql';
         $sqlLines = [
             '-- Semitexa ORM Sync — ' . date('c'),
             '-- Operations: ' . count($operations),

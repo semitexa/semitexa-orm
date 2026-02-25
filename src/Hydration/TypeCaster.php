@@ -19,12 +19,18 @@ class TypeCaster
         }
 
         return match ($column->type) {
-            MySqlType::Int, MySqlType::Bigint => (int) $value,
-            MySqlType::Decimal => (float) $value,
-            MySqlType::Boolean => (bool) $value,
-            MySqlType::Varchar, MySqlType::Text => (string) $value,
-            MySqlType::Datetime, MySqlType::Timestamp, MySqlType::Date => $this->castToDateTime($value),
-            MySqlType::Json => $this->castToArray($value),
+            MySqlType::TinyInt, MySqlType::SmallInt,
+            MySqlType::Int, MySqlType::Bigint, MySqlType::Year => (int) $value,
+            MySqlType::Float, MySqlType::Double,
+            MySqlType::Decimal                                 => (float) $value,
+            MySqlType::Boolean                                 => (bool) $value,
+            MySqlType::Varchar, MySqlType::Char,
+            MySqlType::Text, MySqlType::MediumText,
+            MySqlType::LongText, MySqlType::Time               => (string) $value,
+            MySqlType::Blob, MySqlType::Binary                 => $value, // raw bytes
+            MySqlType::Datetime, MySqlType::Timestamp,
+            MySqlType::Date                                    => $this->castToDateTime($value),
+            MySqlType::Json                                    => $this->castToArray($value),
         };
     }
 
@@ -73,7 +79,8 @@ class TypeCaster
         if ($value instanceof \DateTimeInterface) {
             return match ($column->type) {
                 MySqlType::Date => $value->format('Y-m-d'),
-                default => $value->format('Y-m-d H:i:s'),
+                MySqlType::Time => $value->format('H:i:s'),
+                default         => $value->format('Y-m-d H:i:s'),
             };
         }
 

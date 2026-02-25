@@ -8,6 +8,7 @@ use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Adapter\MySqlType;
 use Semitexa\Orm\Schema\ColumnDefinition;
 use Semitexa\Orm\Schema\DbColumnState;
+use Semitexa\Orm\Schema\ForeignKeyDefinition;
 use Semitexa\Orm\Schema\SchemaDiff;
 use Semitexa\Orm\Schema\TableDefinition;
 
@@ -66,7 +67,18 @@ class SyncEngine
             }
         }
 
-        // 4. ADD INDEXes (safe)
+        // 4. ADD FOREIGN KEYs (safe — all tables already exist at this point)
+        foreach ($diff->getAddForeignKeys() as $fk) {
+            $plan->addOperation(new DdlOperation(
+                sql: $this->generateAddForeignKey($fk),
+                type: DdlOperationType::AddForeignKey,
+                tableName: $fk->table,
+                isDestructive: false,
+                description: "Add FK constraint '{$fk->constraintName()}' on '{$fk->table}'.{$fk->column} → '{$fk->referencedTable}'.{$fk->referencedColumn}",
+            ));
+        }
+
+        // 5. ADD INDEXes (safe)
         foreach ($diff->getAddIndexes() as $tableName => $indexes) {
             foreach ($indexes as $entry) {
                 $index = $entry['index'];
@@ -124,15 +136,39 @@ class SyncEngine
             }
         }
 
-        // 7. DROP TABLEs (destructive)
-        foreach ($diff->getDropTables() as $tableName) {
+        // 7. DROP FOREIGN KEYs (destructive — must happen before DROP TABLE/COLUMN)
+        foreach ($diff->getDropForeignKeys() as $entry) {
             $plan->addOperation(new DdlOperation(
-                sql: "DROP TABLE `{$tableName}`",
-                type: DdlOperationType::DropTable,
-                tableName: $tableName,
+                sql: "ALTER TABLE `{$entry['table']}` DROP FOREIGN KEY `{$entry['constraintName']}`",
+                type: DdlOperationType::DropForeignKey,
+                tableName: $entry['table'],
                 isDestructive: true,
-                description: "Drop table '{$tableName}'",
+                description: "Drop FK constraint '{$entry['constraintName']}' from '{$entry['table']}'",
             ));
+        }
+
+        // 8. DROP TABLEs — two-phase logic (destructive)
+        foreach ($diff->getDropTables() as $dbTable) {
+            $tableName = $dbTable->name;
+            if ($dbTable->tableComment !== self::DEPRECATED_COMMENT) {
+                // Table was not previously marked as deprecated → block drop, add deprecation comment instead.
+                $plan->addOperation(new DdlOperation(
+                    sql: "ALTER TABLE `{$tableName}` COMMENT '" . self::DEPRECATED_COMMENT . "'",
+                    type: DdlOperationType::AlterColumn,
+                    tableName: $tableName,
+                    isDestructive: false,
+                    description: "Mark table '{$tableName}' as deprecated (two-phase drop, phase 1)",
+                ));
+            } else {
+                // Table was already deprecated → safe to drop
+                $plan->addOperation(new DdlOperation(
+                    sql: "DROP TABLE `{$tableName}`",
+                    type: DdlOperationType::DropTable,
+                    tableName: $tableName,
+                    isDestructive: true,
+                    description: "Drop deprecated table '{$tableName}' (two-phase drop, phase 2)",
+                ));
+            }
         }
 
         return $plan;
@@ -205,16 +241,27 @@ class SyncEngine
     private function sqlType(ColumnDefinition $col): string
     {
         return match ($col->type) {
-            MySqlType::Varchar => 'VARCHAR(' . ($col->length ?? 255) . ')',
-            MySqlType::Text => 'TEXT',
-            MySqlType::Int => 'INT',
-            MySqlType::Bigint => 'BIGINT',
-            MySqlType::Decimal => 'DECIMAL(' . ($col->precision ?? 10) . ',' . ($col->scale ?? 0) . ')',
-            MySqlType::Boolean => 'TINYINT(1)',
-            MySqlType::Datetime => 'DATETIME',
-            MySqlType::Timestamp => 'TIMESTAMP',
-            MySqlType::Date => 'DATE',
-            MySqlType::Json => 'JSON',
+            MySqlType::Varchar    => 'VARCHAR(' . ($col->length ?? 255) . ')',
+            MySqlType::Char       => 'CHAR(' . ($col->length ?? 1) . ')',
+            MySqlType::Text       => 'TEXT',
+            MySqlType::MediumText => 'MEDIUMTEXT',
+            MySqlType::LongText   => 'LONGTEXT',
+            MySqlType::TinyInt    => 'TINYINT',
+            MySqlType::SmallInt   => 'SMALLINT',
+            MySqlType::Int        => 'INT',
+            MySqlType::Bigint     => 'BIGINT',
+            MySqlType::Float      => 'FLOAT',
+            MySqlType::Double     => 'DOUBLE',
+            MySqlType::Decimal    => 'DECIMAL(' . ($col->precision ?? 10) . ',' . ($col->scale ?? 0) . ')',
+            MySqlType::Boolean    => 'TINYINT(1)',
+            MySqlType::Datetime   => 'DATETIME',
+            MySqlType::Timestamp  => 'TIMESTAMP',
+            MySqlType::Date       => 'DATE',
+            MySqlType::Time       => 'TIME',
+            MySqlType::Year       => 'YEAR',
+            MySqlType::Json       => 'JSON',
+            MySqlType::Blob       => 'BLOB',
+            MySqlType::Binary     => 'BINARY(' . ($col->length ?? 16) . ')',
         };
     }
 
@@ -288,6 +335,21 @@ class SyncEngine
         $cols = implode('`, `', $index->columns);
         $type = $index->unique ? 'UNIQUE INDEX' : 'INDEX';
         return "ALTER TABLE `{$tableName}` ADD {$type} `{$name}` (`{$cols}`)";
+    }
+
+    private function generateAddForeignKey(ForeignKeyDefinition $fk): string
+    {
+        $name = $fk->constraintName();
+        return sprintf(
+            'ALTER TABLE `%s` ADD CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES `%s`(`%s`) ON DELETE %s ON UPDATE %s',
+            $fk->table,
+            $name,
+            $fk->column,
+            $fk->referencedTable,
+            $fk->referencedColumn,
+            $fk->onDelete->value,
+            $fk->onUpdate->value,
+        );
     }
 
     /**
@@ -398,13 +460,25 @@ class SyncEngine
             return $textOrder[$new] >= $textOrder[$old];
         }
 
-        // INT → BIGINT
-        if ($old === 'int' && $new === 'bigint') {
+        // Integer widening order: TINYINT → SMALLINT → INT → BIGINT
+        $intOrder = ['tinyint' => 0, 'smallint' => 1, 'int' => 2, 'bigint' => 3];
+        $oldBase = preg_replace('/\(\d+\)/', '', $old); // strip (1) from tinyint(1)
+        if (isset($intOrder[$oldBase], $intOrder[$new])) {
+            return $intOrder[$new] >= $intOrder[$oldBase];
+        }
+
+        // Float widening: FLOAT → DOUBLE
+        if ($old === 'float' && $new === 'double') {
             return true;
         }
 
-        // TINYINT(1) → INT or BIGINT
-        if ($old === 'tinyint(1)' && in_array($new, ['int', 'bigint'], true)) {
+        // CHAR(N) → CHAR(M) where M >= N
+        if (preg_match('/^char\((\d+)\)$/', $old, $oldM) && preg_match('/^char\((\d+)\)$/', $new, $newM)) {
+            return (int) $newM[1] >= (int) $oldM[1];
+        }
+
+        // CHAR(any) → VARCHAR(any) — always wider (fixed → variable)
+        if (str_starts_with($old, 'char(') && str_starts_with($new, 'varchar(')) {
             return true;
         }
 

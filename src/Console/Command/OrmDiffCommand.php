@@ -101,10 +101,18 @@ class OrmDiffCommand extends BaseCommand
                 }
             }
 
-            foreach ($diff->getDropTables() as $tableName) {
-                $io->section("- DROP TABLE `{$tableName}`");
+            foreach ($diff->getAddForeignKeys() as $fk) {
+                $io->text("    <fg=green>+ ADD FK</> `{$fk->constraintName()}` ({$fk->table}.{$fk->column} → {$fk->referencedTable}.{$fk->referencedColumn}) ON DELETE {$fk->onDelete->value}");
             }
 
+            foreach ($diff->getDropForeignKeys() as $entry) {
+                $io->text("    <fg=red>- DROP FK</> `{$entry['constraintName']}` from `{$entry['table']}`");
+            }
+
+            foreach ($diff->getDropTables() as $dbTable) {
+                $phase = $dbTable->tableComment === 'SEMITEXA_DEPRECATED' ? 'phase 2 — DROP' : 'phase 1 — deprecate';
+                $io->section("- DROP TABLE `{$dbTable->name}` ({$phase})");
+            }
 
             return Command::SUCCESS;
         } catch (\Throwable $e) {

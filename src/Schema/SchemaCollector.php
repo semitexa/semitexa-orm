@@ -49,6 +49,8 @@ class SchemaCollector
             }
         }
 
+        $this->resolveForeignKeys($tables);
+
         return $tables;
     }
 
@@ -178,15 +180,18 @@ class SchemaCollector
         $isDeprecated = !empty($deprecatedAttrs);
         $phpType = $this->resolvePhpType($property);
 
+        $propertyName = $property->getName();
+        $columnName   = $column->name ?? $propertyName;
+
         // Validate PHP type vs MySqlType
-        $this->validateTypeMatch($phpType, $column->type, $property->getName(), $className);
+        $this->validateTypeMatch($phpType, $column->type, $propertyName, $className);
 
         $nullable = $column->nullable || ($property->getType() instanceof \ReflectionNamedType && $property->getType()->allowsNull());
 
-        $this->assertValidIdentifier($property->getName(), "column '{$property->getName()}' in '{$className}'");
+        $this->assertValidIdentifier($columnName, "column '{$columnName}' in '{$className}'");
 
         $colDef = new ColumnDefinition(
-            name: $property->getName(),
+            name: $columnName,
             type: $column->type,
             phpType: $phpType,
             nullable: $nullable,
@@ -197,17 +202,18 @@ class SchemaCollector
             isPrimaryKey: $isPrimaryKey,
             pkStrategy: $pkStrategy,
             isDeprecated: $isDeprecated,
+            propertyName: $propertyName,
         );
 
         // Multiple Resources can map to the same table (e.g. base + projection); merge schema — skip column if already defined
-        if ($table->getColumn($property->getName()) !== null) {
+        if ($table->getColumn($columnName) !== null) {
             return;
         }
 
         $table->addColumn($colDef);
 
         if ($isDeprecated) {
-            $this->checkDeprecatedUsage($property->getName(), $table);
+            $this->checkDeprecatedUsage($columnName, $table);
         }
     }
 
@@ -218,25 +224,25 @@ class SchemaCollector
         foreach ($property->getAttributes(BelongsTo::class) as $attr) {
             /** @var BelongsTo $rel */
             $rel = $attr->newInstance();
-            $table->addRelation($propName, 'belongs_to', $rel->target, $rel->foreignKey);
+            $table->addRelation($propName, 'belongs_to', $rel->target, $rel->foreignKey, null, null, $rel->onDelete, $rel->onUpdate);
         }
 
         foreach ($property->getAttributes(HasMany::class) as $attr) {
             /** @var HasMany $rel */
             $rel = $attr->newInstance();
-            $table->addRelation($propName, 'has_many', $rel->target, $rel->foreignKey);
+            $table->addRelation($propName, 'has_many', $rel->target, $rel->foreignKey, null, null, $rel->onDelete, $rel->onUpdate);
         }
 
         foreach ($property->getAttributes(OneToOne::class) as $attr) {
             /** @var OneToOne $rel */
             $rel = $attr->newInstance();
-            $table->addRelation($propName, 'one_to_one', $rel->target, $rel->foreignKey);
+            $table->addRelation($propName, 'one_to_one', $rel->target, $rel->foreignKey, null, null, $rel->onDelete, $rel->onUpdate);
         }
 
         foreach ($property->getAttributes(ManyToMany::class) as $attr) {
             /** @var ManyToMany $rel */
             $rel = $attr->newInstance();
-            $table->addRelation($propName, 'many_to_many', $rel->target, $rel->foreignKey, $rel->pivotTable, $rel->relatedKey);
+            $table->addRelation($propName, 'many_to_many', $rel->target, $rel->foreignKey, $rel->pivotTable, $rel->relatedKey, $rel->onDelete, $rel->onUpdate);
         }
     }
 
@@ -274,12 +280,19 @@ class SchemaCollector
         }
 
         $valid = match ($sqlType) {
-            MySqlType::Varchar, MySqlType::Text => in_array($phpType, ['string', 'mixed']),
-            MySqlType::Json => in_array($phpType, ['string', 'array', 'mixed']),
-            MySqlType::Int, MySqlType::Bigint => in_array($phpType, ['int', 'mixed']),
-            MySqlType::Decimal => in_array($phpType, ['string', 'float', 'mixed']),
-            MySqlType::Boolean => in_array($phpType, ['bool', 'int', 'mixed']),
-            MySqlType::Datetime, MySqlType::Timestamp, MySqlType::Date => in_array($phpType, ['DateTimeImmutable', 'DateTime', 'string', 'mixed']),
+            MySqlType::Varchar, MySqlType::Char,
+            MySqlType::Text, MySqlType::MediumText,
+            MySqlType::LongText, MySqlType::Time        => in_array($phpType, ['string', 'mixed']),
+            MySqlType::Json                             => in_array($phpType, ['string', 'array', 'mixed']),
+            MySqlType::TinyInt, MySqlType::SmallInt,
+            MySqlType::Int, MySqlType::Bigint,
+            MySqlType::Year                             => in_array($phpType, ['int', 'mixed']),
+            MySqlType::Float, MySqlType::Double         => in_array($phpType, ['float', 'mixed']),
+            MySqlType::Decimal                          => in_array($phpType, ['string', 'float', 'mixed']),
+            MySqlType::Boolean                          => in_array($phpType, ['bool', 'int', 'mixed']),
+            MySqlType::Datetime, MySqlType::Timestamp,
+            MySqlType::Date                             => in_array($phpType, ['DateTimeImmutable', 'DateTime', 'string', 'mixed']),
+            MySqlType::Blob, MySqlType::Binary          => in_array($phpType, ['string', 'mixed']),
         };
 
         if (!$valid) {
@@ -301,6 +314,109 @@ class SchemaCollector
                 "Invalid SQL identifier for {$context}: '{$name}'. "
                 . "Only letters, digits and underscores are allowed, starting with a letter or underscore."
             );
+        }
+    }
+
+    /**
+     * Post-process step: build ForeignKeyDefinition objects for all relations
+     * that carry a FK column on the owning side.
+     *
+     * BelongsTo — FK lives on THIS table → generate FK from this table → target.
+     * HasMany    — FK lives on the CHILD table → generate FK from target table → this table.
+     * OneToOne   — FK lives on the CHILD/related table → same as HasMany.
+     * ManyToMany — FK lives on the pivot table → skip here (pivot is not a Resource, handled separately if needed).
+     *
+     * @param array<string, TableDefinition> $tables
+     */
+    private function resolveForeignKeys(array $tables): void
+    {
+        // Build a map: table name → PK column name (for reference resolution)
+        $pkMap = [];
+        foreach ($tables as $tableName => $table) {
+            $pk = $table->getPrimaryKey();
+            if ($pk !== null) {
+                $pkMap[$tableName] = $pk->name;
+            }
+        }
+
+        // Build a map: resource class name → table name
+        $classToTable = [];
+        foreach ($tables as $tableName => $table) {
+            // We need the reverse map; iterate relations which carry the target class name
+        }
+        // Populate classToTable by scanning all relation targets
+        foreach ($tables as $tableName => $table) {
+            foreach ($table->getRelations() as $relation) {
+                $targetClass = $relation['target'];
+                if (!isset($classToTable[$targetClass])) {
+                    // Try to resolve table name from the target class attributes
+                    try {
+                        $ref = new \ReflectionClass($targetClass);
+                        $attrs = $ref->getAttributes(FromTable::class);
+                        if (!empty($attrs)) {
+                            /** @var \Semitexa\Orm\Attribute\FromTable $ft */
+                            $ft = $attrs[0]->newInstance();
+                            $classToTable[$targetClass] = $ft->name;
+                        }
+                    } catch (\ReflectionException) {
+                        // Target class not found — skip
+                    }
+                }
+            }
+        }
+
+        foreach ($tables as $tableName => $table) {
+            foreach ($table->getRelations() as $relation) {
+                $type       = $relation['type'];
+                $targetClass = $relation['target'];
+                $foreignKey = $relation['foreignKey'];
+                $onDelete   = $relation['onDelete'] ?? null;
+                $onUpdate   = $relation['onUpdate'] ?? null;
+
+                $targetTable = $classToTable[$targetClass] ?? null;
+                if ($targetTable === null) {
+                    continue;
+                }
+
+                if ($type === 'belongs_to') {
+                    // FK is on THIS table — references the target's PK
+                    $referencedPk = $pkMap[$targetTable] ?? 'id';
+                    $fkCol = $table->getColumn($foreignKey);
+                    $nullable = $fkCol !== null && $fkCol->nullable;
+                    $resolvedOnDelete = $onDelete ?? ($nullable ? ForeignKeyAction::SetNull : ForeignKeyAction::Restrict);
+                    $resolvedOnUpdate = $onUpdate ?? ($nullable ? ForeignKeyAction::SetNull : ForeignKeyAction::Restrict);
+
+                    $table->addForeignKey(new ForeignKeyDefinition(
+                        table: $tableName,
+                        column: $foreignKey,
+                        referencedTable: $targetTable,
+                        referencedColumn: $referencedPk,
+                        onDelete: $resolvedOnDelete,
+                        onUpdate: $resolvedOnUpdate,
+                    ));
+                } elseif ($type === 'has_many' || $type === 'one_to_one') {
+                    // FK is on the TARGET table — references THIS table's PK
+                    $referencedPk = $pkMap[$tableName] ?? 'id';
+                    $targetTableDef = $tables[$targetTable] ?? null;
+                    if ($targetTableDef === null) {
+                        continue;
+                    }
+                    $fkCol = $targetTableDef->getColumn($foreignKey);
+                    $nullable = $fkCol !== null && $fkCol->nullable;
+                    $resolvedOnDelete = $onDelete ?? ($nullable ? ForeignKeyAction::SetNull : ForeignKeyAction::Restrict);
+                    $resolvedOnUpdate = $onUpdate ?? ($nullable ? ForeignKeyAction::SetNull : ForeignKeyAction::Restrict);
+
+                    $targetTableDef->addForeignKey(new ForeignKeyDefinition(
+                        table: $targetTable,
+                        column: $foreignKey,
+                        referencedTable: $tableName,
+                        referencedColumn: $referencedPk,
+                        onDelete: $resolvedOnDelete,
+                        onUpdate: $resolvedOnUpdate,
+                    ));
+                }
+                // many_to_many — pivot table is not a managed Resource, skip
+            }
         }
     }
 

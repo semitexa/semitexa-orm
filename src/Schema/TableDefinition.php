@@ -15,6 +15,9 @@ class TableDefinition
     /** @var array<string, array{type: string, target: string, foreignKey: string, pivotTable?: string, relatedKey?: string}> */
     private array $relations = [];
 
+    /** @var ForeignKeyDefinition[] */
+    private array $foreignKeys = [];
+
     private ?ColumnDefinition $primaryKey = null;
 
     public function __construct(
@@ -35,12 +38,27 @@ class TableDefinition
         $this->indexes[] = $index;
     }
 
-    public function addRelation(string $property, string $type, string $target, string $foreignKey, ?string $pivotTable = null, ?string $relatedKey = null): void
+    public function addForeignKey(ForeignKeyDefinition $fk): void
     {
+        $this->foreignKeys[] = $fk;
+    }
+
+    public function addRelation(
+        string $property,
+        string $type,
+        string $target,
+        string $foreignKey,
+        ?string $pivotTable = null,
+        ?string $relatedKey = null,
+        ?ForeignKeyAction $onDelete = null,
+        ?ForeignKeyAction $onUpdate = null,
+    ): void {
         $relation = [
-            'type' => $type,
-            'target' => $target,
+            'type'       => $type,
+            'target'     => $target,
             'foreignKey' => $foreignKey,
+            'onDelete'   => $onDelete,
+            'onUpdate'   => $onUpdate,
         ];
 
         if ($pivotTable !== null) {
@@ -74,6 +92,12 @@ class TableDefinition
     public function getRelations(): array
     {
         return $this->relations;
+    }
+
+    /** @return ForeignKeyDefinition[] */
+    public function getForeignKeys(): array
+    {
+        return $this->foreignKeys;
     }
 
     public function getPrimaryKey(): ?ColumnDefinition

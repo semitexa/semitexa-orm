@@ -39,4 +39,41 @@ class InsertQuery
 
         return $result->lastInsertId;
     }
+
+    /**
+     * Insert multiple rows in a single query.
+     *
+     * All rows must have the same set of columns (determined by the first row).
+     * Returns the last insert ID of the first inserted row (MySQL behaviour).
+     *
+     * @param array<int, array<string, mixed>> $rows
+     * @return string Last insert ID of the first inserted row
+     * @throws \InvalidArgumentException When $rows is empty
+     */
+    public function executeBatch(array $rows): string
+    {
+        if ($rows === []) {
+            throw new \InvalidArgumentException('executeBatch() requires at least one row.');
+        }
+
+        $columns = array_keys($rows[0]);
+        $colList = implode(', ', array_map(fn(string $c) => "`{$c}`", $columns));
+
+        $valueSets = [];
+        $params = [];
+
+        foreach ($rows as $i => $row) {
+            $phList = implode(', ', array_map(fn(string $col) => ":{$col}_{$i}", $columns));
+            $valueSets[] = "({$phList})";
+            foreach ($columns as $col) {
+                $params["{$col}_{$i}"] = $row[$col];
+            }
+        }
+
+        $sql = "INSERT INTO `{$this->table}` ({$colList}) VALUES " . implode(', ', $valueSets);
+
+        $result = $this->adapter->execute($sql, $params);
+
+        return $result->lastInsertId;
+    }
 }

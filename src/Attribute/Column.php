@@ -17,5 +17,7 @@ readonly class Column
         public ?int $scale = null,
         public mixed $default = null,
         public bool $nullable = false,
+        /** Override the DB column name. Defaults to the PHP property name when null. */
+        public ?string $name = null,
     ) {}
 }

@@ -9,6 +9,7 @@ use Semitexa\Orm\Adapter\MySqlType;
 readonly class ColumnDefinition
 {
     public function __construct(
+        /** DB column name */
         public string $name,
         public MySqlType $type,
         public string $phpType,
@@ -20,5 +21,7 @@ readonly class ColumnDefinition
         public bool $isPrimaryKey = false,
         public string $pkStrategy = 'auto',
         public bool $isDeprecated = false,
+        /** PHP property name — equals $name when no explicit mapping */
+        public string $propertyName = '',
     ) {}
 }

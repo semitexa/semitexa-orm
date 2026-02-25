@@ -9,7 +9,7 @@ class SchemaDiff
     /** @var TableDefinition[] Tables to create */
     private array $createTables = [];
 
-    /** @var string[] Table names to drop */
+    /** @var DbTableState[] Tables to drop */
     private array $dropTables = [];
 
     /** @var array<string, ColumnDefinition[]> Table name → columns to add */
@@ -27,14 +27,20 @@ class SchemaDiff
     /** @var array<string, string[]> Table name → index names to drop */
     private array $dropIndexes = [];
 
+    /** @var ForeignKeyDefinition[] FK constraints to add */
+    private array $addForeignKeys = [];
+
+    /** @var array{table: string, constraintName: string}[] FK constraints to drop */
+    private array $dropForeignKeys = [];
+
     public function addCreateTable(TableDefinition $table): void
     {
         $this->createTables[] = $table;
     }
 
-    public function addDropTable(string $tableName): void
+    public function addDropTable(DbTableState $table): void
     {
-        $this->dropTables[] = $tableName;
+        $this->dropTables[] = $table;
     }
 
     public function addAddColumn(string $tableName, ColumnDefinition $column): void
@@ -65,13 +71,23 @@ class SchemaDiff
         $this->dropIndexes[$tableName][] = $indexName;
     }
 
+    public function addForeignKey(ForeignKeyDefinition $fk): void
+    {
+        $this->addForeignKeys[] = $fk;
+    }
+
+    public function addDropForeignKey(string $table, string $constraintName): void
+    {
+        $this->dropForeignKeys[] = ['table' => $table, 'constraintName' => $constraintName];
+    }
+
     /** @return TableDefinition[] */
     public function getCreateTables(): array
     {
         return $this->createTables;
     }
 
-    /** @return string[] */
+    /** @return DbTableState[] */
     public function getDropTables(): array
     {
         return $this->dropTables;
@@ -107,6 +123,18 @@ class SchemaDiff
         return $this->dropIndexes;
     }
 
+    /** @return ForeignKeyDefinition[] */
+    public function getAddForeignKeys(): array
+    {
+        return $this->addForeignKeys;
+    }
+
+    /** @return array{table: string, constraintName: string}[] */
+    public function getDropForeignKeys(): array
+    {
+        return $this->dropForeignKeys;
+    }
+
     public function isEmpty(): bool
     {
         return $this->createTables === []
@@ -115,6 +143,8 @@ class SchemaDiff
             && $this->alterColumns === []
             && $this->dropColumns === []
             && $this->addIndexes === []
-            && $this->dropIndexes === [];
+            && $this->dropIndexes === []
+            && $this->addForeignKeys === []
+            && $this->dropForeignKeys === [];
     }
 }

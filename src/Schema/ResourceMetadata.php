@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Schema;
 
+use Semitexa\Orm\Attribute\Column;
 use Semitexa\Orm\Attribute\FromTable;
 use Semitexa\Orm\Attribute\PrimaryKey;
 
@@ -37,11 +38,18 @@ final class ResourceMetadata
         $ft = $fromTableAttrs[0]->newInstance();
         $this->tableName = $ft->name;
 
-        // Resolve PK column
+        // Resolve PK column (DB name — may differ from property name via #[Column(name: ...)])
         $this->pkColumn = 'id';
         foreach ($ref->getProperties() as $prop) {
             if ($prop->getAttributes(PrimaryKey::class) !== []) {
-                $this->pkColumn = $prop->getName();
+                $colAttrs = $prop->getAttributes(Column::class);
+                if ($colAttrs !== []) {
+                    /** @var Column $col */
+                    $col = $colAttrs[0]->newInstance();
+                    $this->pkColumn = $col->name ?? $prop->getName();
+                } else {
+                    $this->pkColumn = $prop->getName();
+                }
                 break;
             }
         }

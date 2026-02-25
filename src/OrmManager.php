@@ -61,6 +61,7 @@ class OrmManager
             $this->schemaComparator = new SchemaComparator(
                 $this->getAdapter(),
                 $this->getDatabaseName(),
+                $this->resolveIgnoreTables(),
             );
         }
 
@@ -134,6 +135,19 @@ class OrmManager
         } finally {
             $orm->shutdown();
         }
+    }
+
+    /**
+     * @return string[]
+     */
+    private function resolveIgnoreTables(): array
+    {
+        $raw = Environment::getEnvValue('ORM_IGNORE_TABLES', '');
+        if ($raw === '') {
+            return [];
+        }
+
+        return array_values(array_filter(array_map('trim', explode(',', $raw))));
     }
 
     private function createPool(): ConnectionPoolInterface

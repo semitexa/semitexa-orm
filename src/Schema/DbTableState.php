@@ -14,6 +14,7 @@ class DbTableState
 
     public function __construct(
         public readonly string $name,
+        public readonly string $tableComment = '',
     ) {}
 
     public function addColumn(DbColumnState $column): void

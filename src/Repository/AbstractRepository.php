@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Repository;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
+use Semitexa\Orm\Attribute\Column;
 use Semitexa\Orm\Attribute\FromTable;
 use Semitexa\Orm\Attribute\PrimaryKey;
 use Semitexa\Orm\Contract\DomainMappable;
@@ -17,7 +18,10 @@ use Semitexa\Orm\Query\SelectQuery;
 abstract class AbstractRepository implements RepositoryInterface
 {
     private string $tableName;
+    /** DB column name for the PK */
     private string $pkColumn;
+    /** PHP property name for the PK (may differ from $pkColumn) */
+    private string $pkPropertyName;
     private ?string $mapToClass;
     private StreamingHydrator $streamingHydrator;
     private Hydrator $hydrator;
@@ -102,8 +106,10 @@ abstract class AbstractRepository implements RepositoryInterface
     {
         $resource = $this->toResource($entity);
         $activeAdapter = $this->getActiveAdapter();
-        $data = $this->hydrator->dehydrate($resource);
 
+        $this->beforeSave($resource);
+
+        $data = $this->hydrator->dehydrate($resource);
         $pkValue = $data[$this->pkColumn] ?? null;
 
         if ($pkValue === null) {
@@ -113,7 +119,7 @@ abstract class AbstractRepository implements RepositoryInterface
 
             // Set the generated PK back on the resource
             if ($insertId !== '' && $insertId !== '0') {
-                $ref = new \ReflectionProperty($resource, $this->pkColumn);
+                $ref = new \ReflectionProperty($resource, $this->pkPropertyName);
                 $type = $ref->getType();
                 $pkTyped = ($type instanceof \ReflectionNamedType && $type->getName() === 'int')
                     ? (int) $insertId
@@ -135,19 +141,49 @@ abstract class AbstractRepository implements RepositoryInterface
         // Cascade save for "touched" relation fields (MVP)
         $cascadeSaver = new CascadeSaver($activeAdapter, $this->hydrator);
         $cascadeSaver->saveTouchedRelations($resource);
+
+        $this->afterSave($resource);
     }
 
     public function delete(object $entity): void
     {
         $resource      = $this->toResource($entity);
         $activeAdapter = $this->getActiveAdapter();
-        $pkValue       = (new \ReflectionProperty($resource, $this->pkColumn))->getValue($resource);
+        $pkValue       = (new \ReflectionProperty($resource, $this->pkPropertyName))->getValue($resource);
+
+        $this->beforeDelete($resource);
 
         // Cascade-delete children / pivot rows before removing the main record.
         (new CascadeDeleter($activeAdapter))->deleteRelations($resource);
 
         (new DeleteQuery($this->tableName, $activeAdapter))->execute($this->pkColumn, $pkValue);
+
+        $this->afterDelete($resource);
     }
+
+    /**
+     * Called before INSERT/UPDATE, after converting entity to resource.
+     * Override to auto-fill timestamps, validate, etc.
+     */
+    protected function beforeSave(object $resource): void {}
+
+    /**
+     * Called after INSERT/UPDATE and cascade save.
+     * Override for audit trail, cache invalidation, event dispatch, etc.
+     */
+    protected function afterSave(object $resource): void {}
+
+    /**
+     * Called before cascade delete and the main DELETE query.
+     * Override for soft-delete guards, audit trail, etc.
+     */
+    protected function beforeDelete(object $resource): void {}
+
+    /**
+     * Called after the DELETE query completes.
+     * Override for cache invalidation, event dispatch, etc.
+     */
+    protected function afterDelete(object $resource): void {}
 
     /**
      * Return a clone of this repository that uses the given connection for all queries.
@@ -251,7 +287,7 @@ abstract class AbstractRepository implements RepositoryInterface
     private function setPkOnDomain(object $entity, mixed $pkValue): void
     {
         // Try setId() method (convention)
-        $setter = 'set' . ucfirst($this->pkColumn);
+        $setter = 'set' . ucfirst($this->pkPropertyName);
         if (method_exists($entity, $setter)) {
             $entity->{$setter}($pkValue);
             return;
@@ -259,8 +295,8 @@ abstract class AbstractRepository implements RepositoryInterface
 
         // Try direct property assignment
         $ref = new \ReflectionClass($entity);
-        if ($ref->hasProperty($this->pkColumn)) {
-            $prop = $ref->getProperty($this->pkColumn);
+        if ($ref->hasProperty($this->pkPropertyName)) {
+            $prop = $ref->getProperty($this->pkPropertyName);
             if ($prop->isPublic()) {
                 $prop->setValue($entity, $pkValue);
             }
@@ -286,11 +322,19 @@ abstract class AbstractRepository implements RepositoryInterface
         $this->mapToClass = $fromTable->mapTo;
 
         // Primary key column from #[PrimaryKey]
-        $this->pkColumn = 'id'; // default
+        $this->pkColumn = 'id'; // default DB column name
+        $this->pkPropertyName = 'id'; // default PHP property name
         foreach ($ref->getProperties() as $prop) {
-            $pkAttrs = $prop->getAttributes(PrimaryKey::class);
-            if ($pkAttrs !== []) {
-                $this->pkColumn = $prop->getName();
+            if ($prop->getAttributes(PrimaryKey::class) !== []) {
+                $this->pkPropertyName = $prop->getName();
+                $colAttrs = $prop->getAttributes(Column::class);
+                if ($colAttrs !== []) {
+                    /** @var Column $col */
+                    $col = $colAttrs[0]->newInstance();
+                    $this->pkColumn = $col->name ?? $prop->getName();
+                } else {
+                    $this->pkColumn = $prop->getName();
+                }
                 break;
             }
         }
