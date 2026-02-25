@@ -10,6 +10,7 @@ use Semitexa\Orm\Attribute\Aggregate;
 use Semitexa\Orm\Attribute\BelongsTo;
 use Semitexa\Orm\Attribute\Column;
 use Semitexa\Orm\Attribute\Deprecated;
+use Semitexa\Orm\Attribute\Filterable;
 use Semitexa\Orm\Attribute\FromTable;
 use Semitexa\Orm\Attribute\HasMany;
 use Semitexa\Orm\Attribute\Index;
@@ -211,6 +212,16 @@ class SchemaCollector
         }
 
         $table->addColumn($colDef);
+
+        // Auto-index for #[Filterable] columns (single-column, non-unique)
+        if (!empty($property->getAttributes(Filterable::class))) {
+            $indexName = 'idx_' . $table->name . '_' . $columnName;
+            $table->addIndex(new IndexDefinition(
+                columns: [$columnName],
+                unique: false,
+                name: $indexName,
+            ));
+        }
 
         if ($isDeprecated) {
             $this->checkDeprecatedUsage($columnName, $table);

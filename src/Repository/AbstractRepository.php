@@ -9,6 +9,7 @@ use Semitexa\Orm\Attribute\Column;
 use Semitexa\Orm\Attribute\FromTable;
 use Semitexa\Orm\Attribute\PrimaryKey;
 use Semitexa\Orm\Contract\DomainMappable;
+use Semitexa\Orm\Contract\FilterableResourceInterface;
 use Semitexa\Orm\Hydration\Hydrator;
 use Semitexa\Orm\Hydration\StreamingHydrator;
 use Semitexa\Orm\Query\DeleteQuery;
@@ -93,6 +94,40 @@ abstract class AbstractRepository implements RepositoryInterface
         }
 
         return $query->fetchAll();
+    }
+
+    public function find(object $resource): array
+    {
+        $resourceClass = $this->getResourceClass();
+        if (!$resource instanceof $resourceClass) {
+            throw new \InvalidArgumentException(
+                'Repository ' . static::class . ' accepts only ' . $resourceClass . ', got ' . $resource::class . '.'
+            );
+        }
+        if (!$resource instanceof FilterableResourceInterface) {
+            throw new \InvalidArgumentException(
+                'Resource must implement ' . FilterableResourceInterface::class . ' to use find(object).'
+            );
+        }
+        $criteria = $resource->getFilterCriteria();
+        return $this->findBy($criteria);
+    }
+
+    public function findOne(object $resource): ?object
+    {
+        $resourceClass = $this->getResourceClass();
+        if (!$resource instanceof $resourceClass) {
+            throw new \InvalidArgumentException(
+                'Repository ' . static::class . ' accepts only ' . $resourceClass . ', got ' . $resource::class . '.'
+            );
+        }
+        if (!$resource instanceof FilterableResourceInterface) {
+            throw new \InvalidArgumentException(
+                'Resource must implement ' . FilterableResourceInterface::class . ' to use findOne(object).'
+            );
+        }
+        $criteria = $resource->getFilterCriteria();
+        return $this->findOneBy($criteria);
     }
 
     /**

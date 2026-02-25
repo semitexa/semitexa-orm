@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Schema;
 
 use Semitexa\Orm\Attribute\Column;
+use Semitexa\Orm\Attribute\Filterable;
 use Semitexa\Orm\Attribute\FromTable;
 use Semitexa\Orm\Attribute\PrimaryKey;
 
@@ -24,6 +25,9 @@ final class ResourceMetadata
 
     private string $tableName;
     private string $pkColumn;
+
+    /** @var array<string, string> propertyName => columnName for #[Filterable] properties */
+    private array $filterableColumns = [];
 
     private function __construct(string $resourceClass)
     {
@@ -52,6 +56,28 @@ final class ResourceMetadata
                 }
                 break;
             }
+        }
+
+        // Resolve filterable property => column name map
+        foreach ($ref->getProperties() as $prop) {
+            $filterableAttrs = $prop->getAttributes(Filterable::class);
+            if ($filterableAttrs === []) {
+                continue;
+            }
+            $propName = $prop->getName();
+            $colAttrs = $prop->getAttributes(Column::class);
+            $columnName = $propName;
+            if ($colAttrs !== []) {
+                /** @var Column $col */
+                $col = $colAttrs[0]->newInstance();
+                $columnName = $col->name ?? $propName;
+            }
+            /** @var Filterable $fa */
+            $fa = $filterableAttrs[0]->newInstance();
+            if ($fa->name !== null) {
+                $columnName = $fa->name;
+            }
+            $this->filterableColumns[$propName] = $columnName;
         }
     }
 
@@ -94,5 +120,15 @@ final class ResourceMetadata
         }
 
         return null;
+    }
+
+    /**
+     * Property names to DB column names for all #[Filterable] properties.
+     *
+     * @return array<string, string> propertyName => columnName
+     */
+    public function getFilterableColumns(): array
+    {
+        return $this->filterableColumns;
     }
 }

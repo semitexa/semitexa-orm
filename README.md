@@ -63,6 +63,7 @@ class UserResource
 | `#[Column]` | Property | Defines column type, length, precision, default |
 | `#[PrimaryKey]` | Property | Marks primary key with strategy (`auto`, `uuid`, `manual`) |
 | `#[Index]` | Class | Defines table index (repeatable, supports `unique`) |
+| `#[Filterable]` | Property | Enables filterByX() and auto-index for this column |
 | `#[Deprecated]` | Property | Marks column for future removal |
 | `#[BelongsTo]` | Property | Many-to-one relation |
 | `#[HasMany]` | Property | One-to-many relation |
@@ -75,6 +76,84 @@ class UserResource
 - `HasTimestamps` — adds `created_at`, `updated_at`
 - `SoftDeletes` — adds nullable `deleted_at`
 - `HasUuid` — adds `uuid` (varchar 36)
+- `FilterableTrait` — adds `filterByX($value)` for properties marked with `#[Filterable]`; implement `FilterableResourceInterface` when using with `Repository::find(object)`
+
+### Filtering architecture
+
+Typed factory (DI) creates a clean resource instance; the resource declares filters via `#[Filterable]` and exposes typed `filterByX()` methods; the repository accepts the prepared resource and runs the query.
+
+**Layer responsibilities:**
+
+- **Resource factory (DI)** — e.g. `UserResourceFactory`: creates a clean resource instance with no data (`$userFactory->create()`).
+- **Resource model** — declares filterable fields with `#[Filterable]`, uses `FilterableTrait` and `FilterableResourceInterface`; `filterByX($value)` sets criteria.
+- **Repository** — `find($resource)` / `findOne($resource)` accept only the repository’s resource type and execute the query from the resource’s criteria.
+
+**Rules:**
+
+- `filterByX()` is available only for properties with `#[Filterable]`. Calling `filterByX()` for a non-filterable property throws `BadMethodCallException`.
+- A DB index is created automatically for every `#[Filterable]` column.
+- `Repository::find($resource)` and `findOne($resource)` accept only a resource of the repository’s type (otherwise `InvalidArgumentException`).
+
+**Example:**
+
+```php
+use Semitexa\Orm\Attribute\FromTable;
+use Semitexa\Orm\Attribute\Column;
+use Semitexa\Orm\Attribute\PrimaryKey;
+use Semitexa\Orm\Attribute\Filterable;
+use Semitexa\Orm\Adapter\MySqlType;
+use Semitexa\Orm\Trait\HasTimestamps;
+use Semitexa\Orm\Trait\FilterableTrait;
+use Semitexa\Orm\Contract\FilterableResourceInterface;
+
+#[FromTable(name: 'users')]
+class UserResource implements FilterableResourceInterface
+{
+    use HasTimestamps;
+    use FilterableTrait;
+
+    #[PrimaryKey(strategy: 'auto')]
+    #[Column(type: MySqlType::Int)]
+    public int $id;
+
+    #[Column(type: MySqlType::Varchar, length: 255)]
+    #[Filterable]
+    public string $name;
+
+    #[Column(type: MySqlType::Varchar, length: 255)]
+    #[Filterable]
+    public string $email;
+}
+
+// In a handler or service (factory and repository injected via DI):
+$userResource = $userFactory->create();
+$userResource->filterByName('Rita');
+$users = $userRepository->find($userResource);
+
+// Or find first match:
+$user = $userRepository->findOne($userResource);
+```
+
+**Resource factory (DI):** Implement a per-resource factory interface and bind it to `ResourceFactory`:
+
+```php
+namespace App\Resource\Factory;
+
+use Semitexa\Orm\Factory\ResourceFactoryInterface;
+
+interface UserResourceFactory extends ResourceFactoryInterface
+{
+    public function create(): \App\Resource\UserResource;
+}
+```
+
+Register in your container/bootstrap: `UserResourceFactory` → `new \Semitexa\Orm\Factory\ResourceFactory(\App\Resource\UserResource::class)`.
+
+### Foreign key default behaviour
+
+- **Nullable FK** — `ON DELETE SET NULL`, `ON UPDATE SET NULL`
+- **Not-null FK** — `ON DELETE RESTRICT`, `ON UPDATE RESTRICT`
+- **Override** — set explicitly on the relation, e.g. `#[BelongsTo(User::class, foreignKey: 'owner_id', onDelete: \Semitexa\Orm\Schema\ForeignKeyAction::CASCADE)]`
 
 ### Domain Mapping
 

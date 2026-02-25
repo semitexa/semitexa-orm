@@ -38,6 +38,21 @@ interface RepositoryInterface
     public function findOneBy(array $criteria): ?object;
 
     /**
+     * Find entities matching the filter criteria set on the resource (e.g. via filterByX()).
+     * Accepts only the repository's resource type; the resource must supply getFilterCriteria().
+     *
+     * @return object[]
+     */
+    public function find(object $resource): array;
+
+    /**
+     * Find a single entity matching the filter criteria set on the resource.
+     *
+     * @return object|null
+     */
+    public function findOne(object $resource): ?object;
+
+    /**
      * Save (insert or update) an entity.
      * Accepts Resource or Domain Entity.
      */
