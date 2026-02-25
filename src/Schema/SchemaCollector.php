@@ -384,6 +384,8 @@ class SchemaCollector
                 $onDelete   = $relation['onDelete'] ?? null;
                 $onUpdate   = $relation['onUpdate'] ?? null;
 
+                /** @var string|null $onDelete */
+                /** @var string|null $onUpdate */
                 $targetTable = $classToTable[$targetClass] ?? null;
                 if ($targetTable === null) {
                     continue;
