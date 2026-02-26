@@ -76,7 +76,7 @@ class UserResource
 - `HasTimestamps` — adds `created_at`, `updated_at`
 - `SoftDeletes` — adds nullable `deleted_at`
 - `HasUuid` — adds `uuid` (varchar 36)
-- `FilterableTrait` — adds `filterByX($value)` for properties marked with `#[Filterable]`; implement `FilterableResourceInterface` when using with `Repository::find(object)`
+- `FilterableTrait` — adds `filterByX($value)` for main-table properties with `#[Filterable]`, and `filterBy{Relation}{Column}($value)` for related models; implement `FilterableResourceInterface` when using with `Repository::find(object)`
 
 ### Filtering architecture
 
@@ -91,6 +91,7 @@ Typed factory (DI) creates a clean resource instance; the resource declares filt
 **Rules:**
 
 - `filterByX()` is available only for properties with `#[Filterable]`. Calling `filterByX()` for a non-filterable property throws `BadMethodCallException`.
+- For relation filters, the **related** model’s column must be marked with `#[Filterable]` (e.g. filter by `user.email` requires `email` to be filterable on the User resource).
 - A DB index is created automatically for every `#[Filterable]` column.
 - `Repository::find($resource)` and `findOne($resource)` accept only a resource of the repository’s type (otherwise `InvalidArgumentException`).
 
@@ -133,6 +134,43 @@ $users = $userRepository->find($userResource);
 // Or find first match:
 $user = $userRepository->findOne($userResource);
 ```
+
+### Filtering by related models
+
+You can restrict results using conditions on **related** resource models. Use `filterBy{Relation}{Column}($value)` where the relation is the property name (e.g. `user`) and the column is a filterable property on the related model (e.g. `email`). Same value semantics as main table: `null` → IS NULL, array → IN, scalar → =.
+
+**Example (BelongsTo):** find orders where the related user has a given email:
+
+```php
+#[FromTable(name: 'orders')]
+class OrderResource implements FilterableResourceInterface
+{
+    use FilterableTrait;
+
+    #[Column(type: MySqlType::Bigint)]
+    public int $id;
+
+    #[Column(type: MySqlType::Bigint)]
+    public int $user_id;
+
+    #[BelongsTo(target: UserResource::class, foreignKey: 'user_id')]
+    public UserResource $user;
+}
+
+$orderResource = $orderFactory->create();
+$orderResource->filterByUserEmail('admin@example.com');
+$orders = $orderRepository->find($orderResource);
+```
+
+**Example (HasMany):** find users that have at least one order with status `paid` (use a filterable column on the related Order resource):
+
+```php
+$userResource = $userFactory->create();
+$userResource->filterByOrdersStatus('paid');
+$users = $userRepository->find($userResource);
+```
+
+In repository methods you can also use the query builder: `$this->select()->whereRelation('user', 'email', '=', 'x')->fetchAll()`.
 
 **Resource factory (DI):** Implement a per-resource factory interface and bind it to `ResourceFactory`:
 

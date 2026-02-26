@@ -5,17 +5,10 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Hydration;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
-use Semitexa\Orm\Attribute\BelongsTo;
-use Semitexa\Orm\Attribute\HasMany;
-use Semitexa\Orm\Attribute\ManyToMany;
-use Semitexa\Orm\Attribute\OneToOne;
 use Semitexa\Orm\Schema\ResourceMetadata;
 
 class RelationLoader
 {
-    /** @var array<string, RelationMeta[]> Cached relation metadata per class */
-    private array $metaCache = [];
-
     public function __construct(
         private readonly DatabaseAdapterInterface $adapter,
         private readonly Hydrator $hydrator,
@@ -36,7 +29,7 @@ class RelationLoader
             return;
         }
 
-        $relations = $this->getRelationMeta($resourceClass);
+        $relations = ResourceMetadata::for($resourceClass)->getRelations();
 
         foreach ($relations as $meta) {
             if ($only !== null && !in_array($meta->property, $only, true)) {
@@ -261,70 +254,6 @@ class RelationLoader
     private function buildInPlaceholders(array $values): string
     {
         return implode(', ', array_fill(0, count($values), '?'));
-    }
-
-    /**
-     * @return RelationMeta[]
-     */
-    private function getRelationMeta(string $resourceClass): array
-    {
-        if (isset($this->metaCache[$resourceClass])) {
-            return $this->metaCache[$resourceClass];
-        }
-
-        $relations = [];
-        $ref = new \ReflectionClass($resourceClass);
-
-        foreach ($ref->getProperties(\ReflectionProperty::IS_PUBLIC) as $prop) {
-            foreach ($prop->getAttributes(BelongsTo::class) as $attr) {
-                /** @var BelongsTo $bt */
-                $bt = $attr->newInstance();
-                $relations[] = new RelationMeta(
-                    property: $prop->getName(),
-                    type: RelationType::BelongsTo,
-                    targetClass: $bt->target,
-                    foreignKey: $bt->foreignKey,
-                );
-            }
-
-            foreach ($prop->getAttributes(HasMany::class) as $attr) {
-                /** @var HasMany $hm */
-                $hm = $attr->newInstance();
-                $relations[] = new RelationMeta(
-                    property: $prop->getName(),
-                    type: RelationType::HasMany,
-                    targetClass: $hm->target,
-                    foreignKey: $hm->foreignKey,
-                );
-            }
-
-            foreach ($prop->getAttributes(OneToOne::class) as $attr) {
-                /** @var OneToOne $oo */
-                $oo = $attr->newInstance();
-                $relations[] = new RelationMeta(
-                    property: $prop->getName(),
-                    type: RelationType::OneToOne,
-                    targetClass: $oo->target,
-                    foreignKey: $oo->foreignKey,
-                );
-            }
-
-            foreach ($prop->getAttributes(ManyToMany::class) as $attr) {
-                /** @var ManyToMany $mm */
-                $mm = $attr->newInstance();
-                $relations[] = new RelationMeta(
-                    property: $prop->getName(),
-                    type: RelationType::ManyToMany,
-                    targetClass: $mm->target,
-                    foreignKey: $mm->foreignKey,
-                    pivotTable: $mm->pivotTable,
-                    relatedKey: $mm->relatedKey,
-                );
-            }
-        }
-
-        $this->metaCache[$resourceClass] = $relations;
-        return $relations;
     }
 
 }

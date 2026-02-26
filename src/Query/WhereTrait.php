@@ -197,7 +197,10 @@ trait WhereTrait
             return $where['sql'];
         }
 
-        $col = "`{$where['column']}`";
+        // Support qualified column (e.g. alias.column) for relation filters
+        $col = str_contains($where['column'], '.')
+            ? implode('.', array_map(fn(string $part) => '`' . $part . '`', explode('.', $where['column'], 2)))
+            : "`{$where['column']}`";
 
         if ($type === 'null') {
             return "{$col} {$where['operator']}";

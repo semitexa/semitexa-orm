@@ -14,17 +14,6 @@ use Semitexa\Orm\Adapter\ServerCapability;
  */
 class SingleConnectionAdapter implements DatabaseAdapterInterface
 {
-    /** @var array<string, string> */
-    private const CAPABILITY_VERSIONS = [
-        'atomic_ddl'    => '8.0.0',
-        'check'         => '8.0.16',
-        'default_expr'  => '8.0.13',
-        'invisible_col' => '8.0.23',
-        'json_table'    => '8.0.4',
-        'window_func'   => '8.0.0',
-        'desc_index'    => '8.0.0',
-    ];
-
     public function __construct(
         private readonly \PDO $connection,
         private readonly string $serverVersion,
@@ -32,7 +21,7 @@ class SingleConnectionAdapter implements DatabaseAdapterInterface
 
     public function supports(ServerCapability $capability): bool
     {
-        $minVersion = self::CAPABILITY_VERSIONS[$capability->value] ?? null;
+        $minVersion = ServerCapability::minimumVersions()[$capability->value] ?? null;
         if ($minVersion === null) {
             return false;
         }

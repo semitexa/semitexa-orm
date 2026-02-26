@@ -14,6 +14,7 @@ use Semitexa\Orm\Query\DeleteQuery;
 use Semitexa\Orm\Query\InsertQuery;
 use Semitexa\Orm\Query\UpdateQuery;
 use Semitexa\Orm\Schema\ResourceMetadata;
+use Semitexa\Orm\Transaction\SingleConnectionAdapter;
 
 class CascadeSaver
 {
@@ -121,10 +122,11 @@ class CascadeSaver
         // Wrap DELETE + INSERT in an explicit transaction so that a crash or
         // coroutine switch between the two statements cannot leave the pivot
         // table in a half-empty state.
-        // If the caller already started a transaction (e.g. via TransactionManager),
-        // START TRANSACTION will implicitly commit it — so we only open our own
-        // transaction when we are not already inside one.
-        $ownTransaction = !$this->adapter->query('SELECT @@in_transaction')->fetchColumn();
+        // If the adapter is a SingleConnectionAdapter it is already inside a
+        // TransactionManager-managed transaction — opening another START TRANSACTION
+        // would cause an implicit commit. Detect this via instanceof, which is
+        // reliable regardless of MySQL version (unlike @@in_transaction).
+        $ownTransaction = !($this->adapter instanceof SingleConnectionAdapter);
 
         try {
             if ($ownTransaction) {

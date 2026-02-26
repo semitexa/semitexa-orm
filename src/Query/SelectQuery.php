@@ -6,6 +6,7 @@ namespace Semitexa\Orm\Query;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Attribute\Aggregate;
+use Semitexa\Orm\Hydration\RelationType;
 use Semitexa\Orm\Hydration\StreamingHydrator;
 use Semitexa\Orm\Repository\PaginatedResult;
 use Semitexa\Orm\Schema\ResourceMetadata;
@@ -53,6 +54,22 @@ class SelectQuery
 
     /** @var array{alias: string, sql: string}[]|null Cached aggregate subqueries */
     private ?array $aggregateSubqueries = null;
+
+    /**
+     * Relation filter criteria from applyRelationCriteria(): relationProperty => [column => value].
+     * @var array<string, array<string, mixed>>
+     */
+    private array $relationCriteria = [];
+
+    /**
+     * Extra relation conditions from whereRelation(): list of [relation, column, operator, value].
+     * @var array<int, array{relation: string, column: string, operator: string, value: mixed}>
+     */
+    private array $relationWhereConditions = [];
+
+    /** Cached JOIN and WHERE SQL for relation filters (built once per query) */
+    private ?string $relationJoinSql = null;
+    private ?string $relationWhereSql = null;
 
     public function __construct(
         string $table,
@@ -117,6 +134,37 @@ class SelectQuery
     public function withoutRelations(): self
     {
         $this->withRelations = [];
+        return $this;
+    }
+
+    /**
+     * Apply relation filter criteria (e.g. from FilterableResourceInterface::getRelationFilterCriteria()).
+     * Keys are relation property names; values are [DB column name => value] on the related table.
+     * Same value semantics as main table: null => IS NULL, array => IN, scalar => =.
+     *
+     * @param array<string, array<string, mixed>> $criteria
+     */
+    public function applyRelationCriteria(array $criteria): self
+    {
+        $this->relationCriteria = array_merge($this->relationCriteria, $criteria);
+        $this->relationJoinSql = null;
+        $this->relationWhereSql = null;
+        return $this;
+    }
+
+    /**
+     * Restrict results where the related entity (or at least one for HasMany/ManyToMany) satisfies the condition.
+     */
+    public function whereRelation(string $relationProperty, string $column, string $operator, mixed $value): self
+    {
+        $this->relationWhereConditions[] = [
+            'relation'  => $relationProperty,
+            'column'    => $column,
+            'operator'  => $operator,
+            'value'     => $value,
+        ];
+        $this->relationJoinSql = null;
+        $this->relationWhereSql = null;
         return $this;
     }
 
@@ -223,7 +271,12 @@ class SelectQuery
         }
 
         $sql = "SELECT {$cols} FROM `{$this->table}`";
-        $sql .= $this->buildWhereClause();
+        $sql .= $this->getRelationJoinSql();
+        $mainWhere = $this->buildWhereClause();
+        $relWhere  = $this->getRelationWhereSql();
+        if ($mainWhere !== '' || $relWhere !== '') {
+            $sql .= $mainWhere !== '' ? $mainWhere . $relWhere : ' WHERE 1=1' . $relWhere;
+        }
         $sql .= $this->buildOrderByClause();
 
         return $sql;
@@ -231,7 +284,192 @@ class SelectQuery
 
     private function buildCountSql(): string
     {
-        return "SELECT COUNT(*) FROM `{$this->table}`" . $this->buildWhereClause();
+        $sql = "SELECT COUNT(*) FROM `{$this->table}`";
+        $sql .= $this->getRelationJoinSql();
+        $mainWhere = $this->buildWhereClause();
+        $relWhere  = $this->getRelationWhereSql();
+        if ($mainWhere !== '' || $relWhere !== '') {
+            $sql .= $mainWhere !== '' ? $mainWhere . $relWhere : ' WHERE 1=1' . $relWhere;
+        }
+        return $sql;
+    }
+
+    private function getRelationJoinSql(): string
+    {
+        $this->resolveRelationFilters();
+        return $this->relationJoinSql ?? '';
+    }
+
+    private function getRelationWhereSql(): string
+    {
+        $this->resolveRelationFilters();
+        return $this->relationWhereSql ?? '';
+    }
+
+    /**
+     * Build relation JOINs (or subquery WHERE) and relation WHERE conditions; cache result.
+     */
+    private function resolveRelationFilters(): void
+    {
+        if ($this->relationJoinSql !== null && $this->relationWhereSql !== null) {
+            return;
+        }
+        $allRelations = array_unique(array_merge(
+            array_keys($this->relationCriteria),
+            array_column($this->relationWhereConditions, 'relation')
+        ));
+        if ($allRelations === []) {
+            $this->relationJoinSql = '';
+            $this->relationWhereSql = '';
+            return;
+        }
+
+        $meta = ResourceMetadata::for($this->resourceClass);
+        $mainPk = $meta->getPkColumn();
+        $joinParts = [];
+        $whereParts = [];
+
+        foreach ($allRelations as $relationProperty) {
+            $relationMeta = $meta->getRelationByProperty($relationProperty);
+            if ($relationMeta === null) {
+                throw new \InvalidArgumentException(
+                    "Unknown relation '{$relationProperty}' on " . $this->resourceClass . '.'
+                );
+            }
+
+            $criteria = $this->relationCriteria[$relationProperty] ?? [];
+            $extraConditions = array_filter(
+                $this->relationWhereConditions,
+                fn($c) => $c['relation'] === $relationProperty
+            );
+
+            if ($relationMeta->type === RelationType::BelongsTo || $relationMeta->type === RelationType::OneToOne) {
+                $targetMeta = ResourceMetadata::for($relationMeta->targetClass);
+                $alias = 'rel_' . $relationProperty;
+                $joinParts[] = " JOIN `{$targetMeta->getTableName()}` AS `{$alias}` ON `{$this->table}`.`{$relationMeta->foreignKey}` = `{$alias}`.`{$targetMeta->getPkColumn()}`";
+                $this->appendRelationWhereParts($whereParts, $alias, $relationMeta->targetClass, $criteria, $extraConditions);
+            } elseif ($relationMeta->type === RelationType::HasMany || $relationMeta->type === RelationType::ManyToMany) {
+                $subqueryWhere = $this->buildRelationSubqueryWhere($relationMeta, $criteria, $extraConditions);
+                if ($subqueryWhere !== '') {
+                    $whereParts[] = $subqueryWhere;
+                }
+            }
+        }
+
+        $this->relationJoinSql = implode('', $joinParts);
+        $this->relationWhereSql = $whereParts === [] ? '' : ' AND ' . implode(' AND ', $whereParts);
+    }
+
+    /**
+     * Append WHERE conditions for a JOIN-based relation (BelongsTo/OneToOne).
+     */
+    private function appendRelationWhereParts(
+        array &$whereParts,
+        string $alias,
+        string $relatedClass,
+        array $criteria,
+        array $extraConditions
+    ): void {
+        $relatedMeta = ResourceMetadata::for($relatedClass);
+        $filterableColumns = array_values($relatedMeta->getFilterableColumns());
+        foreach ($criteria as $column => $value) {
+            if (!in_array($column, $filterableColumns, true)) {
+                throw new \InvalidArgumentException(
+                    "Column '{$column}' is not filterable on {$relatedClass}."
+                );
+            }
+            $qualified = "{$alias}.{$column}";
+            if ($value === null) {
+                $whereParts[] = "`{$alias}`.`{$column}` IS NULL";
+            } elseif (is_array($value)) {
+                $paramNames = [];
+                foreach ($value as $v) {
+                    $key = $this->nextParam($qualified);
+                    $paramNames[] = ':' . $key;
+                    $this->params[$key] = $v instanceof \BackedEnum ? $v->value : $v;
+                }
+                $whereParts[] = "`{$alias}`.`{$column}` IN (" . implode(', ', $paramNames) . ")";
+            } else {
+                $key = $this->nextParam($qualified);
+                $whereParts[] = "`{$alias}`.`{$column}` = :{$key}";
+                $this->params[$key] = $value instanceof \BackedEnum ? $value->value : $value;
+            }
+        }
+        foreach ($extraConditions as $c) {
+            $key = $this->nextParam($alias . '_' . $c['column']);
+            $op = strtoupper($c['operator']);
+            if (!in_array($op, ['=', '!=', '<>', '<', '>', '<=', '>=', 'LIKE', 'NOT LIKE'], true)) {
+                throw new \InvalidArgumentException("Invalid operator for whereRelation: {$c['operator']}");
+            }
+            $whereParts[] = "`{$alias}`.`{$c['column']}` {$op} :{$key}";
+            $this->params[$key] = $c['value'] instanceof \BackedEnum ? $c['value']->value : $c['value'];
+        }
+    }
+
+    /**
+     * Build a single WHERE fragment for HasMany/ManyToMany: main_table.pk IN (subquery).
+     */
+    private function buildRelationSubqueryWhere(
+        \Semitexa\Orm\Hydration\RelationMeta $relationMeta,
+        array $criteria,
+        array $extraConditions
+    ): string {
+        $meta = ResourceMetadata::for($this->resourceClass);
+        $mainPk = $meta->getPkColumn();
+        $targetMeta = ResourceMetadata::for($relationMeta->targetClass);
+        $targetTable = $targetMeta->getTableName();
+        $targetPk = $targetMeta->getPkColumn();
+
+        $subWhere = [];
+        $subParams = [];
+        $paramPrefix = 'subq_' . $relationMeta->property . '_';
+        $i = 0;
+
+        foreach ($criteria as $column => $value) {
+            $i++;
+            $k = $paramPrefix . $i;
+            if ($value === null) {
+                $subWhere[] = "`{$targetTable}`.`{$column}` IS NULL";
+            } elseif (is_array($value)) {
+                $placeholders = [];
+                foreach ($value as $v) {
+                    $i++;
+                    $kk = $paramPrefix . $i;
+                    $placeholders[] = ":{$kk}";
+                    $subParams[$kk] = $v instanceof \BackedEnum ? $v->value : $v;
+                }
+                $subWhere[] = "`{$targetTable}`.`{$column}` IN (" . implode(', ', $placeholders) . ")";
+            } else {
+                $subWhere[] = "`{$targetTable}`.`{$column}` = :{$k}";
+                $subParams[$k] = $value instanceof \BackedEnum ? $value->value : $value;
+            }
+        }
+        foreach ($extraConditions as $c) {
+            $i++;
+            $k = $paramPrefix . $i;
+            $op = strtoupper($c['operator']);
+            $subWhere[] = "`{$targetTable}`.`{$c['column']}` {$op} :{$k}";
+            $subParams[$k] = $c['value'] instanceof \BackedEnum ? $c['value']->value : $c['value'];
+        }
+
+        if ($subWhere === []) {
+            return '';
+        }
+
+        foreach ($subParams as $k => $v) {
+            $this->params[$k] = $v;
+        }
+
+        $subWhereSql = implode(' AND ', $subWhere);
+
+        if ($relationMeta->type === RelationType::HasMany) {
+            return "`{$this->table}`.`{$mainPk}` IN (SELECT `{$relationMeta->foreignKey}` FROM `{$targetTable}` WHERE {$subWhereSql})";
+        }
+
+        $pivot = $relationMeta->pivotTable;
+        $fk = $relationMeta->foreignKey;
+        $rk = $relationMeta->relatedKey;
+        return "`{$this->table}`.`{$mainPk}` IN (SELECT `{$fk}` FROM `{$pivot}` WHERE `{$rk}` IN (SELECT `{$targetPk}` FROM `{$targetTable}` WHERE {$subWhereSql}))";
     }
 
     private function buildOrderByClause(): string

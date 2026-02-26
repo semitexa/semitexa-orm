@@ -43,6 +43,8 @@ class SchemaCollector
             $this->processClass($className, $tables);
         }
 
+        $this->addPivotTables($classes, $tables);
+
         foreach ($tables as $table) {
             $tableErrors = $table->validate();
             foreach ($tableErrors as $error) {
@@ -149,6 +151,10 @@ class SchemaCollector
         }
 
         if (empty($columnAttrs)) {
+            // Skip internal/trait state (e.g. FilterableTrait __filterCriteria)
+            if (str_starts_with($property->getName(), '__')) {
+                return;
+            }
             // Property without #[Column] in a Resource class — error unless it's a relation
             if (empty($property->getAttributes(BelongsTo::class))
                 && empty($property->getAttributes(HasMany::class))
@@ -329,13 +335,99 @@ class SchemaCollector
     }
 
     /**
+     * Add synthetic table definitions for ManyToMany pivot tables so they are created by orm:sync.
+     *
+     * @param list<string> $classes FromTable class names
+     * @param array<string, TableDefinition> $tables
+     */
+    private function addPivotTables(array $classes, array &$tables): void
+    {
+        $classToTable = [];
+        foreach ($classes as $className) {
+            try {
+                $ref = new \ReflectionClass($className);
+                $attrs = $ref->getAttributes(FromTable::class);
+                if (!empty($attrs)) {
+                    /** @var FromTable $ft */
+                    $ft = $attrs[0]->newInstance();
+                    $classToTable[$className] = $ft->name;
+                }
+            } catch (\ReflectionException) {
+                // skip
+            }
+        }
+
+        foreach ($tables as $tableName => $table) {
+            foreach ($table->getRelations() as $relation) {
+                if (($relation['type'] ?? '') !== 'many_to_many') {
+                    continue;
+                }
+                $pivotTable = $relation['pivotTable'] ?? null;
+                $foreignKey = $relation['foreignKey'] ?? null;
+                $relatedKey = $relation['relatedKey'] ?? null;
+                $targetClass = $relation['target'] ?? null;
+                if ($pivotTable === null || $foreignKey === null || $relatedKey === null || $targetClass === null) {
+                    continue;
+                }
+                if (isset($tables[$pivotTable])) {
+                    continue; // already added (e.g. same pivot from another side)
+                }
+                $this->assertValidIdentifier($pivotTable, "pivot table '{$pivotTable}'");
+                $targetTable = $classToTable[$targetClass] ?? null;
+                if ($targetTable === null) {
+                    try {
+                        $ref = new \ReflectionClass($targetClass);
+                        $attrs = $ref->getAttributes(FromTable::class);
+                        if (!empty($attrs)) {
+                            $ft = $attrs[0]->newInstance();
+                            $targetTable = $ft->name;
+                        }
+                    } catch (\ReflectionException) {
+                        // skip
+                    }
+                }
+                if ($targetTable === null) {
+                    continue;
+                }
+                $pivot = new TableDefinition($pivotTable);
+                $pivot->addColumn(new ColumnDefinition(
+                    name: 'id',
+                    type: MySqlType::Int,
+                    phpType: 'int',
+                    nullable: false,
+                    isPrimaryKey: true,
+                    pkStrategy: 'auto',
+                ));
+                $pivot->addColumn(new ColumnDefinition(
+                    name: $foreignKey,
+                    type: MySqlType::Int,
+                    phpType: 'int',
+                    nullable: false,
+                ));
+                $pivot->addColumn(new ColumnDefinition(
+                    name: $relatedKey,
+                    type: MySqlType::Int,
+                    phpType: 'int',
+                    nullable: false,
+                ));
+                $pivot->addIndex(new IndexDefinition(
+                    columns: [$foreignKey, $relatedKey],
+                    unique: true,
+                    name: 'uniq_' . $foreignKey . '_' . $relatedKey,
+                ));
+                $tables[$pivotTable] = $pivot;
+            }
+        }
+    }
+
+    /**
      * Post-process step: build ForeignKeyDefinition objects for all relations
      * that carry a FK column on the owning side.
      *
      * BelongsTo — FK lives on THIS table → generate FK from this table → target.
      * HasMany    — FK lives on the CHILD table → generate FK from target table → this table.
      * OneToOne   — FK lives on the CHILD/related table → same as HasMany.
-     * ManyToMany — FK lives on the pivot table → skip here (pivot is not a Resource, handled separately if needed).
+     * ManyToMany — FK lives on the pivot table → add FKs from pivot to parent and target.
      *
      * @param array<string, TableDefinition> $tables
      */
@@ -353,14 +445,9 @@ class SchemaCollector
         // Build a map: resource class name → table name
         $classToTable = [];
         foreach ($tables as $tableName => $table) {
-            // We need the reverse map; iterate relations which carry the target class name
-        }
-        // Populate classToTable by scanning all relation targets
-        foreach ($tables as $tableName => $table) {
             foreach ($table->getRelations() as $relation) {
                 $targetClass = $relation['target'];
                 if (!isset($classToTable[$targetClass])) {
-                    // Try to resolve table name from the target class attributes
                     try {
                         $ref = new \ReflectionClass($targetClass);
                         $attrs = $ref->getAttributes(FromTable::class);
@@ -370,7 +457,7 @@ class SchemaCollector
                             $classToTable[$targetClass] = $ft->name;
                         }
                     } catch (\ReflectionException) {
-                        // Target class not found — skip
+                        // skip
                     }
                 }
             }
@@ -427,8 +514,37 @@ class SchemaCollector
                         onDelete: $resolvedOnDelete,
                         onUpdate: $resolvedOnUpdate,
                     ));
+                } elseif ($type === 'many_to_many') {
+                    // FK is on the pivot table: pivot.foreignKey -> this table, pivot.relatedKey -> target table
+                    $pivotTable = $relation['pivotTable'] ?? null;
+                    $relatedKey = $relation['relatedKey'] ?? null;
+                    if ($pivotTable === null || $relatedKey === null) {
+                        continue;
+                    }
+                    $pivotDef = $tables[$pivotTable] ?? null;
+                    if ($pivotDef === null) {
+                        continue;
+                    }
+                    $parentPk = $pkMap[$tableName] ?? 'id';
+                    $targetPk = $pkMap[$targetTable] ?? 'id';
+                    $restrict = ForeignKeyAction::Restrict;
+                    $pivotDef->addForeignKey(new ForeignKeyDefinition(
+                        table: $pivotTable,
+                        column: $foreignKey,
+                        referencedTable: $tableName,
+                        referencedColumn: $parentPk,
+                        onDelete: $onDelete ?? $restrict,
+                        onUpdate: $onUpdate ?? $restrict,
+                    ));
+                    $pivotDef->addForeignKey(new ForeignKeyDefinition(
+                        table: $pivotTable,
+                        column: $relatedKey,
+                        referencedTable: $targetTable,
+                        referencedColumn: $targetPk,
+                        onDelete: $onDelete ?? $restrict,
+                        onUpdate: $onUpdate ?? $restrict,
+                    ));
                 }
-                // many_to_many — pivot table is not a managed Resource, skip
             }
         }
     }

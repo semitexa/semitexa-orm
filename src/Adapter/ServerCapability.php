@@ -13,4 +13,23 @@ enum ServerCapability: string
     case JsonTableFunc = 'json_table';
     case WindowFunctions = 'window_func';
     case DescendingIndexes = 'desc_index';
+
+    /**
+     * Minimum MySQL version required for each capability.
+     * Single source of truth — used by MysqlAdapter and SingleConnectionAdapter.
+     *
+     * @return array<string, string>
+     */
+    public static function minimumVersions(): array
+    {
+        return [
+            self::AtomicDdl->value         => '8.0.0',
+            self::CheckConstraints->value   => '8.0.16',
+            self::DefaultExpressions->value => '8.0.13',
+            self::InvisibleColumns->value   => '8.0.23',
+            self::JsonTableFunc->value      => '8.0.4',
+            self::WindowFunctions->value    => '8.0.0',
+            self::DescendingIndexes->value  => '8.0.0',
+        ];
+    }
 }

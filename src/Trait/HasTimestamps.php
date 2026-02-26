@@ -14,4 +14,17 @@ trait HasTimestamps
 
     #[Column(type: MySqlType::Datetime)]
     public ?\DateTimeImmutable $updated_at = null;
+
+    /**
+     * Call from AbstractRepository::beforeSave() or override beforeSave() in your repository.
+     * Sets created_at on first insert (null → now) and always refreshes updated_at.
+     */
+    public function touchTimestamps(): void
+    {
+        $now = new \DateTimeImmutable();
+        if ($this->created_at === null) {
+            $this->created_at = $now;
+        }
+        $this->updated_at = $now;
+    }
 }

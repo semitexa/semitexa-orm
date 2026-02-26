@@ -9,6 +9,7 @@ use Semitexa\Orm\Adapter\MySqlType;
 use Semitexa\Orm\Schema\ColumnDefinition;
 use Semitexa\Orm\Schema\DbColumnState;
 use Semitexa\Orm\Schema\ForeignKeyDefinition;
+use Semitexa\Orm\Schema\ResourceMetadata;
 use Semitexa\Orm\Schema\SchemaDiff;
 use Semitexa\Orm\Schema\TableDefinition;
 
@@ -177,19 +178,44 @@ class SyncEngine
     /**
      * Execute a plan against the database.
      *
+     * When the server supports atomic DDL (MySQL 8.0+), all operations are
+     * wrapped in a single transaction so a mid-plan failure rolls back cleanly.
+     * On older MySQL/MariaDB, operations are applied one by one (no rollback on failure).
+     *
      * @return DdlOperation[] Executed operations
      */
     public function execute(ExecutionPlan $plan, bool $allowDestructive = false): array
     {
-        $executed = [];
+        $operations = array_filter(
+            $plan->getOperations(),
+            fn(DdlOperation $op) => $allowDestructive || !$op->isDestructive,
+        );
 
-        foreach ($plan->getOperations() as $operation) {
-            if ($operation->isDestructive && !$allowDestructive) {
-                continue;
+        if ($operations === []) {
+            return [];
+        }
+
+        $useTransaction = $this->adapter->supports(\Semitexa\Orm\Adapter\ServerCapability::AtomicDdl);
+
+        $executed = [];
+        try {
+            if ($useTransaction) {
+                $this->adapter->query('START TRANSACTION');
             }
 
-            $this->adapter->execute($operation->sql);
-            $executed[] = $operation;
+            foreach ($operations as $operation) {
+                $this->adapter->execute($operation->sql);
+                $executed[] = $operation;
+            }
+
+            if ($useTransaction) {
+                $this->adapter->query('COMMIT');
+            }
+        } catch (\Throwable $e) {
+            if ($useTransaction) {
+                $this->adapter->query('ROLLBACK');
+            }
+            throw $e;
         }
 
         $this->auditLogger?->log($executed);
@@ -283,7 +309,7 @@ class SyncEngine
             return ' DEFAULT ' . $col->default;
         }
 
-        return " DEFAULT '" . addslashes((string) $col->default) . "'";
+        return " DEFAULT '" . str_replace("'", "''", (string) $col->default) . "'";
     }
 
     private function generateAddColumn(string $tableName, ColumnDefinition $col): string
@@ -315,7 +341,7 @@ class SyncEngine
         $default = '';
 
         if ($col->defaultValue !== null) {
-            $default = " DEFAULT '" . addslashes($col->defaultValue) . "'";
+            $default = " DEFAULT '" . str_replace("'", "''", $col->defaultValue) . "'";
         } elseif ($col->nullable) {
             $default = ' DEFAULT NULL';
         }
@@ -366,14 +392,36 @@ class SyncEngine
             $tableMap[$table->name] = $table;
         }
 
-        // Build dependency graph
+        // Build a reverse map: FQCN resource class → table name.
+        // Relations store target as a FQCN (e.g. App\Resource\UserResource), but
+        // $tableMap is keyed by table name (e.g. 'users'). Without this mapping
+        // the dependency lookup always misses, leaving tables in arbitrary order.
+        $classToTable = [];
+        foreach ($tables as $table) {
+            foreach ($table->getRelations() as $relation) {
+                $targetClass = $relation['target'];
+                if (isset($classToTable[$targetClass])) {
+                    continue;
+                }
+                try {
+                    $meta = \Semitexa\Orm\Schema\ResourceMetadata::for($targetClass);
+                    $classToTable[$targetClass] = $meta->getTableName();
+                } catch (\Throwable) {
+                    // Target class not available in this context — skip gracefully
+                }
+            }
+        }
+
+        // Build dependency graph using table names throughout
         $deps = [];
         foreach ($tables as $table) {
             $deps[$table->name] = [];
             foreach ($table->getRelations() as $relation) {
                 if ($relation['type'] === 'belongs_to') {
-                    // Extract target table name from resource class
-                    $deps[$table->name][] = $relation['target'];
+                    $targetTable = $classToTable[$relation['target']] ?? null;
+                    if ($targetTable !== null && isset($tableMap[$targetTable])) {
+                        $deps[$table->name][] = $targetTable;
+                    }
                 }
             }
         }

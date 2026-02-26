@@ -178,7 +178,12 @@ class OrmManager
             return $pdo;
         };
 
-        if (class_exists(\Swoole\Coroutine\Channel::class, false)) {
+        // Use ConnectionPool only inside a Swoole coroutine (e.g. request handler). CLI has no coroutine.
+        if (
+            class_exists(\Swoole\Coroutine\Channel::class, false)
+            && class_exists(\Swoole\Coroutine::class, false)
+            && \Swoole\Coroutine::getCid() >= 0
+        ) {
             return new ConnectionPool($poolSize, $factory);
         }
 

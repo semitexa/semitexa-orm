@@ -15,6 +15,7 @@ use Semitexa\Orm\Hydration\StreamingHydrator;
 use Semitexa\Orm\Query\DeleteQuery;
 use Semitexa\Orm\Query\InsertQuery;
 use Semitexa\Orm\Query\SelectQuery;
+use Semitexa\Orm\Query\UpdateQuery;
 
 abstract class AbstractRepository implements RepositoryInterface
 {
@@ -62,17 +63,7 @@ abstract class AbstractRepository implements RepositoryInterface
     public function findOneBy(array $criteria): ?object
     {
         $query = $this->select();
-
-        foreach ($criteria as $column => $value) {
-            if ($value === null) {
-                $query->whereNull($column);
-            } elseif (is_array($value)) {
-                $query->whereIn($column, $value);
-            } else {
-                $query->where($column, '=', $value);
-            }
-        }
-
+        $this->applyCriteriaToQuery($query, $criteria);
         return $query->fetchOne();
     }
 
@@ -82,17 +73,7 @@ abstract class AbstractRepository implements RepositoryInterface
     public function findBy(array $criteria): array
     {
         $query = $this->select();
-
-        foreach ($criteria as $column => $value) {
-            if ($value === null) {
-                $query->whereNull($column);
-            } elseif (is_array($value)) {
-                $query->whereIn($column, $value);
-            } else {
-                $query->where($column, '=', $value);
-            }
-        }
-
+        $this->applyCriteriaToQuery($query, $criteria);
         return $query->fetchAll();
     }
 
@@ -109,8 +90,13 @@ abstract class AbstractRepository implements RepositoryInterface
                 'Resource must implement ' . FilterableResourceInterface::class . ' to use find(object).'
             );
         }
-        $criteria = $resource->getFilterCriteria();
-        return $this->findBy($criteria);
+        $query = $this->select();
+        $this->applyCriteriaToQuery($query, $resource->getFilterCriteria());
+        $relationCriteria = $resource->getRelationFilterCriteria();
+        if ($relationCriteria !== []) {
+            $query->applyRelationCriteria($relationCriteria);
+        }
+        return $query->fetchAll();
     }
 
     public function findOne(object $resource): ?object
@@ -126,8 +112,31 @@ abstract class AbstractRepository implements RepositoryInterface
                 'Resource must implement ' . FilterableResourceInterface::class . ' to use findOne(object).'
             );
         }
-        $criteria = $resource->getFilterCriteria();
-        return $this->findOneBy($criteria);
+        $query = $this->select();
+        $this->applyCriteriaToQuery($query, $resource->getFilterCriteria());
+        $relationCriteria = $resource->getRelationFilterCriteria();
+        if ($relationCriteria !== []) {
+            $query->applyRelationCriteria($relationCriteria);
+        }
+        return $query->fetchOne();
+    }
+
+    /**
+     * Apply main-table criteria to a SelectQuery (null => whereNull, array => whereIn, scalar => where =).
+     *
+     * @param array<string, mixed> $criteria
+     */
+    private function applyCriteriaToQuery(SelectQuery $query, array $criteria): void
+    {
+        foreach ($criteria as $column => $value) {
+            if ($value === null) {
+                $query->whereNull($column);
+            } elseif (is_array($value)) {
+                $query->whereIn($column, $value);
+            } else {
+                $query->where($column, '=', $value);
+            }
+        }
     }
 
     /**
@@ -188,19 +197,54 @@ abstract class AbstractRepository implements RepositoryInterface
 
         $this->beforeDelete($resource);
 
-        // Cascade-delete children / pivot rows before removing the main record.
-        (new CascadeDeleter($activeAdapter))->deleteRelations($resource);
+        // Soft delete: if the resource uses SoftDeletes trait, set deleted_at instead of DELETE.
+        if (method_exists($resource, 'markAsDeleted')) {
+            $resource->markAsDeleted();
+            $data = $this->hydrator->dehydrate($resource);
+            (new UpdateQuery($this->tableName, $activeAdapter))->execute($data, $this->pkColumn);
+            $this->afterDelete($resource);
+            return;
+        }
 
+        // Hard delete: cascade-delete children / pivot rows, then remove the main record.
+        (new CascadeDeleter($activeAdapter))->deleteRelations($resource);
         (new DeleteQuery($this->tableName, $activeAdapter))->execute($this->pkColumn, $pkValue);
 
         $this->afterDelete($resource);
     }
 
     /**
-     * Called before INSERT/UPDATE, after converting entity to resource.
-     * Override to auto-fill timestamps, validate, etc.
+     * Restore a soft-deleted entity (clears deleted_at and saves).
+     * Only works for resources using SoftDeletes trait.
      */
-    protected function beforeSave(object $resource): void {}
+    public function restore(object $entity): void
+    {
+        $resource = $this->toResource($entity);
+        if (!method_exists($resource, 'restore')) {
+            throw new \LogicException(
+                $this->getResourceClass() . ' does not use SoftDeletes trait.'
+            );
+        }
+        $resource->restore();
+        $this->save($resource);
+    }
+
+    /**
+     * Called before INSERT/UPDATE, after converting entity to resource.
+     * Override to add custom logic; always call parent::beforeSave() when overriding.
+     */
+    protected function beforeSave(object $resource): void
+    {
+        // Auto-generate UUID if the resource uses HasUuid trait and uuid is empty
+        if (method_exists($resource, 'ensureUuid')) {
+            $resource->ensureUuid();
+        }
+
+        // Auto-fill timestamps if the resource uses HasTimestamps trait
+        if (method_exists($resource, 'touchTimestamps')) {
+            $resource->touchTimestamps();
+        }
+    }
 
     /**
      * Called after INSERT/UPDATE and cascade save.
@@ -235,8 +279,29 @@ abstract class AbstractRepository implements RepositoryInterface
 
     /**
      * Internal query builder for SELECT — available to subclasses.
+     * Automatically appends `WHERE deleted_at IS NULL` for resources using SoftDeletes trait.
      */
     protected function select(): SelectQuery
+    {
+        $query = new SelectQuery(
+            $this->tableName,
+            $this->getResourceClass(),
+            $this->getActiveAdapter(),
+            $this->streamingHydrator,
+        );
+
+        if ($this->usesSoftDeletes()) {
+            $query->whereNull('deleted_at');
+        }
+
+        return $query;
+    }
+
+    /**
+     * Query builder that includes soft-deleted records.
+     * Use when you need to work with deleted records (restore, audit, etc.).
+     */
+    protected function selectWithTrashed(): SelectQuery
     {
         return new SelectQuery(
             $this->tableName,
@@ -244,6 +309,14 @@ abstract class AbstractRepository implements RepositoryInterface
             $this->getActiveAdapter(),
             $this->streamingHydrator,
         );
+    }
+
+    /**
+     * Whether the resource class uses the SoftDeletes trait.
+     */
+    private function usesSoftDeletes(): bool
+    {
+        return method_exists($this->getResourceClass(), 'markAsDeleted');
     }
 
     /**

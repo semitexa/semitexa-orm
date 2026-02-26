@@ -223,16 +223,27 @@ class SchemaComparator
     private function buildExpectedColumnType(ColumnDefinition $col): string
     {
         return match ($col->type) {
-            MySqlType::Varchar => 'varchar(' . ($col->length ?? 255) . ')',
-            MySqlType::Text => 'text',
-            MySqlType::Int => 'int',
-            MySqlType::Bigint => 'bigint',
-            MySqlType::Decimal => 'decimal(' . ($col->precision ?? 10) . ',' . ($col->scale ?? 0) . ')',
-            MySqlType::Boolean => 'tinyint(1)',
-            MySqlType::Datetime => 'datetime',
-            MySqlType::Timestamp => 'timestamp',
-            MySqlType::Date => 'date',
-            MySqlType::Json => 'json',
+            MySqlType::Varchar    => 'varchar(' . ($col->length ?? 255) . ')',
+            MySqlType::Char       => 'char(' . ($col->length ?? 1) . ')',
+            MySqlType::Text       => 'text',
+            MySqlType::MediumText => 'mediumtext',
+            MySqlType::LongText   => 'longtext',
+            MySqlType::TinyInt    => 'tinyint',
+            MySqlType::SmallInt   => 'smallint',
+            MySqlType::Int        => 'int',
+            MySqlType::Bigint     => 'bigint',
+            MySqlType::Float      => 'float',
+            MySqlType::Double     => 'double',
+            MySqlType::Decimal    => 'decimal(' . ($col->precision ?? 10) . ',' . ($col->scale ?? 0) . ')',
+            MySqlType::Boolean    => 'tinyint(1)',
+            MySqlType::Datetime   => 'datetime',
+            MySqlType::Timestamp  => 'timestamp',
+            MySqlType::Date       => 'date',
+            MySqlType::Time       => 'time',
+            MySqlType::Year       => 'year',
+            MySqlType::Json       => 'json',
+            MySqlType::Blob       => 'blob',
+            MySqlType::Binary     => 'binary(' . ($col->length ?? 16) . ')',
         };
     }
 
@@ -255,9 +266,11 @@ class SchemaComparator
     private function normalizeType(string $type): string
     {
         $type = strtolower(trim($type));
-        // MySQL 8.0 may report "int" as "int" (without display width), normalize
+        // MySQL may report integer types with display width — strip it for comparison
         $type = preg_replace('/^int\(\d+\)$/', 'int', $type);
         $type = preg_replace('/^bigint\(\d+\)$/', 'bigint', $type);
+        $type = preg_replace('/^tinyint\((\d+)\)$/', 'tinyint($1)', $type); // keep tinyint(1) for boolean
+        $type = preg_replace('/^smallint\(\d+\)$/', 'smallint', $type);
         return $type;
     }
 
