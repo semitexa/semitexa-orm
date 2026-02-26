@@ -8,6 +8,7 @@ use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Attribute\Column;
 use Semitexa\Orm\Attribute\FromTable;
 use Semitexa\Orm\Attribute\PrimaryKey;
+use Semitexa\Orm\Attribute\TenantScoped;
 use Semitexa\Orm\Contract\DomainMappable;
 use Semitexa\Orm\Contract\FilterableResourceInterface;
 use Semitexa\Orm\Hydration\Hydrator;
@@ -16,6 +17,9 @@ use Semitexa\Orm\Query\DeleteQuery;
 use Semitexa\Orm\Query\InsertQuery;
 use Semitexa\Orm\Query\SelectQuery;
 use Semitexa\Orm\Query\UpdateQuery;
+use Semitexa\Core\Tenant\TenantContextInterface;
+use Semitexa\Core\Tenant\Scope\TenantScopeInterface;
+use Semitexa\Core\Tenant\DefaultTenantContext;
 
 abstract class AbstractRepository implements RepositoryInterface
 {
@@ -28,6 +32,7 @@ abstract class AbstractRepository implements RepositoryInterface
     private StreamingHydrator $streamingHydrator;
     private Hydrator $hydrator;
     private ?DatabaseAdapterInterface $transactionConnection = null;
+    private ?TenantScopeInterface $tenantScope = null;
 
     /**
      * Subclass must define the Resource class via this method.
@@ -280,6 +285,7 @@ abstract class AbstractRepository implements RepositoryInterface
     /**
      * Internal query builder for SELECT — available to subclasses.
      * Automatically appends `WHERE deleted_at IS NULL` for resources using SoftDeletes trait.
+     * Automatically applies tenant scope if the resource is marked with #[TenantScoped].
      */
     protected function select(): SelectQuery
     {
@@ -294,21 +300,64 @@ abstract class AbstractRepository implements RepositoryInterface
             $query->whereNull('deleted_at');
         }
 
+        $this->applyTenantScope($query);
+
         return $query;
     }
 
     /**
      * Query builder that includes soft-deleted records.
      * Use when you need to work with deleted records (restore, audit, etc.).
+     * Still applies tenant scope.
      */
     protected function selectWithTrashed(): SelectQuery
     {
-        return new SelectQuery(
+        $query = new SelectQuery(
             $this->tableName,
             $this->getResourceClass(),
             $this->getActiveAdapter(),
             $this->streamingHydrator,
         );
+
+        $this->applyTenantScope($query);
+
+        return $query;
+    }
+
+    /**
+     * Set a custom tenant scope strategy.
+     * If not set, uses NullTenantScope from core.
+     */
+    public function setTenantScope(?TenantScopeInterface $scope): void
+    {
+        $this->tenantScope = $scope;
+    }
+
+    /**
+     * Apply tenant scope to the query if the resource is tenant-scoped.
+     */
+    private function applyTenantScope(SelectQuery $query): void
+    {
+        $resourceClass = $this->getResourceClass();
+        $ref = new \ReflectionClass($resourceClass);
+        
+        $tenantAttr = $ref->getAttributes(TenantScoped::class);
+        if ($tenantAttr === []) {
+            return;
+        }
+
+        /** @var TenantScoped $attr */
+        $attr = $tenantAttr[0]->newInstance();
+
+        $scope = $this->tenantScope;
+        
+        if ($scope === null) {
+            return;
+        }
+
+        $context = TenantContextInterface::get() ?? DefaultTenantContext::getInstance();
+        
+        $scope->apply($query, $context);
     }
 
     /**
