@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Console\Command;
 
+use Semitexa\Core\Attributes\AsCommand;
 use Semitexa\Core\Console\Command\BaseCommand;
 use Semitexa\Orm\OrmManager;
 use Symfony\Component\Console\Command\Command;
@@ -11,6 +12,7 @@ use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
 
+#[AsCommand(name: 'orm:seed', description: 'Run defaults() upsert for all Resource classes with seed data')]
 class OrmSeedCommand extends BaseCommand
 {
     public function __construct(

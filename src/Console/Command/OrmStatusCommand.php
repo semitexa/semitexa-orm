@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Console\Command;
 
+use Semitexa\Core\Attributes\AsCommand;
 use Semitexa\Core\Console\Command\BaseCommand;
 use Semitexa\Orm\Adapter\ServerCapability;
 use Semitexa\Orm\OrmManager;
@@ -12,6 +13,7 @@ use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
 
+#[AsCommand(name: 'orm:status', description: 'Show ORM status: database info, server capabilities, schema summary')]
 class OrmStatusCommand extends BaseCommand
 {
     public function __construct(

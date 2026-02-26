@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Console\Command;
 
+use Semitexa\Core\Attributes\AsCommand;
 use Semitexa\Core\Console\Command\BaseCommand;
 use Semitexa\Orm\OrmManager;
 use Symfony\Component\Console\Command\Command;
@@ -15,6 +16,7 @@ use Symfony\Component\Console\Style\SymfonyStyle;
  * Runs real ORM demo: sync, seed, then CRUD and filter examples using OrmDemo module Resources.
  * Requires src/modules/OrmDemo/Application/Resource and Application/Repository to be present.
  */
+#[AsCommand(name: 'orm:demo', description: 'Run real ORM demo (sync, seed, CRUD, filters on main and related models)')]
 class OrmDemoCommand extends BaseCommand
 {
     private const USER_REPOSITORY_CLASS = \Semitexa\Modules\OrmDemo\Application\Repository\UserRepository::class;

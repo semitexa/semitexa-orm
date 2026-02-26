@@ -17,6 +17,7 @@ use Semitexa\Orm\Attribute\Index;
 use Semitexa\Orm\Attribute\ManyToMany;
 use Semitexa\Orm\Attribute\OneToOne;
 use Semitexa\Orm\Attribute\PrimaryKey;
+use Semitexa\Orm\Attribute\TenantScoped;
 use Semitexa\Orm\Contract\DomainMappable;
 
 class SchemaCollector
@@ -114,6 +115,24 @@ class SchemaCollector
                 unique: $index->unique,
                 name: $index->name,
             ));
+        }
+
+        // TenantScoped(same_storage): ensure tenant_id column exists for migrations
+        $tenantAttrs = $ref->getAttributes(TenantScoped::class);
+        if ($tenantAttrs !== []) {
+            /** @var TenantScoped $tenantAttr */
+            $tenantAttr = $tenantAttrs[0]->newInstance();
+            $tenantColumn = 'tenant_id';
+            if ($tenantAttr->strategy === 'same_storage' && $table->getColumn($tenantColumn) === null) {
+                $table->addColumn(new ColumnDefinition(
+                    name: $tenantColumn,
+                    type: MySqlType::Varchar,
+                    phpType: 'string',
+                    nullable: false,
+                    length: 64,
+                    propertyName: 'tenantId',
+                ));
+            }
         }
     }
 

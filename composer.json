@@ -1,6 +1,6 @@
 {
     "name": "semitexa/orm",
-    "description": "Semitexa ORM — attribute-driven schema, connection pooling, MySQL adapter",
+    "description": "Semitexa ORM \u2014 attribute-driven schema, connection pooling, MySQL adapter",
     "version": "v1.0.9",
     "type": "semitexa-module",
     "license": "MIT",
@@ -12,7 +12,8 @@
     ],
     "require": {
         "php": "^8.4",
-        "semitexa/core": "^1.0"
+        "semitexa/core": "^1.0",
+        "semitexa/tenancy": "^1.0"
     },
     "require-dev": {
         "swoole/ide-helper": "^5.1"
