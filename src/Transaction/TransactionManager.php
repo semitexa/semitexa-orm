@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Transaction;
 
+use Semitexa\Core\Event\EventDispatcherInterface;
 use Semitexa\Orm\Adapter\ConnectionPoolInterface;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 
@@ -15,10 +16,40 @@ class TransactionManager
     /** Nesting depth: 0 = no transaction, 1 = outer BEGIN, 2+ = savepoints. */
     private int $depth = 0;
 
+    /** @var object[] Buffered events to dispatch after successful outer commit. */
+    private array $pendingEvents = [];
+
     public function __construct(
         private readonly ConnectionPoolInterface $pool,
         private readonly DatabaseAdapterInterface $adapter,
+        private ?EventDispatcherInterface $eventDispatcher = null,
     ) {}
+
+    public function setEventDispatcher(EventDispatcherInterface $eventDispatcher): void
+    {
+        $this->eventDispatcher = $eventDispatcher;
+    }
+
+    public function bufferEvent(object $event): void
+    {
+        $this->pendingEvents[] = $event;
+    }
+
+    public function isActive(): bool
+    {
+        return $this->depth > 0;
+    }
+
+    /** @return object[] */
+    public function getPendingEvents(): array
+    {
+        return $this->pendingEvents;
+    }
+
+    public function clearPendingEvents(): void
+    {
+        $this->pendingEvents = [];
+    }
 
     /**
      * Execute a callable within a database transaction.
@@ -61,8 +92,21 @@ class TransactionManager
         try {
             $result = $callback($connAdapter);
             $pdo->commit();
+
+            // Flush buffered events after successful commit
+            if ($this->eventDispatcher !== null) {
+                $events = $this->pendingEvents;
+                $this->pendingEvents = [];
+                foreach ($events as $event) {
+                    $this->eventDispatcher->dispatch($event);
+                }
+            } else {
+                $this->pendingEvents = [];
+            }
+
             return $result;
         } catch (\Throwable $e) {
+            $this->pendingEvents = [];
             if ($pdo->inTransaction()) {
                 $pdo->rollBack();
             }

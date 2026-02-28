@@ -4,11 +4,16 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Repository;
 
+use Semitexa\Core\Attributes\InjectAsReadonly;
+use Semitexa\Core\Event\EventDispatcherInterface;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Attribute\Column;
 use Semitexa\Orm\Attribute\FromTable;
 use Semitexa\Orm\Attribute\PrimaryKey;
 use Semitexa\Orm\Attribute\TenantScoped;
+use Semitexa\Orm\Event\ResourceBroadcastEvent;
+use Semitexa\Orm\Schema\ResourceMetadata;
+use Semitexa\Orm\Transaction\TransactionManager;
 use Semitexa\Orm\Contract\DomainMappable;
 use Semitexa\Orm\Contract\FilterableResourceInterface;
 use Semitexa\Orm\Hydration\Hydrator;
@@ -34,6 +39,12 @@ abstract class AbstractRepository implements RepositoryInterface
     private Hydrator $hydrator;
     private ?DatabaseAdapterInterface $transactionConnection = null;
     private ?TenantScopeInterface $tenantScope = null;
+
+    #[InjectAsReadonly]
+    protected ?EventDispatcherInterface $eventDispatcher = null;
+
+    #[InjectAsReadonly]
+    protected ?TransactionManager $transactionManager = null;
 
     /**
      * Subclass must define the Resource class via this method.
@@ -162,6 +173,7 @@ abstract class AbstractRepository implements RepositoryInterface
         $data = $this->hydrator->dehydrate($resource);
         $this->injectTenantColumns($data);
         $pkValue = $data[$this->pkColumn] ?? null;
+        $wasInsert = ($pkValue === null);
 
         if ($pkValue === null) {
             // Auto-increment INSERT — exclude PK so the DB assigns it
@@ -193,7 +205,7 @@ abstract class AbstractRepository implements RepositoryInterface
         $cascadeSaver = new CascadeSaver($activeAdapter, $this->hydrator);
         $cascadeSaver->saveTouchedRelations($resource);
 
-        $this->afterSave($resource);
+        $this->afterSave($resource, $wasInsert);
     }
 
     public function delete(object $entity): void
@@ -257,7 +269,40 @@ abstract class AbstractRepository implements RepositoryInterface
      * Called after INSERT/UPDATE and cascade save.
      * Override for audit trail, cache invalidation, event dispatch, etc.
      */
-    protected function afterSave(object $resource): void {}
+    protected function afterSave(object $resource, bool $wasInsert = true): void
+    {
+        if ($this->eventDispatcher === null) {
+            return;
+        }
+
+        $meta = ResourceMetadata::for($this->getResourceClass());
+        $broadcastProps = $meta->getBroadcastProperties();
+
+        if ($broadcastProps === []) {
+            return;
+        }
+
+        $broadcastData = [];
+        $ref = new \ReflectionClass($resource);
+        foreach ($broadcastProps as $propName => $columnName) {
+            $prop = $ref->getProperty($propName);
+            $broadcastData[$columnName] = $prop->isInitialized($resource) ? $prop->getValue($resource) : null;
+        }
+
+        $event = new ResourceBroadcastEvent();
+        $event->setResourceClass($this->getResourceClass());
+        $event->setTableName($meta->getTableName());
+        $event->setPkColumn($meta->getPkColumn());
+        $event->setPkValue($meta->getPkValue($resource));
+        $event->setOperation($wasInsert ? 'insert' : 'update');
+        $event->setBroadcastData($broadcastData);
+
+        if ($this->transactionManager?->isActive()) {
+            $this->transactionManager->bufferEvent($event);
+        } else {
+            $this->eventDispatcher->dispatch($event);
+        }
+    }
 
     /**
      * Called before cascade delete and the main DELETE query.

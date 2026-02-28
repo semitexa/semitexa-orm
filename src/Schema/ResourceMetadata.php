@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Schema;
 
 use Semitexa\Orm\Attribute\BelongsTo;
+use Semitexa\Orm\Attribute\Broadcast;
 use Semitexa\Orm\Attribute\Column;
 use Semitexa\Orm\Attribute\Filterable;
 use Semitexa\Orm\Attribute\FromTable;
@@ -35,6 +36,9 @@ final class ResourceMetadata
 
     /** @var array<string, string> propertyName => columnName for #[Filterable] properties */
     private array $filterableColumns = [];
+
+    /** @var array<string, string> propertyName => columnName for #[Broadcast] properties */
+    private array $broadcastProperties = [];
 
     /** @var RelationMeta[] */
     private array $relations = [];
@@ -91,6 +95,23 @@ final class ResourceMetadata
                 $columnName = $fa->name;
             }
             $this->filterableColumns[$propName] = $columnName;
+        }
+
+        // Resolve broadcast property => column name map
+        foreach ($ref->getProperties() as $prop) {
+            if ($prop->getAttributes(Broadcast::class) === []) {
+                continue;
+            }
+            $propName = $prop->getName();
+            $colAttrs = $prop->getAttributes(Column::class);
+            if ($colAttrs === []) {
+                throw new \RuntimeException(
+                    "Property {$resourceClass}::\${$propName} has #[Broadcast] but no #[Column] attribute."
+                );
+            }
+            /** @var Column $col */
+            $col = $colAttrs[0]->newInstance();
+            $this->broadcastProperties[$propName] = $col->name ?? $propName;
         }
 
         // Resolve relations (BelongsTo, HasMany, OneToOne, ManyToMany)
@@ -197,6 +218,16 @@ final class ResourceMetadata
     public function getFilterableColumns(): array
     {
         return $this->filterableColumns;
+    }
+
+    /**
+     * Property names to DB column names for all #[Broadcast] properties.
+     *
+     * @return array<string, string> propertyName => columnName
+     */
+    public function getBroadcastProperties(): array
+    {
+        return $this->broadcastProperties;
     }
 
     /**
