@@ -6,7 +6,7 @@ namespace Semitexa\Orm\Query;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 
-class UpdateQuery
+class UpdateQuery implements WhereCapableInterface
 {
     use WhereTrait;
 

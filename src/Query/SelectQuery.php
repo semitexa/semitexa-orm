@@ -11,7 +11,7 @@ use Semitexa\Orm\Hydration\StreamingHydrator;
 use Semitexa\Orm\Repository\PaginatedResult;
 use Semitexa\Orm\Schema\ResourceMetadata;
 
-class SelectQuery
+class SelectQuery implements WhereCapableInterface
 {
     use WhereTrait;
 

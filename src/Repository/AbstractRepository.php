@@ -17,9 +17,10 @@ use Semitexa\Orm\Query\DeleteQuery;
 use Semitexa\Orm\Query\InsertQuery;
 use Semitexa\Orm\Query\SelectQuery;
 use Semitexa\Orm\Query\UpdateQuery;
-use Semitexa\Core\Tenant\TenantContextInterface;
 use Semitexa\Core\Tenant\Scope\TenantScopeInterface;
 use Semitexa\Core\Tenant\DefaultTenantContext;
+use Semitexa\Orm\Tenant\ColumnInjectingScope;
+use Semitexa\Tenancy\Context\CoroutineContextStore;
 
 abstract class AbstractRepository implements RepositoryInterface
 {
@@ -159,6 +160,7 @@ abstract class AbstractRepository implements RepositoryInterface
         $this->beforeSave($resource);
 
         $data = $this->hydrator->dehydrate($resource);
+        $this->injectTenantColumns($data);
         $pkValue = $data[$this->pkColumn] ?? null;
 
         if ($pkValue === null) {
@@ -334,6 +336,31 @@ abstract class AbstractRepository implements RepositoryInterface
     }
 
     /**
+     * Inject tenant identifier columns into dehydrated row data before INSERT/UPDATE.
+     * Only runs when the active scope implements ColumnInjectingScope (same-storage isolation).
+     *
+     * @param array<string, mixed> $data Modified in place
+     */
+    private function injectTenantColumns(array &$data): void
+    {
+        $scope = $this->tenantScope;
+
+        if (!$scope instanceof ColumnInjectingScope) {
+            return;
+        }
+
+        $resourceClass = $this->getResourceClass();
+        $ref = new \ReflectionClass($resourceClass);
+
+        if ($ref->getAttributes(TenantScoped::class) === []) {
+            return;
+        }
+
+        $context = CoroutineContextStore::get() ?? DefaultTenantContext::getInstance();
+        $scope->injectColumns($data, $context);
+    }
+
+    /**
      * Apply tenant scope to the query if the resource is tenant-scoped.
      */
     private function applyTenantScope(SelectQuery $query): void
@@ -355,7 +382,7 @@ abstract class AbstractRepository implements RepositoryInterface
             return;
         }
 
-        $context = TenantContextInterface::get() ?? DefaultTenantContext::getInstance();
+        $context = CoroutineContextStore::get() ?? DefaultTenantContext::getInstance();
         
         $scope->apply($query, $context);
     }

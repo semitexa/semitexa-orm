@@ -6,7 +6,7 @@ namespace Semitexa\Orm\Query;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 
-class DeleteQuery
+class DeleteQuery implements WhereCapableInterface
 {
     use WhereTrait;
 
