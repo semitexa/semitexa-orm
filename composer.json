@@ -1,7 +1,7 @@
 {
     "name": "semitexa/orm",
     "description": "Semitexa ORM — attribute-driven schema, connection pooling, MySQL adapter",
-    "version": "v1.0.10",
+    "version": "v1.0.11",
     "type": "semitexa-module",
     "license": "MIT",
     "authors": [
