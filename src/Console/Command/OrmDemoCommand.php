@@ -13,8 +13,8 @@ use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
 
 /**
- * Runs real ORM demo: sync, seed, then CRUD and filter examples using OrmDemo module Resources.
- * Requires src/modules/OrmDemo/Application/Resource and Application/Repository to be present.
+ * Runs real ORM demo: sync, seed, then CRUD and filter examples using OrmDemo module.
+ * Requires src/modules/OrmDemo/Application/Orm (ORM models) and Application/Repository to be present.
  */
 #[AsCommand(name: 'orm:demo', description: 'Run real ORM demo (sync, seed, CRUD, filters on main and related models)')]
 class OrmDemoCommand extends BaseCommand
@@ -33,7 +33,7 @@ class OrmDemoCommand extends BaseCommand
 
         if (!class_exists(self::USER_REPOSITORY_CLASS)) {
             $io->warning('Demo not available: OrmDemo module not found.');
-            $io->text('Add src/modules/OrmDemo/Application/Resource and Application/Repository (Role, User, Order, OrderItem) to run the demo.');
+            $io->text('Add src/modules/OrmDemo/Application/Orm and Application/Repository (Role, User, Order, OrderItem) to run the demo.');
             return Command::SUCCESS;
         }
 
@@ -102,7 +102,7 @@ class OrmDemoCommand extends BaseCommand
 
         // 4. Filter by main model (FilterableResourceInterface)
         $io->section('4. Filter by main model (filterByX)');
-        $filterResource = new \Semitexa\Modules\OrmDemo\Application\Resource\UserResource();
+        $filterResource = new \Semitexa\Modules\OrmDemo\Application\Orm\UserResource();
         $filterResource->filterByEmail('demo@semitexa.dev');
         $found = $userRepo->find($filterResource);
         $io->text('Users with email=demo@semitexa.dev: ' . count($found) . ' row(s)');
@@ -112,7 +112,7 @@ class OrmDemoCommand extends BaseCommand
 
         // 5. Filter by related model (filterByUserEmail on Order)
         $io->section('5. Filter by related model (filterByUserEmail on Order)');
-        $orderFilter = new \Semitexa\Modules\OrmDemo\Application\Resource\OrderResource();
+        $orderFilter = new \Semitexa\Modules\OrmDemo\Application\Orm\OrderResource();
         $orderFilter->filterByUserEmail('demo@semitexa.dev');
         $ordersByUserEmail = $orderRepo->find($orderFilter);
         $io->text('Orders where user.email=demo@semitexa.dev: ' . count($ordersByUserEmail) . ' row(s)');
@@ -124,22 +124,22 @@ class OrmDemoCommand extends BaseCommand
 
         // 7. Create (save) new entity
         $io->section('7. Create (save)');
-        $newUser = new \Semitexa\Modules\OrmDemo\Application\Resource\UserResource();
+        $newUser = new \Semitexa\Modules\OrmDemo\Application\Orm\UserResource();
         $newUser->email = 'newuser@demo.dev';
         $newUser->name = 'New Demo User';
         $userRepo->save($newUser);
         $io->text('Created user id=' . $newUser->id . ', email=' . $newUser->email);
 
         // 8. Create order with items (cascade save)
-        $newOrder = new \Semitexa\Modules\OrmDemo\Application\Resource\OrderResource();
+        $newOrder = new \Semitexa\Modules\OrmDemo\Application\Orm\OrderResource();
         $newOrder->user_id = $newUser->id;
         $newOrder->status = 'pending';
         $newOrder->total = 149.99;
-        $item1 = new \Semitexa\Modules\OrmDemo\Application\Resource\OrderItemResource();
+        $item1 = new \Semitexa\Modules\OrmDemo\Application\Orm\OrderItemResource();
         $item1->product_name = 'Product A';
         $item1->quantity = 2;
         $item1->price = 49.99;
-        $item2 = new \Semitexa\Modules\OrmDemo\Application\Resource\OrderItemResource();
+        $item2 = new \Semitexa\Modules\OrmDemo\Application\Orm\OrderItemResource();
         $item2->product_name = 'Product B';
         $item2->quantity = 1;
         $item2->price = 50.01;

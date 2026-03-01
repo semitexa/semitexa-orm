@@ -201,6 +201,23 @@ class SelectQuery implements WhereCapableInterface
     }
 
     /**
+     * Execute and return the first result as Resource, or null.
+     * Use when the caller needs the Resource (e.g. password_hash, save()) rather than the domain object.
+     */
+    public function fetchOneAsResource(): ?object
+    {
+        $sql = $this->buildCoreSql() . ' LIMIT 1';
+        $result = $this->adapter->execute($sql, $this->params);
+        $row = $result->fetchOne();
+
+        if ($row === null) {
+            return null;
+        }
+
+        return $this->hydrator->hydrateToResource($row, $this->resourceClass);
+    }
+
+    /**
      * Execute paginated query and return PaginatedResult with Domain objects.
      */
     public function paginate(int $page, int $perPage = 20): PaginatedResult

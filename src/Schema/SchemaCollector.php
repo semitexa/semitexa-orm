@@ -201,6 +201,15 @@ class SchemaCollector
             if ($phpType === 'string' && $pkStrategy === 'auto') {
                 $this->errors[] = "Property '{$property->getName()}' in '{$className}': string primary key requires explicit strategy.";
             }
+
+            // uuid strategy requires Binary or Varchar column type
+            if ($pkStrategy === 'uuid' && !empty($columnAttrs)) {
+                /** @var Column $colCheck */
+                $colCheck = $columnAttrs[0]->newInstance();
+                if ($colCheck->type !== MySqlType::Binary && $colCheck->type !== MySqlType::Varchar) {
+                    $this->errors[] = "Property '{$property->getName()}' in '{$className}': uuid strategy requires Binary or Varchar column type.";
+                }
+            }
         }
 
         $isDeprecated = !empty($deprecatedAttrs);

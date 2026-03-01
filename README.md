@@ -75,7 +75,8 @@ class UserResource
 
 - `HasTimestamps` — adds `created_at`, `updated_at`
 - `SoftDeletes` — adds nullable `deleted_at`
-- `HasUuid` — adds `uuid` (varchar 36)
+- `HasUuid` — adds `uuid` (varchar 36, v4) as a non-PK field
+- `HasUuidV7` — UUID v7 as `BINARY(16)` primary key (chronologically sortable, optimal for InnoDB)
 - `FilterableTrait` — adds `filterByX($value)` for main-table properties with `#[Filterable]`, and `filterBy{Relation}{Column}($value)` for related models; implement `FilterableResourceInterface` when using with `Repository::find(object)`
 
 ### Filtering architecture
@@ -193,6 +194,38 @@ Register in your container/bootstrap: `UserResourceFactory` → `new \Semitexa\O
 - **Not-null FK** — `ON DELETE RESTRICT`, `ON UPDATE RESTRICT`
 - **Override** — set explicitly on the relation, e.g. `#[BelongsTo(User::class, foreignKey: 'owner_id', onDelete: \Semitexa\Orm\Schema\ForeignKeyAction::CASCADE)]`
 
+### UUID v7 Primary Key (BINARY(16))
+
+Use `HasUuidV7` trait for resources where a chronologically sortable UUID is the primary key, stored as `BINARY(16)` for optimal InnoDB performance:
+
+```php
+use Semitexa\Orm\Attribute\FromTable;
+use Semitexa\Orm\Trait\HasUuidV7;
+use Semitexa\Orm\Trait\HasTimestamps;
+
+#[FromTable(name: 'documents')]
+class DocumentResource
+{
+    use HasUuidV7;
+    use HasTimestamps;
+
+    #[Column(type: MySqlType::Varchar, length: 255)]
+    public string $title;
+}
+```
+
+The `id` property holds a canonical UUID string (`0192d4e0-7b3a-7xxx-...`). Conversion to/from `BINARY(16)` is handled transparently by the ORM. UUID v7 (RFC 9562) embeds a millisecond timestamp, ensuring chronological ordering and efficient B-tree indexing.
+
+You can also use `Uuid7` directly:
+
+```php
+use Semitexa\Orm\Uuid\Uuid7;
+
+$uuid   = Uuid7::generate();           // "0192d4e0-7b3a-7..."
+$bytes  = Uuid7::toBytes($uuid);       // 16-byte binary
+$back   = Uuid7::fromBytes($bytes);    // canonical string
+```
+
 ### Domain Mapping
 
 Implement `DomainMappable` when `#[FromTable(mapTo: ...)]` is used:
@@ -205,6 +238,19 @@ class UserResource implements DomainMappable
     public static function fromDomain(object $entity): static { /* ... */ }
 }
 ```
+
+### Розміщення в модулі
+
+Where to put ORM-related classes inside a Semitexa module (see project **docs/MODULE_STRUCTURE.md** for the full Application layout):
+
+| What | Folder | Notes |
+|------|--------|--------|
+| **ORM model** (class with `#[FromTable]`) | **`Application/Orm/`** | Table → domain mapping. Use `#[FromTable(mapTo: ...)]` and `DomainMappable` to tie to a domain entity. In Semitexa the **Resource** folder is reserved for response DTOs only; put DB mapping classes in **Orm/** and refer to them in docs as "ORM model" or "table mapping". |
+| **Domain entity** | **`Application/Domain/`** | e.g. `User.php`, readonly value object. |
+| **Repository interface** | **`Application/Domain/`** or **`Application/Domain/Contract/`** | e.g. `UserRepositoryInterface.php`. |
+| **Repository implementation** | **`Application/Repository/`** | e.g. `UserRepository` implements `UserRepositoryInterface`. |
+
+Namespaces: `Semitexa\Modules\{ModuleName}\Application\Orm\`, `...\Application\Domain\`, `...\Application\Repository\`.
 
 ## Architecture
 

@@ -6,6 +6,7 @@ namespace Semitexa\Orm\Hydration;
 
 use Semitexa\Orm\Adapter\MySqlType;
 use Semitexa\Orm\Schema\ColumnDefinition;
+use Semitexa\Orm\Uuid\Uuid7;
 
 class TypeCaster
 {
@@ -27,7 +28,10 @@ class TypeCaster
             MySqlType::Varchar, MySqlType::Char,
             MySqlType::Text, MySqlType::MediumText,
             MySqlType::LongText, MySqlType::Time               => (string) $value,
-            MySqlType::Blob, MySqlType::Binary                 => $value, // raw bytes
+            MySqlType::Blob                                    => $value, // raw bytes
+            MySqlType::Binary                                  => is_string($value) && strlen($value) === 16
+                ? Uuid7::fromBytes($value)
+                : $value,
             MySqlType::Datetime, MySqlType::Timestamp,
             MySqlType::Date                                    => $this->castToDateTime($value),
             MySqlType::Json                                    => $this->castToArray($value),
@@ -87,6 +91,11 @@ class TypeCaster
         // Array → JSON
         if (is_array($value) && $column->type === MySqlType::Json) {
             return json_encode($value, JSON_UNESCAPED_UNICODE);
+        }
+
+        // UUID string → binary for BINARY columns
+        if ($column->type === MySqlType::Binary && is_string($value) && strlen($value) === 36 && str_contains($value, '-')) {
+            return Uuid7::toBytes($value);
         }
 
         // Boolean → int

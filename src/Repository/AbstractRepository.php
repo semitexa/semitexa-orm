@@ -34,6 +34,7 @@ abstract class AbstractRepository implements RepositoryInterface
     private string $pkColumn;
     /** PHP property name for the PK (may differ from $pkColumn) */
     private string $pkPropertyName;
+    private string $pkStrategy = 'auto';
     private ?string $mapToClass;
     private StreamingHydrator $streamingHydrator;
     private Hydrator $hydrator;
@@ -168,20 +169,26 @@ abstract class AbstractRepository implements RepositoryInterface
         $resource = $this->toResource($entity);
         $activeAdapter = $this->getActiveAdapter();
 
+        // Determine if this is a new record BEFORE beforeSave() generates UUID
+        $rawPk = $resource->{$this->pkPropertyName} ?? null;
+        $isNewRecord = ($rawPk === null || $rawPk === '' || $rawPk === 0);
+
         $this->beforeSave($resource);
 
         $data = $this->hydrator->dehydrate($resource);
         $this->injectTenantColumns($data);
-        $pkValue = $data[$this->pkColumn] ?? null;
-        $wasInsert = ($pkValue === null);
+        $wasInsert = $isNewRecord;
 
-        if ($pkValue === null) {
-            // Auto-increment INSERT — exclude PK so the DB assigns it
-            unset($data[$this->pkColumn]);
+        if ($isNewRecord) {
+            if ($this->pkStrategy === 'auto') {
+                // Auto-increment INSERT — exclude PK so the DB assigns it
+                unset($data[$this->pkColumn]);
+            }
+
             $insertId = (new InsertQuery($this->tableName, $activeAdapter))->execute($data);
 
-            // Set the generated PK back on the resource
-            if ($insertId !== '' && $insertId !== '0') {
+            // Set the generated PK back on the resource (auto-increment only)
+            if ($this->pkStrategy === 'auto' && $insertId !== '' && $insertId !== '0') {
                 $ref = new \ReflectionProperty($resource, $this->pkPropertyName);
                 $type = $ref->getType();
                 $pkTyped = ($type instanceof \ReflectionNamedType && $type->getName() === 'int')
@@ -554,8 +561,12 @@ abstract class AbstractRepository implements RepositoryInterface
         $this->pkColumn = 'id'; // default DB column name
         $this->pkPropertyName = 'id'; // default PHP property name
         foreach ($ref->getProperties() as $prop) {
-            if ($prop->getAttributes(PrimaryKey::class) !== []) {
+            $pkAttrs = $prop->getAttributes(PrimaryKey::class);
+            if ($pkAttrs !== []) {
                 $this->pkPropertyName = $prop->getName();
+                /** @var PrimaryKey $pk */
+                $pk = $pkAttrs[0]->newInstance();
+                $this->pkStrategy = $pk->strategy;
                 $colAttrs = $prop->getAttributes(Column::class);
                 if ($colAttrs !== []) {
                     /** @var Column $col */
