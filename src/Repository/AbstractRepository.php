@@ -65,6 +65,9 @@ abstract class AbstractRepository implements RepositoryInterface
 
     public function findById(int|string $id): ?object
     {
+        if ($this->pkStrategy === 'uuid' && is_string($id) && strlen($id) === 36 && str_contains($id, '-')) {
+            $id = \Semitexa\Orm\Uuid\Uuid7::toBytes($id);
+        }
         return $this->select()
             ->where($this->pkColumn, '=', $id)
             ->fetchOne();

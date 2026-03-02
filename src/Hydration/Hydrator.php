@@ -40,15 +40,33 @@ class Hydrator
     {
         $resource = new $resourceClass();
         $dbColumnMap = $this->getDbColumnToPropertyMap($resourceClass);
+        $columnAttrs = $this->getColumnAttributes($resourceClass);
 
         foreach ($dbColumnMap as $dbColumnName => $property) {
             if (!array_key_exists($dbColumnName, $row)) {
                 continue;
             }
 
-            $value    = $row[$dbColumnName];
-            $phpType  = $this->resolvePhpType($property);
-            $nullable = $property->getType() instanceof \ReflectionNamedType && $property->getType()->allowsNull();
+            $value       = $row[$dbColumnName];
+            $propName    = $property->getName();
+            $phpType     = $this->resolvePhpType($property);
+            $nullable    = $property->getType() instanceof \ReflectionNamedType && $property->getType()->allowsNull();
+
+            if (isset($columnAttrs[$propName])) {
+                /** @var Column $colAttr */
+                $colAttr = $columnAttrs[$propName]->newInstance();
+                $colDef  = new \Semitexa\Orm\Schema\ColumnDefinition(
+                    name: $dbColumnName,
+                    type: $colAttr->type,
+                    phpType: $phpType,
+                    nullable: $colAttr->nullable || $nullable,
+                    length: $colAttr->length,
+                    precision: $colAttr->precision,
+                    scale: $colAttr->scale,
+                    default: $colAttr->default,
+                );
+                $value = $this->typeCaster->castFromDb($value, $colDef);
+            }
 
             $castedValue = $this->typeCaster->castToPropertyType($value, $phpType, $nullable);
             $property->setValue($resource, $castedValue);
