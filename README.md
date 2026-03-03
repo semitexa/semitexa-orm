@@ -241,16 +241,16 @@ class UserResource implements DomainMappable
 
 ### Розміщення в модулі
 
-Where to put ORM-related classes inside a Semitexa module (see project **docs/MODULE_STRUCTURE.md** for the full Application layout):
+Where to put ORM-related classes inside a Semitexa module (see project **docs/MODULE_STRUCTURE.md** for the full layout):
 
 | What | Folder | Notes |
 |------|--------|--------|
-| **ORM model** (class with `#[FromTable]`) | **`Application/Orm/`** | Table → domain mapping. Use `#[FromTable(mapTo: ...)]` and `DomainMappable` to tie to a domain entity. In Semitexa the **Resource** folder is reserved for response DTOs only; put DB mapping classes in **Orm/** and refer to them in docs as "ORM model" or "table mapping". |
-| **Domain entity** | **`Application/Domain/`** | e.g. `User.php`, readonly value object. |
-| **Repository interface** | **`Application/Domain/`** or **`Application/Domain/Contract/`** | e.g. `UserRepositoryInterface.php`. |
-| **Repository implementation** | **`Application/Repository/`** | e.g. `UserRepository` implements `UserRepositoryInterface`. |
+| **ORM model** (class with `#[FromTable]`) | **`Application/Db/MySQL/Model/`** | Table → domain mapping. Use `#[FromTable(mapTo: ...)]` and `DomainMappable` to tie to a domain entity. The **Resource** folder is reserved for response DTOs only; put DB mapping classes in **Db/MySQL/Model/** and refer to them in docs as "ORM model" or "table mapping". |
+| **Domain entity** | **`Domain/Model/`** | e.g. `User.php`, readonly value object. Lives at module root level, not under `Application/`. |
+| **Repository interface** | **`Domain/Repository/`** | e.g. `UserRepositoryInterface.php`. |
+| **Repository implementation** | **`Application/Db/MySQL/Repository/`** | e.g. `UserRepository` implements `UserRepositoryInterface`. |
 
-Namespaces: `Semitexa\Modules\{ModuleName}\Application\Orm\`, `...\Application\Domain\`, `...\Application\Repository\`.
+Namespaces: `...\Application\Db\MySQL\Model\`, `...\Domain\Model\`, `...\Domain\Repository\`, `...\Application\Db\MySQL\Repository\`.
 
 ## Architecture
 
