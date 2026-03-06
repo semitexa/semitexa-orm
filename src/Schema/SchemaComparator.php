@@ -17,6 +17,13 @@ class SchemaComparator
     ) {}
 
     /**
+     * Index names that are required by FK constraints and must not be dropped.
+     * Populated by readFkIndexNames() from INFORMATION_SCHEMA.
+     * @var array<string, true> key: "table.index_name"
+     */
+    private array $fkIndexNames = [];
+
+    /**
      * Compare code schema with actual DB state.
      *
      * @param array<string, TableDefinition> $codeSchema
@@ -26,6 +33,13 @@ class SchemaComparator
     {
         $dbSchema = $this->readDatabaseSchema();
         $diff = new SchemaDiff();
+
+        // Read which indexes are used by FK constraints — these must not be dropped
+        // (MySQL error 1553). MySQL may use ANY suitable index for a FK, not just one
+        // named after the constraint.
+        $this->fkIndexNames = $this->readFkIndexNames();
+
+        $dbFks = $this->readDbForeignKeys();
 
         // Tables in code but not in DB → CREATE
         foreach ($codeSchema as $tableName => $tableDefinition) {
@@ -46,7 +60,7 @@ class SchemaComparator
         }
 
         // Compare foreign keys
-        $this->compareForeignKeys($codeSchema, $diff);
+        $this->compareForeignKeys($codeSchema, $diff, $dbFks);
 
         return $diff;
     }
@@ -123,7 +137,7 @@ class SchemaComparator
                     'table' => $row['TABLE_NAME'],
                     'name' => $row['INDEX_NAME'],
                     'columns' => [],
-                    'unique' => $row['NON_UNIQUE'] === '0',
+                    'unique' => (int) $row['NON_UNIQUE'] === 0,
                 ];
             }
             $indexGroups[$key]['columns'][] = $row['COLUMN_NAME'];
@@ -291,24 +305,45 @@ class SchemaComparator
             $codeIndexMap[$name] = $idx;
         }
 
-        // Indexes in code but not in DB → ADD INDEX
-        foreach ($codeIndexMap as $name => $idx) {
-            if (!isset($dbIndexMap[$name])) {
-                $diff->addAddIndex($tableName, $idx, $name);
-                continue;
-            }
+        // Build structural lookup: "columns|unique" → db index name, for matching by structure
+        $dbByStructure = [];
+        foreach ($dbIndexMap as $name => $dbIdx) {
+            $structKey = implode(',', $dbIdx->columns) . '|' . ($dbIdx->unique ? '1' : '0');
+            $dbByStructure[$structKey] = $name;
+        }
 
-            // Compare columns and uniqueness
-            $dbIdx = $dbIndexMap[$name];
-            if ($idx->columns !== $dbIdx->columns || $idx->unique !== $dbIdx->unique) {
-                $diff->addDropIndex($tableName, $name);
-                $diff->addAddIndex($tableName, $idx, $name);
+        $matchedDbNames = [];
+
+        // Indexes in code — match by name first, then by structure
+        foreach ($codeIndexMap as $codeName => $idx) {
+            $structKey = implode(',', $idx->columns) . '|' . ($idx->unique ? '1' : '0');
+
+            if (isset($dbIndexMap[$codeName])) {
+                // Exact name match — compare structure
+                $dbIdx = $dbIndexMap[$codeName];
+                $matchedDbNames[$codeName] = true;
+                if ($idx->columns !== $dbIdx->columns || $idx->unique !== $dbIdx->unique) {
+                    $diff->addDropIndex($tableName, $codeName);
+                    $diff->addAddIndex($tableName, $idx, $codeName);
+                }
+            } elseif (isset($dbByStructure[$structKey])) {
+                // Same structure exists under a different name — rename (drop old + add new)
+                $dbName = $dbByStructure[$structKey];
+                $matchedDbNames[$dbName] = true;
+                if ($dbName !== $codeName) {
+                    $diff->addDropIndex($tableName, $dbName);
+                    $diff->addAddIndex($tableName, $idx, $codeName);
+                }
+            } else {
+                // No match at all — new index
+                $diff->addAddIndex($tableName, $idx, $codeName);
             }
         }
 
-        // Indexes in DB but not in code → DROP INDEX
+        // Indexes in DB that were not matched by any code index → DROP
+        // But never drop indexes required by FK constraints (MySQL error 1553)
         foreach ($dbIndexMap as $name => $dbIdx) {
-            if (!isset($codeIndexMap[$name])) {
+            if (!isset($matchedDbNames[$name]) && !isset($this->fkIndexNames[$tableName . '.' . $name])) {
                 $diff->addDropIndex($tableName, $name);
             }
         }
@@ -331,9 +366,8 @@ class SchemaComparator
      *
      * @param array<string, TableDefinition> $codeSchema
      */
-    private function compareForeignKeys(array $codeSchema, SchemaDiff $diff): void
+    private function compareForeignKeys(array $codeSchema, SchemaDiff $diff, array $dbFks): void
     {
-        $dbFks = $this->readDbForeignKeys();
 
         // Collect all code FKs keyed by constraint name
         $codeFks = [];
@@ -409,5 +443,38 @@ class SchemaComparator
         }
 
         return $fks;
+    }
+
+    /**
+     * Read which index names are used by FK constraints in the current database.
+     * MySQL can use ANY suitable index (not just one named after the constraint).
+     * These indexes must never be dropped (MySQL error 1553).
+     *
+     * @return array<string, true> key: "table_name.index_name"
+     */
+    private function readFkIndexNames(): array
+    {
+        // INNODB_SYS_* tables are not available in all MySQL versions.
+        // Instead, for each FK we know the table+column — find which index MySQL
+        // uses by checking INFORMATION_SCHEMA.STATISTICS for indexes whose first
+        // column matches the FK column.
+        $result = $this->adapter->execute(
+            'SELECT s.TABLE_NAME, s.INDEX_NAME
+             FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
+             JOIN INFORMATION_SCHEMA.STATISTICS s
+               ON s.TABLE_SCHEMA = kcu.TABLE_SCHEMA
+              AND s.TABLE_NAME = kcu.TABLE_NAME
+              AND s.COLUMN_NAME = kcu.COLUMN_NAME
+              AND s.SEQ_IN_INDEX = 1
+             WHERE kcu.TABLE_SCHEMA = :db
+               AND kcu.REFERENCED_TABLE_NAME IS NOT NULL',
+            ['db' => $this->database],
+        );
+
+        $names = [];
+        foreach ($result->rows as $row) {
+            $names[$row['TABLE_NAME'] . '.' . $row['INDEX_NAME']] = true;
+        }
+        return $names;
     }
 }

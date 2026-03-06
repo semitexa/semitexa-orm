@@ -79,9 +79,68 @@ class SyncEngine
             ));
         }
 
-        // 5. ADD INDEXes (safe)
-        foreach ($diff->getAddIndexes() as $tableName => $indexes) {
+        // 5–6. INDEX changes: DROP + ADD
+        //
+        // When an index is being recreated (same name appears in both drop and add
+        // lists for the same table), MySQL may refuse to drop it if a FK constraint
+        // depends on it (error 1553). Combining DROP INDEX + ADD INDEX into a single
+        // ALTER TABLE statement lets MySQL atomically swap the index definition
+        // without ever leaving the FK unsupported.
+        $dropIndexes = $diff->getDropIndexes();
+        $addIndexes  = $diff->getAddIndexes();
+
+        // Build a lookup of add-indexes keyed by table.name for pairing
+        $addByTableAndName = [];
+        foreach ($addIndexes as $tableName => $indexes) {
             foreach ($indexes as $entry) {
+                $addByTableAndName[$tableName . '.' . $entry['name']] = $entry;
+            }
+        }
+
+        // Track which add-indexes have been paired with a drop (emitted as combined DDL)
+        $pairedAdds = [];
+
+        // 5. DROP INDEXes (destructive — must run before ADD to avoid duplicate key names)
+        foreach ($dropIndexes as $tableName => $indexNames) {
+            foreach ($indexNames as $indexName) {
+                $key = $tableName . '.' . $indexName;
+
+                if (isset($addByTableAndName[$key])) {
+                    // Same index name is being dropped and re-added → combine into one statement
+                    $entry = $addByTableAndName[$key];
+                    $index = $entry['index'];
+                    $cols = implode('`, `', $index->columns);
+                    $type = $index->unique ? 'UNIQUE INDEX' : 'INDEX';
+                    $sql = "ALTER TABLE `{$tableName}` DROP INDEX `{$indexName}`, ADD {$type} `{$indexName}` (`{$cols}`)";
+
+                    $plan->addOperation(new DdlOperation(
+                        sql: $sql,
+                        type: DdlOperationType::DropIndex,
+                        tableName: $tableName,
+                        isDestructive: true,
+                        description: "Recreate index '{$indexName}' on '{$tableName}'",
+                    ));
+                    $pairedAdds[$key] = true;
+                } else {
+                    $plan->addOperation(new DdlOperation(
+                        sql: "ALTER TABLE `{$tableName}` DROP INDEX `{$indexName}`",
+                        type: DdlOperationType::DropIndex,
+                        tableName: $tableName,
+                        isDestructive: true,
+                        description: "Drop index '{$indexName}' from '{$tableName}'",
+                    ));
+                }
+            }
+        }
+
+        // 6. ADD INDEXes (safe) — skip any that were already emitted as part of a combined statement
+        foreach ($addIndexes as $tableName => $indexes) {
+            foreach ($indexes as $entry) {
+                $key = $tableName . '.' . $entry['name'];
+                if (isset($pairedAdds[$key])) {
+                    continue;
+                }
+
                 $index = $entry['index'];
                 $name = $entry['name'];
                 $plan->addOperation(new DdlOperation(
@@ -94,20 +153,7 @@ class SyncEngine
             }
         }
 
-        // 5. DROP INDEXes (destructive)
-        foreach ($diff->getDropIndexes() as $tableName => $indexNames) {
-            foreach ($indexNames as $indexName) {
-                $plan->addOperation(new DdlOperation(
-                    sql: "ALTER TABLE `{$tableName}` DROP INDEX `{$indexName}`",
-                    type: DdlOperationType::DropIndex,
-                    tableName: $tableName,
-                    isDestructive: true,
-                    description: "Drop index '{$indexName}' from '{$tableName}'",
-                ));
-            }
-        }
-
-        // 6. DROP COLUMNs — two-phase logic (destructive)
+        // 7. DROP COLUMNs — two-phase logic (destructive)
         foreach ($diff->getDropColumns() as $tableName => $columns) {
             foreach ($columns as $colInfo) {
                 $columnName = $colInfo['name'];
@@ -137,7 +183,7 @@ class SyncEngine
             }
         }
 
-        // 7. DROP FOREIGN KEYs (destructive — must happen before DROP TABLE/COLUMN)
+        // 8. DROP FOREIGN KEYs (destructive — must happen before DROP TABLE/COLUMN)
         foreach ($diff->getDropForeignKeys() as $entry) {
             $plan->addOperation(new DdlOperation(
                 sql: "ALTER TABLE `{$entry['table']}` DROP FOREIGN KEY `{$entry['constraintName']}`",
@@ -148,7 +194,7 @@ class SyncEngine
             ));
         }
 
-        // 8. DROP TABLEs — two-phase logic (destructive)
+        // 9. DROP TABLEs — two-phase logic (destructive)
         foreach ($diff->getDropTables() as $dbTable) {
             $tableName = $dbTable->name;
             if ($dbTable->tableComment !== self::DEPRECATED_COMMENT) {
