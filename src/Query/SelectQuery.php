@@ -218,6 +218,24 @@ class SelectQuery implements WhereCapableInterface
     }
 
     /**
+     * Execute and return all results as Resource objects.
+     * Use when the caller needs Resources (e.g. for mutation and save()) rather than domain objects.
+     *
+     * @return object[]
+     */
+    public function fetchAllAsResource(): array
+    {
+        $sql = $this->buildSql();
+        $result = $this->adapter->execute($sql, $this->params);
+
+        $resources = [];
+        foreach ($result->rows as $row) {
+            $resources[] = $this->hydrator->hydrateToResource($row, $this->resourceClass);
+        }
+        return $resources;
+    }
+
+    /**
      * Execute paginated query and return PaginatedResult with Domain objects.
      */
     public function paginate(int $page, int $perPage = 20): PaginatedResult
