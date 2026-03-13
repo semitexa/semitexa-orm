@@ -11,11 +11,14 @@ class MysqlAdapter implements DatabaseAdapterInterface
     public function __construct(
         private readonly ConnectionPoolInterface $pool,
     ) {
-        $this->detectVersion();
     }
 
     public function supports(ServerCapability $capability): bool
     {
+        if ($this->serverVersion === '') {
+            $this->detectVersion();
+        }
+
         $minVersion = ServerCapability::minimumVersions()[$capability->value] ?? null;
 
         if ($minVersion === null) {
@@ -27,6 +30,10 @@ class MysqlAdapter implements DatabaseAdapterInterface
 
     public function getServerVersion(): string
     {
+        if ($this->serverVersion === '') {
+            $this->detectVersion();
+        }
+
         return $this->serverVersion;
     }
 
