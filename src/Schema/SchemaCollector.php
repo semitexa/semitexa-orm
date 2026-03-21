@@ -51,6 +51,11 @@ class SchemaCollector
             foreach ($tableErrors as $error) {
                 $this->warnings[] = $error;
             }
+
+            $primaryKey = $table->getPrimaryKey();
+            if ($primaryKey !== null && $primaryKey->nullable) {
+                $this->errors[] = "Table '{$table->name}': primary key column '{$primaryKey->name}' cannot be nullable.";
+            }
         }
 
         $this->resolveForeignKeys($tables);
@@ -222,6 +227,9 @@ class SchemaCollector
         $this->validateTypeMatch($phpType, $column->type, $propertyName, $className);
 
         $nullable = $column->nullable || ($property->getType() instanceof \ReflectionNamedType && $property->getType()->allowsNull());
+        if ($isPrimaryKey) {
+            $nullable = false;
+        }
 
         $this->assertValidIdentifier($columnName, "column '{$columnName}' in '{$className}'");
 
