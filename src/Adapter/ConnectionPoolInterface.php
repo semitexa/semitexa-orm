@@ -19,4 +19,12 @@ interface ConnectionPoolInterface
     public function getSize(): int;
 
     public function getAvailable(): int;
+
+    /**
+     * Switch future connections to the tenant-specific database.
+     *
+     * Implementations that cannot safely perform separate-db switching must
+     * fail loudly instead of silently keeping the default database selected.
+     */
+    public function switchTo(string $tenantId): void;
 }

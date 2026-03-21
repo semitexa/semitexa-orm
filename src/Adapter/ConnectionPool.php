@@ -99,6 +99,15 @@ class ConnectionPool implements ConnectionPoolInterface
         return $this->pool->length();
     }
 
+    public function switchTo(string $tenantId): void
+    {
+        throw new \LogicException(sprintf(
+            'Tenant database switching is not configured for %s (requested tenant: %s).',
+            self::class,
+            $tenantId,
+        ));
+    }
+
     /**
      * Verify that a pooled connection is still alive and reconnect if not.
      *

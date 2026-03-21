@@ -169,17 +169,17 @@ class SchemaCollector
             return;
         }
 
-        if (empty($columnAttrs)) {
+        if ($columnAttrs === []) {
             // Skip internal/trait state (e.g. FilterableTrait __filterCriteria)
             if (str_starts_with($property->getName(), '__')) {
                 return;
             }
             // Property without #[Column] in a Resource class — error unless it's a relation
-            if (empty($property->getAttributes(BelongsTo::class))
-                && empty($property->getAttributes(HasMany::class))
-                && empty($property->getAttributes(OneToOne::class))
-                && empty($property->getAttributes(ManyToMany::class))
-                && empty($property->getAttributes(Aggregate::class))
+            if ($property->getAttributes(BelongsTo::class) === []
+                && $property->getAttributes(HasMany::class) === []
+                && $property->getAttributes(OneToOne::class) === []
+                && $property->getAttributes(ManyToMany::class) === []
+                && $property->getAttributes(Aggregate::class) === []
             ) {
                 $this->errors[] = "Property '{$property->getName()}' in '{$className}' has no #[Column] attribute.";
             }
@@ -203,7 +203,7 @@ class SchemaCollector
             }
 
             // uuid strategy requires Binary or Varchar column type
-            if ($pkStrategy === 'uuid' && !empty($columnAttrs)) {
+            if ($pkStrategy === 'uuid' && $columnAttrs !== []) {
                 /** @var Column $colCheck */
                 $colCheck = $columnAttrs[0]->newInstance();
                 if ($colCheck->type !== MySqlType::Binary && $colCheck->type !== MySqlType::Varchar) {
