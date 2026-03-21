@@ -10,7 +10,6 @@ use Semitexa\Orm\OrmManager;
 use Semitexa\Modules\OrmDemo\Application\Db\MySQL\Model\OrderItemResource;
 use Semitexa\Modules\OrmDemo\Application\Db\MySQL\Model\OrderResource;
 use Semitexa\Modules\OrmDemo\Application\Db\MySQL\Model\UserResource;
-use Semitexa\Modules\OrmDemo\Application\Db\MySQL\Repository\OrderItemRepository;
 use Semitexa\Modules\OrmDemo\Application\Db\MySQL\Repository\OrderRepository;
 use Semitexa\Modules\OrmDemo\Application\Db\MySQL\Repository\RoleRepository;
 use Semitexa\Modules\OrmDemo\Application\Db\MySQL\Repository\UserRepository;
@@ -96,7 +95,6 @@ class OrmDemoCommand extends BaseCommand
         $roleRepo = new RoleRepository($adapter);
         $userRepo = new UserRepository($adapter, $streamingHydrator);
         $orderRepo = new OrderRepository($adapter, $streamingHydrator);
-        $orderItemRepo = new OrderItemRepository($adapter);
 
         // 3. Read: findById, findAll, findBy
         $io->section('3. Read (findById, findAll, findBy)');

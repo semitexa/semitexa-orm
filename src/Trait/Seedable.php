@@ -18,10 +18,19 @@ namespace Semitexa\Orm\Trait;
  */
 trait Seedable
 {
-    final public static function newSeedInstance(): static
+    protected static function newSeedInstance(): static
     {
+        $ref = new \ReflectionClass(static::class);
+        $constructor = $ref->getConstructor();
+
+        if ($constructor === null || $constructor->isPublic()) {
+            /** @var static $instance */
+            $instance = $ref->newInstance();
+            return $instance;
+        }
+
         /** @var static $instance */
-        $instance = (new \ReflectionClass(static::class))->newInstance();
+        $instance = $ref->newInstanceWithoutConstructor();
         return $instance;
     }
 

@@ -47,6 +47,10 @@ final class SingleConnectionPool implements ConnectionPoolInterface
 
     public function switchTo(string $tenantId): void
     {
-        // Single-connection CLI pool has no tenant-specific switching.
+        throw new \LogicException(sprintf(
+            'Tenant database switching is not configured for %s (requested tenant: %s).',
+            self::class,
+            $tenantId,
+        ));
     }
 }

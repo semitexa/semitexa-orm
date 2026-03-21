@@ -21,8 +21,10 @@ interface ConnectionPoolInterface
     public function getAvailable(): int;
 
     /**
-     * Optional hook for tenant-aware pools. Implementations that do not support
-     * separate-db switching may safely treat this as a no-op.
+     * Switch future connections to the tenant-specific database.
+     *
+     * Implementations that cannot safely perform separate-db switching must
+     * fail loudly instead of silently keeping the default database selected.
      */
     public function switchTo(string $tenantId): void;
 }

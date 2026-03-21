@@ -101,8 +101,11 @@ class ConnectionPool implements ConnectionPoolInterface
 
     public function switchTo(string $tenantId): void
     {
-        // This pool uses a fixed factory; tenant switching is handled by
-        // higher-level tenant-aware connection strategies when available.
+        throw new \LogicException(sprintf(
+            'Tenant database switching is not configured for %s (requested tenant: %s).',
+            self::class,
+            $tenantId,
+        ));
     }
 
     /**
