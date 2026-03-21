@@ -227,6 +227,9 @@ class SchemaCollector
         $this->validateTypeMatch($phpType, $column->type, $propertyName, $className);
 
         $nullable = $column->nullable || ($property->getType() instanceof \ReflectionNamedType && $property->getType()->allowsNull());
+        if ($isPrimaryKey) {
+            $nullable = false;
+        }
 
         $this->assertValidIdentifier($columnName, "column '{$columnName}' in '{$className}'");
 
