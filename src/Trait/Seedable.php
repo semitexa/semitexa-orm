@@ -18,13 +18,20 @@ namespace Semitexa\Orm\Trait;
  */
 trait Seedable
 {
+    final public static function newSeedInstance(): static
+    {
+        /** @var static $instance */
+        $instance = (new \ReflectionClass(static::class))->newInstance();
+        return $instance;
+    }
+
     /**
      * Create a new Resource instance with the given property values.
      * Named arguments must match the Resource's public properties.
      */
     public static function create(mixed ...$values): static
     {
-        $instance = new static();
+        $instance = static::newSeedInstance();
         $ref = new \ReflectionClass(static::class);
 
         foreach ($values as $name => $value) {

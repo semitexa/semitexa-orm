@@ -44,4 +44,9 @@ final class SingleConnectionPool implements ConnectionPoolInterface
     {
         return $this->connection !== null ? 1 : 0;
     }
+
+    public function switchTo(string $tenantId): void
+    {
+        // Single-connection CLI pool has no tenant-specific switching.
+    }
 }

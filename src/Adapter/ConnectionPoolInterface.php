@@ -19,4 +19,10 @@ interface ConnectionPoolInterface
     public function getSize(): int;
 
     public function getAvailable(): int;
+
+    /**
+     * Optional hook for tenant-aware pools. Implementations that do not support
+     * separate-db switching may safely treat this as a no-op.
+     */
+    public function switchTo(string $tenantId): void;
 }

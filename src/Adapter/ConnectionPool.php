@@ -99,6 +99,12 @@ class ConnectionPool implements ConnectionPoolInterface
         return $this->pool->length();
     }
 
+    public function switchTo(string $tenantId): void
+    {
+        // This pool uses a fixed factory; tenant switching is handled by
+        // higher-level tenant-aware connection strategies when available.
+    }
+
     /**
      * Verify that a pooled connection is still alive and reconnect if not.
      *
