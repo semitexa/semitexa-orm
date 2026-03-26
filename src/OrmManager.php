@@ -152,6 +152,12 @@ class OrmManager
 
     private function createPool(): ConnectionPoolInterface
     {
+        // Ensure Swoole workers/coroutines resolve DB_* values from the project env files.
+        if (class_exists(\Swoole\Coroutine::class, false)) {
+            ProjectRoot::reset();
+            Environment::syncEnvFromFiles();
+        }
+
         $host = $this->resolveDbHost();
         $port = $this->resolveDbPort();
         $database = Environment::getEnvValue('DB_DATABASE', 'semitexa');
