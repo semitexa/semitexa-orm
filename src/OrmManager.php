@@ -152,8 +152,8 @@ class OrmManager
 
     private function createPool(): ConnectionPoolInterface
     {
-        // Ensure .env is loaded in Swoole workers (getenv may be empty after fork)
-        if (defined('SEMITEXA_SWOOLE') && SEMITEXA_SWOOLE && class_exists(Environment::class)) {
+        // Ensure Swoole workers/coroutines resolve DB_* values from the project env files.
+        if (class_exists(\Swoole\Coroutine::class, false)) {
             ProjectRoot::reset();
             Environment::syncEnvFromFiles();
         }
