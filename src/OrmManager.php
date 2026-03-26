@@ -152,12 +152,6 @@ class OrmManager
 
     private function createPool(): ConnectionPoolInterface
     {
-        // Ensure .env is loaded in Swoole workers (getenv may be empty after fork)
-        if (defined('SEMITEXA_SWOOLE') && SEMITEXA_SWOOLE && class_exists(Environment::class)) {
-            ProjectRoot::reset();
-            Environment::syncEnvFromFiles();
-        }
-
         $host = $this->resolveDbHost();
         $port = $this->resolveDbPort();
         $database = Environment::getEnvValue('DB_DATABASE', 'semitexa');
