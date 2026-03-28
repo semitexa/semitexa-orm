@@ -23,6 +23,11 @@
             "Semitexa\\Orm\\": "src/"
         }
     },
+    "autoload-dev": {
+        "psr-4": {
+            "Semitexa\\Orm\\Tests\\": "tests/"
+        }
+    },
     "keywords": [
         "semitexa",
         "orm",

@@ -17,7 +17,7 @@ Depends on Core and Tenancy. Depended on by Cache, Media, Scheduler, Search, Sto
 - `#[Filterable]` with auto-indexing and typed `filterByX()` methods
 - `#[Aggregate]` for virtual computed fields
 - Traits: `HasTimestamps`, `SoftDeletes`, `HasUuid`, `HasUuidV7` (BINARY(16) chronological)
-- Domain mapping via `#[FromTable(mapTo:)]` and `DomainMappable`
+- Domain mapping via `TableModel`, `#[AsMapper]`, and `DomainRepository`
 - Swoole `Channel`-based connection pool
 - MySQL 8.0+ with version detection and capability checks
 - `SchemaCollector` for attribute-driven schema sync

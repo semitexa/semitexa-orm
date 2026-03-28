@@ -18,7 +18,6 @@ use Semitexa\Orm\Attribute\ManyToMany;
 use Semitexa\Orm\Attribute\OneToOne;
 use Semitexa\Orm\Attribute\PrimaryKey;
 use Semitexa\Orm\Attribute\TenantScoped;
-use Semitexa\Orm\Contract\DomainMappable;
 
 class SchemaCollector
 {
@@ -92,10 +91,6 @@ class SchemaCollector
         $tableName = $fromTable->name;
 
         $this->assertValidIdentifier($tableName, "table name in '{$className}'");
-
-        if ($fromTable->mapTo !== null && !is_subclass_of($className, DomainMappable::class)) {
-            $this->errors[] = "Class '{$className}' has mapTo='{$fromTable->mapTo}' but does not implement DomainMappable.";
-        }
 
         if (!isset($tables[$tableName])) {
             $tables[$tableName] = new TableDefinition($tableName);

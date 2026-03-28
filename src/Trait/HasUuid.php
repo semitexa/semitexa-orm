@@ -13,9 +13,7 @@ trait HasUuid
     public string $uuid = '';
 
     /**
-     * Called automatically by AbstractRepository::beforeSave().
-     * Generates a UUID v4 if uuid is empty (first insert).
-     * On subsequent saves the existing uuid is preserved.
+     * Generates a UUID v4 if uuid is empty.
      */
     public function ensureUuid(): void
     {

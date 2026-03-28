@@ -7,7 +7,7 @@ namespace Semitexa\Orm\Query;
 /**
  * Marks a query builder as capable of accepting WHERE conditions.
  *
- * Implemented by SelectQuery, UpdateQuery, and DeleteQuery (all use WhereTrait).
+ * Implemented by query builders that support WHERE constraints.
  * TenantScopeInterface::apply() receives `object $queryBuilder`; implementations
  * that need to add WHERE clauses should type-check against this interface and
  * throw \InvalidArgumentException when an unsupported query type is passed.

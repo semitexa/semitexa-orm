@@ -7,9 +7,10 @@ namespace Semitexa\Orm\Attribute;
 use Attribute;
 
 #[Attribute(Attribute::TARGET_CLASS)]
-final class TenantScoped
+final readonly class TenantScoped
 {
     public function __construct(
-        public readonly string $strategy = 'same_storage',
+        public string $strategy = 'same_storage',
+        public ?string $column = null,
     ) {}
 }

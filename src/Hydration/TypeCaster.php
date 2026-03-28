@@ -53,7 +53,9 @@ class TypeCaster
             'int' => (int) $value,
             'float' => (float) $value,
             'bool' => (bool) $value,
-            'string' => (string) $value,
+            'string' => is_array($value)
+                ? (json_encode($value, JSON_UNESCAPED_UNICODE) ?: '[]')
+                : (string) $value,
             'array' => is_array($value) ? $value : json_decode((string) $value, true),
             'DateTimeImmutable', '\DateTimeImmutable' => $value instanceof \DateTimeImmutable
                 ? $value

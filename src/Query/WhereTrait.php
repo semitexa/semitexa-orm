@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Query;
 
 /**
- * Shared WHERE-building logic for SelectQuery, UpdateQuery, DeleteQuery.
+ * Shared WHERE-building logic for query builders that support filtering.
  *
  * Using class must declare:
  *   private array $wheres = [];

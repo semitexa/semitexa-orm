@@ -20,8 +20,8 @@ use Semitexa\Orm\Hydration\RelationType;
  * Cached reflection metadata for a Resource class.
  *
  * Resolving table name and PK column via Reflection on every query caused
- * identical code to be duplicated across CascadeSaver, RelationLoader,
- * SmartUpsert, and SelectQuery. This class centralises that logic behind a
+ * identical code to be duplicated across multiple ORM internals.
+ * This class centralises that logic behind a
  * static per-class cache so that Reflection happens exactly once per worker
  * lifetime regardless of how many queries are executed.
  */
