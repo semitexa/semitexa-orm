@@ -35,11 +35,15 @@ abstract class AbstractRepository implements RepositoryInterface
     /** PHP property name for the PK (may differ from $pkColumn) */
     private string $pkPropertyName;
     private string $pkStrategy = 'auto';
-    private ?string $mapToClass;
-    private StreamingHydrator $streamingHydrator;
-    private Hydrator $hydrator;
+    private ?string $mapToClass = null;
+    private ?StreamingHydrator $streamingHydrator = null;
+    private ?Hydrator $hydrator = null;
     private ?DatabaseAdapterInterface $transactionConnection = null;
     private ?TenantScopeInterface $tenantScope = null;
+    private bool $metadataResolved = false;
+
+    #[InjectAsReadonly]
+    protected DatabaseAdapterInterface $adapter;
 
     #[InjectAsReadonly]
     protected ?EventDispatcherInterface $eventDispatcher = null;
@@ -54,17 +58,10 @@ abstract class AbstractRepository implements RepositoryInterface
      */
     abstract protected function getResourceClass(): string;
 
-    public function __construct(
-        private readonly DatabaseAdapterInterface $adapter,
-        ?StreamingHydrator $streamingHydrator = null,
-    ) {
-        $this->streamingHydrator = $streamingHydrator ?? new StreamingHydrator();
-        $this->hydrator = $this->streamingHydrator->getHydrator();
-        $this->resolveMetadata();
-    }
-
     public function findById(int|string $id): ?object
     {
+        $this->ensureInitialized();
+
         if ($this->pkStrategy === 'uuid' && is_string($id) && strlen($id) === 36 && str_contains($id, '-')) {
             $id = \Semitexa\Orm\Uuid\Uuid7::toBytes($id);
         }
@@ -75,6 +72,7 @@ abstract class AbstractRepository implements RepositoryInterface
 
     public function findAll(int $limit = 1000): array
     {
+        $this->ensureInitialized();
         return $this->select()->limit($limit)->fetchAll();
     }
 
@@ -83,6 +81,7 @@ abstract class AbstractRepository implements RepositoryInterface
      */
     public function findOneBy(array $criteria): ?object
     {
+        $this->ensureInitialized();
         $query = $this->select();
         $this->applyCriteriaToQuery($query, $criteria);
         return $query->fetchOne();
@@ -93,6 +92,7 @@ abstract class AbstractRepository implements RepositoryInterface
      */
     public function findBy(array $criteria): array
     {
+        $this->ensureInitialized();
         $query = $this->select();
         $this->applyCriteriaToQuery($query, $criteria);
         return $query->fetchAll();
@@ -100,6 +100,7 @@ abstract class AbstractRepository implements RepositoryInterface
 
     public function find(object $resource): array
     {
+        $this->ensureInitialized();
         $resourceClass = $this->getResourceClass();
         if (!$resource instanceof $resourceClass) {
             throw new \InvalidArgumentException(
@@ -122,6 +123,7 @@ abstract class AbstractRepository implements RepositoryInterface
 
     public function findOne(object $resource): ?object
     {
+        $this->ensureInitialized();
         $resourceClass = $this->getResourceClass();
         if (!$resource instanceof $resourceClass) {
             throw new \InvalidArgumentException(
@@ -169,6 +171,7 @@ abstract class AbstractRepository implements RepositoryInterface
      */
     public function save(object $entity): void
     {
+        $this->ensureInitialized();
         $resource = $this->toResource($entity);
         $activeAdapter = $this->getActiveAdapter();
 
@@ -220,6 +223,7 @@ abstract class AbstractRepository implements RepositoryInterface
 
     public function delete(object $entity): void
     {
+        $this->ensureInitialized();
         $resource      = $this->toResource($entity);
         $activeAdapter = $this->getActiveAdapter();
         $pkValue       = (new \ReflectionProperty($resource, $this->pkPropertyName))->getValue($resource);
@@ -248,6 +252,7 @@ abstract class AbstractRepository implements RepositoryInterface
      */
     public function restore(object $entity): void
     {
+        $this->ensureInitialized();
         $resource = $this->toResource($entity);
         if (!method_exists($resource, 'restore')) {
             throw new \LogicException(
@@ -334,6 +339,7 @@ abstract class AbstractRepository implements RepositoryInterface
      */
     public function useConnection(DatabaseAdapterInterface $connection): static
     {
+        $this->ensureInitialized();
         $clone = clone $this;
         $clone->transactionConnection = $connection;
         return $clone;
@@ -346,6 +352,7 @@ abstract class AbstractRepository implements RepositoryInterface
      */
     protected function select(): SelectQuery
     {
+        $this->ensureInitialized();
         $query = new SelectQuery(
             $this->tableName,
             $this->getResourceClass(),
@@ -369,6 +376,7 @@ abstract class AbstractRepository implements RepositoryInterface
      */
     protected function selectWithTrashed(): SelectQuery
     {
+        $this->ensureInitialized();
         $query = new SelectQuery(
             $this->tableName,
             $this->getResourceClass(),
@@ -458,6 +466,7 @@ abstract class AbstractRepository implements RepositoryInterface
      */
     protected function raw(string $sql, array $params = []): array
     {
+        $this->ensureInitialized();
         $result = $this->getActiveAdapter()->execute($sql, $params);
 
         return $this->streamingHydrator->hydrateAllToDomain($result->rows, $this->getResourceClass());
@@ -468,6 +477,7 @@ abstract class AbstractRepository implements RepositoryInterface
      */
     protected function getAdapter(): DatabaseAdapterInterface
     {
+        $this->ensureInitialized();
         return $this->getActiveAdapter();
     }
 
@@ -476,6 +486,7 @@ abstract class AbstractRepository implements RepositoryInterface
      */
     private function getActiveAdapter(): DatabaseAdapterInterface
     {
+        $this->ensureInitialized();
         return $this->transactionConnection ?? $this->adapter;
     }
 
@@ -484,6 +495,7 @@ abstract class AbstractRepository implements RepositoryInterface
      */
     protected function getTableName(): string
     {
+        $this->ensureInitialized();
         return $this->tableName;
     }
 
@@ -492,7 +504,23 @@ abstract class AbstractRepository implements RepositoryInterface
      */
     protected function getPkColumn(): string
     {
+        $this->ensureInitialized();
         return $this->pkColumn;
+    }
+
+    private function ensureInitialized(): void
+    {
+        if ($this->streamingHydrator === null) {
+            $this->streamingHydrator = new StreamingHydrator();
+            $this->hydrator = $this->streamingHydrator->getHydrator();
+        }
+
+        if ($this->metadataResolved) {
+            return;
+        }
+
+        $this->resolveMetadata();
+        $this->metadataResolved = true;
     }
 
     /**

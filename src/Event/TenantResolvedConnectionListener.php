@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Event;
 
 use Semitexa\Core\Attributes\AsEventListener;
+use Semitexa\Core\Attributes\InjectAsReadonly;
+use Semitexa\Core\Event\EventExecution;
 use Semitexa\Core\Tenant\Layer\OrganizationLayer;
 use Semitexa\Orm\Adapter\ConnectionPoolInterface;
 use Semitexa\Tenancy\Event\TenantResolved;
@@ -14,12 +16,11 @@ use Semitexa\Tenancy\Event\TenantResolved;
  * when the pool supports it (e.g. switchTo method for separate-DB strategy).
  * Integration via event keeps ORM decoupled from tenancy resolution logic.
  */
-#[AsEventListener(event: TenantResolved::class)]
+#[AsEventListener(event: TenantResolved::class, execution: EventExecution::Sync)]
 final class TenantResolvedConnectionListener
 {
-    public function __construct(
-        private readonly ConnectionPoolInterface $connectionPool,
-    ) {}
+    #[InjectAsReadonly]
+    protected ConnectionPoolInterface $connectionPool;
 
     public function handle(TenantResolved $event): void
     {
