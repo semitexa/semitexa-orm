@@ -26,8 +26,7 @@ final class AggregateWriteEngine
     public function insert(object $domainModel, string $tableModelClass, MapperRegistry $mapperRegistry): object
     {
         $rootTableModel = $mapperRegistry->mapToTableModel($domainModel, $tableModelClass);
-        $rootTableModel = $this->prepareInsertTableModel($rootTableModel);
-        $this->insertTableModel($rootTableModel);
+        $rootTableModel = $this->insertTableModel($rootTableModel);
 
         return $mapperRegistry->mapToDomain($rootTableModel, $domainModel::class);
     }
@@ -46,13 +45,15 @@ final class AggregateWriteEngine
         $this->deleteTableModel($rootTableModel);
     }
 
-    private function insertTableModel(object $tableModel): void
+    private function insertTableModel(object $tableModel): object
     {
         $tableModel = $this->prepareInsertTableModel($tableModel);
         $metadata = $this->metadata($tableModel::class);
         $this->validateReferenceOnlyRelations($tableModel, $metadata);
-        $this->executeInsert($tableModel, $metadata);
+        $tableModel = $this->executeInsert($tableModel, $metadata);
         $this->persistOwnedRelations($tableModel, $metadata, true);
+
+        return $tableModel;
     }
 
     private function updateTableModel(object $tableModel): void
@@ -70,7 +71,7 @@ final class AggregateWriteEngine
         $this->executeDelete($tableModel, $metadata);
     }
 
-    private function executeInsert(object $tableModel, TableModelMetadata $metadata): void
+    private function executeInsert(object $tableModel, TableModelMetadata $metadata): object
     {
         $row = $this->hydrator->dehydrate($tableModel);
         $columns = array_keys($row);
@@ -81,7 +82,23 @@ final class AggregateWriteEngine
             implode(', ', array_map(static fn (string $column): string => ':' . $column, $columns)),
         );
 
-        $this->adapter->execute($sql, $row);
+        $result = $this->adapter->execute($sql, $row);
+        $primaryKey = $metadata->primaryKeyProperty;
+        if ($primaryKey === null) {
+            return $tableModel;
+        }
+
+        $column = $metadata->column($primaryKey);
+        if ($column->primaryKeyStrategy !== 'auto') {
+            return $tableModel;
+        }
+
+        $currentValue = $this->propertyValue($tableModel, $primaryKey);
+        if ($currentValue !== null && $currentValue !== '') {
+            return $tableModel;
+        }
+
+        return $this->withPropertyValue($tableModel, $primaryKey, (int) $result->lastInsertId);
     }
 
     private function executeUpdate(object $tableModel, TableModelMetadata $metadata): void
@@ -178,12 +195,26 @@ final class AggregateWriteEngine
         }
 
         if ($relation->kind === RelationKind::OneToOne) {
-            $this->insertTableModel($value);
+            if (!is_object($value)) {
+                throw new InvalidRelationWriteException(sprintf(
+                    'CascadeOwned relation %s expects an object for one-to-one persistence.',
+                    $relation->propertyName,
+                ));
+            }
+
+            $this->insertTableModel($this->withPropertyValue($value, $relation->foreignKey, $parentId));
             return;
         }
 
         foreach ($this->iterableValue($value) as $item) {
-            $this->insertTableModel($item);
+            if (!is_object($item)) {
+                throw new InvalidRelationWriteException(sprintf(
+                    'CascadeOwned relation %s expects table model objects for cascade persistence.',
+                    $relation->propertyName,
+                ));
+            }
+
+            $this->insertTableModel($this->withPropertyValue($item, $relation->foreignKey, $parentId));
         }
     }
 
@@ -375,5 +406,19 @@ final class AggregateWriteEngine
         }
 
         return $reflection->newInstanceArgs($arguments);
+    }
+
+    private function withPropertyValue(object $tableModel, string $propertyName, mixed $value): object
+    {
+        $reflection = new \ReflectionClass($tableModel);
+
+        if ($reflection->isReadOnly()) {
+            return $this->reconstructWithPropertyOverride($tableModel, $propertyName, $value);
+        }
+
+        $property = new \ReflectionProperty($tableModel, $propertyName);
+        $property->setValue($tableModel, $value);
+
+        return $tableModel;
     }
 }
