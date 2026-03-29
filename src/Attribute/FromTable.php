@@ -11,6 +11,5 @@ readonly class FromTable
 {
     public function __construct(
         public string $name,
-        public ?string $mapTo = null,
     ) {}
 }

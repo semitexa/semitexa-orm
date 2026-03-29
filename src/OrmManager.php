@@ -11,6 +11,14 @@ use Semitexa\Orm\Adapter\ConnectionPoolInterface;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Adapter\MysqlAdapter;
 use Semitexa\Orm\Adapter\SingleConnectionPool;
+use Semitexa\Orm\Bootstrap\OrmBootstrapReport;
+use Semitexa\Orm\Bootstrap\OrmBootstrapValidator;
+use Semitexa\Orm\Hydration\TableModelHydrator;
+use Semitexa\Orm\Hydration\TableModelRelationLoader;
+use Semitexa\Orm\Mapping\MapperRegistry;
+use Semitexa\Orm\Metadata\TableModelMetadataRegistry;
+use Semitexa\Orm\Persistence\AggregateWriteEngine;
+use Semitexa\Orm\Repository\DomainRepository;
 use Semitexa\Orm\Schema\SchemaCollector;
 use Semitexa\Orm\Schema\SchemaComparator;
 use Semitexa\Orm\Sync\AuditLogger;
@@ -27,6 +35,12 @@ class OrmManager
     private ?SyncEngine $syncEngine = null;
     private ?TransactionManager $transactionManager = null;
     private ?SeedRunner $seedRunner = null;
+    private ?MapperRegistry $mapperRegistry = null;
+    private ?TableModelMetadataRegistry $tableModelMetadataRegistry = null;
+    private ?TableModelHydrator $tableModelHydrator = null;
+    private ?TableModelRelationLoader $tableModelRelationLoader = null;
+    private ?AggregateWriteEngine $aggregateWriteEngine = null;
+    private ?OrmBootstrapValidator $bootstrapValidator = null;
 
     public function getAdapter(): DatabaseAdapterInterface
     {
@@ -100,6 +114,93 @@ class OrmManager
         }
 
         return $this->seedRunner;
+    }
+
+    public function getMapperRegistry(): MapperRegistry
+    {
+        if ($this->mapperRegistry === null) {
+            $this->mapperRegistry = new MapperRegistry();
+            $this->mapperRegistry->build();
+        }
+
+        return $this->mapperRegistry;
+    }
+
+    public function getTableModelMetadataRegistry(): TableModelMetadataRegistry
+    {
+        if ($this->tableModelMetadataRegistry === null) {
+            $this->tableModelMetadataRegistry = new TableModelMetadataRegistry();
+        }
+
+        return $this->tableModelMetadataRegistry;
+    }
+
+    public function getTableModelHydrator(): TableModelHydrator
+    {
+        if ($this->tableModelHydrator === null) {
+            $this->tableModelHydrator = new TableModelHydrator(
+                metadataRegistry: $this->getTableModelMetadataRegistry(),
+            );
+        }
+
+        return $this->tableModelHydrator;
+    }
+
+    public function getTableModelRelationLoader(): TableModelRelationLoader
+    {
+        if ($this->tableModelRelationLoader === null) {
+            $this->tableModelRelationLoader = new TableModelRelationLoader(
+                $this->getAdapter(),
+                $this->getTableModelHydrator(),
+                $this->getTableModelMetadataRegistry(),
+            );
+        }
+
+        return $this->tableModelRelationLoader;
+    }
+
+    public function getAggregateWriteEngine(): AggregateWriteEngine
+    {
+        if ($this->aggregateWriteEngine === null) {
+            $this->aggregateWriteEngine = new AggregateWriteEngine(
+                $this->getAdapter(),
+                $this->getTableModelHydrator(),
+                $this->getTableModelMetadataRegistry(),
+            );
+        }
+
+        return $this->aggregateWriteEngine;
+    }
+
+    public function getBootstrapValidator(): OrmBootstrapValidator
+    {
+        if ($this->bootstrapValidator === null) {
+            $this->bootstrapValidator = new OrmBootstrapValidator(
+                metadataRegistry: $this->getTableModelMetadataRegistry(),
+                mapperRegistry: $this->getMapperRegistry(),
+            );
+        }
+
+        return $this->bootstrapValidator;
+    }
+
+    public function validateBootstrap(): OrmBootstrapReport
+    {
+        return $this->getBootstrapValidator()->validate();
+    }
+
+    public function repository(string $tableModelClass, string $domainModelClass): DomainRepository
+    {
+        return new DomainRepository(
+            tableModelClass: $tableModelClass,
+            domainModelClass: $domainModelClass,
+            adapter: $this->getAdapter(),
+            mapperRegistry: $this->getMapperRegistry(),
+            hydrator: $this->getTableModelHydrator(),
+            relationLoader: $this->getTableModelRelationLoader(),
+            metadataRegistry: $this->getTableModelMetadataRegistry(),
+            writeEngine: $this->getAggregateWriteEngine(),
+        );
     }
 
     public function getDatabaseName(): string

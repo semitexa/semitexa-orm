@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Attribute;
 
 use Attribute;
+use Semitexa\Orm\Persistence\RelationWritePolicy;
 
 #[Attribute(Attribute::TARGET_PROPERTY)]
 readonly class OneToOne
@@ -14,5 +15,6 @@ readonly class OneToOne
         public string $foreignKey,
         public ?\Semitexa\Orm\Schema\ForeignKeyAction $onDelete = null,
         public ?\Semitexa\Orm\Schema\ForeignKeyAction $onUpdate = null,
+        public ?RelationWritePolicy $writePolicy = null,
     ) {}
 }

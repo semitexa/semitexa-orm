@@ -14,7 +14,7 @@ trait SoftDeletes
 
     /**
      * Mark the resource as soft-deleted (sets deleted_at to now).
-     * Called automatically by AbstractRepository::delete() when this trait is present.
+     * Used by ORM delete flows that implement soft-delete semantics.
      */
     public function markAsDeleted(): void
     {
