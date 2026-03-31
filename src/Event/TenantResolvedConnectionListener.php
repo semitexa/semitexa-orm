@@ -29,8 +29,15 @@ final class TenantResolvedConnectionListener
             return;
         }
 
-        if (method_exists($this->connectionPool, 'switchTo')) {
+        if (!method_exists($this->connectionPool, 'switchTo')) {
+            return;
+        }
+
+        try {
             $this->connectionPool->switchTo($org->rawValue());
+        } catch (\LogicException) {
+            // Website tenants can resolve by host without requiring separate-db wiring.
+            // Explicit separate_db usage still fails later via ConnectionSwitchStrategy.
         }
     }
 }
