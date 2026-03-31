@@ -12,8 +12,7 @@ use Semitexa\Orm\Adapter\ConnectionPoolInterface;
 use Semitexa\Tenancy\Event\TenantResolved;
 
 /**
- * Listens to TenantResolved and switches the connection pool to the resolved tenant
- * when the pool supports it (e.g. switchTo method for separate-DB strategy).
+ * Listens to TenantResolved and switches the connection pool to the resolved tenant.
  * Integration via event keeps ORM decoupled from tenancy resolution logic.
  */
 #[AsEventListener(event: TenantResolved::class, execution: EventExecution::Sync)]
@@ -29,15 +28,16 @@ final class TenantResolvedConnectionListener
             return;
         }
 
-        if (!method_exists($this->connectionPool, 'switchTo')) {
-            return;
-        }
-
         try {
             $this->connectionPool->switchTo($org->rawValue());
-        } catch (\LogicException) {
+        } catch (\LogicException $e) {
             // Website tenants can resolve by host without requiring separate-db wiring.
             // Explicit separate_db usage still fails later via ConnectionSwitchStrategy.
+            error_log(sprintf(
+                'TenantResolvedConnectionListener: failed to switch connection pool to tenant "%s": %s',
+                $org->rawValue(),
+                $e->getMessage(),
+            ));
         }
     }
 }

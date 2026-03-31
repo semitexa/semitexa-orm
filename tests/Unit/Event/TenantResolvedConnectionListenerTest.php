@@ -16,6 +16,8 @@ final class TenantResolvedConnectionListenerTest extends TestCase
     #[Test]
     public function it_ignores_unsupported_connection_switching_for_resolved_tenant(): void
     {
+        $this->expectNotToPerformAssertions();
+
         $listener = new TenantResolvedConnectionListener();
         $this->injectPool($listener, new class implements ConnectionPoolInterface {
             public function pop(float $timeout = -1): \PDO
@@ -48,8 +50,6 @@ final class TenantResolvedConnectionListenerTest extends TestCase
         });
 
         $listener->handle(new TenantResolved(TenantContext::fromResolution('os', 'domain', 'os.semitexa.test')));
-
-        $this->addToAssertionCount(1);
     }
 
     #[Test]
