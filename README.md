@@ -1,4 +1,4 @@
-# semitexa/orm
+# Semitexa ORM
 
 Attribute-driven ORM with schema definition, connection pooling, and MySQL 8.0+ support.
 
