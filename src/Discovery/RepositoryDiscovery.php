@@ -12,8 +12,8 @@ final class RepositoryDiscovery
     /**
      * @return list<class-string>
      */
-    public static function discoverRepositoryClasses(): array
+    public static function discoverRepositoryClasses(?ClassDiscovery $classDiscovery = null): array
     {
-        return ClassDiscovery::findClassesWithAttribute(AsRepository::class);
+        return ($classDiscovery ?? new ClassDiscovery())->findClassesWithAttribute(AsRepository::class);
     }
 }

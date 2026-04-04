@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Event;
 
-use Semitexa\Core\Attributes\AsEvent;
+use Semitexa\Core\Attribute\AsEvent;
 
 #[AsEvent]
 class ResourceBroadcastEvent

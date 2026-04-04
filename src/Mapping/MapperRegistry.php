@@ -22,13 +22,17 @@ final class MapperRegistry
     /** @var array<class-string, TableModelMapper> */
     private array $instancesByMapperClass = [];
 
+    public function __construct(
+        private readonly ?ClassDiscovery $classDiscovery = null,
+    ) {}
+
     /**
      * @param list<class-string>|null $mapperClasses
      * @param list<class-string>|null $domainModelClasses
      */
     public function build(?array $mapperClasses = null, ?array $domainModelClasses = null): void
     {
-        $mapperClasses ??= ClassDiscovery::findClassesWithAttribute(AsMapper::class);
+        $mapperClasses ??= $this->classDiscovery()->findClassesWithAttribute(AsMapper::class);
 
         $definitionsByPair = [];
         $definitionsByMapperClass = [];
@@ -146,5 +150,10 @@ final class MapperRegistry
             tableModelClass: $asMapper->tableModel,
             domainModelClass: $asMapper->domainModel,
         );
+    }
+
+    private function classDiscovery(): ClassDiscovery
+    {
+        return $this->classDiscovery ?? new ClassDiscovery();
     }
 }

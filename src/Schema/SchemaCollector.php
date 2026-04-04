@@ -27,6 +27,10 @@ class SchemaCollector
     /** @var string[] */
     private array $warnings = [];
 
+    public function __construct(
+        private ?ClassDiscovery $classDiscovery = null,
+    ) {}
+
     /**
      * @return array<string, TableDefinition>
      */
@@ -35,7 +39,7 @@ class SchemaCollector
         $this->errors = [];
         $this->warnings = [];
 
-        $classes = ClassDiscovery::findClassesWithAttribute(FromTable::class);
+        $classes = $this->classDiscovery()->findClassesWithAttribute(FromTable::class);
         /** @var array<string, TableDefinition> $tables */
         $tables = [];
 
@@ -593,5 +597,10 @@ class SchemaCollector
                 $this->warnings[] = "Deprecated column '{$columnName}' in table '{$table->name}' is used in a relation.";
             }
         }
+    }
+
+    private function classDiscovery(): ClassDiscovery
+    {
+        return $this->classDiscovery ??= new ClassDiscovery();
     }
 }
