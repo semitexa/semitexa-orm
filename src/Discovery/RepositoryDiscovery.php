@@ -9,15 +9,11 @@ use Semitexa\Orm\Attribute\AsRepository;
 
 final class RepositoryDiscovery
 {
-    public function __construct(
-        private readonly ClassDiscovery $classDiscovery,
-    ) {}
-
     /**
      * @return list<class-string>
      */
-    public function discoverRepositoryClasses(): array
+    public static function discoverRepositoryClasses(?ClassDiscovery $classDiscovery = null): array
     {
-        return $this->classDiscovery->findClassesWithAttribute(AsRepository::class);
+        return ($classDiscovery ?? new ClassDiscovery())->findClassesWithAttribute(AsRepository::class);
     }
 }

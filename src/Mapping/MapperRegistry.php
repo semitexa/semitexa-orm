@@ -32,7 +32,7 @@ final class MapperRegistry
      */
     public function build(?array $mapperClasses = null, ?array $domainModelClasses = null): void
     {
-        $mapperClasses ??= $this->classDiscovery?->findClassesWithAttribute(AsMapper::class) ?? [];
+        $mapperClasses ??= $this->classDiscovery()->findClassesWithAttribute(AsMapper::class);
 
         $definitionsByPair = [];
         $definitionsByMapperClass = [];
@@ -150,5 +150,10 @@ final class MapperRegistry
             tableModelClass: $asMapper->tableModel,
             domainModelClass: $asMapper->domainModel,
         );
+    }
+
+    private function classDiscovery(): ClassDiscovery
+    {
+        return $this->classDiscovery ?? new ClassDiscovery();
     }
 }

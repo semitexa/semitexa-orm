@@ -28,8 +28,8 @@ final class OrmBootstrapValidator
         ?array $mapperClasses = null,
         ?array $domainModelClasses = null,
     ): OrmBootstrapReport {
-        $tableModelClasses ??= $this->classDiscovery?->findClassesWithAttribute(FromTable::class) ?? [];
-        $mapperClasses ??= $this->classDiscovery?->findClassesWithAttribute(AsMapper::class) ?? [];
+        $tableModelClasses ??= $this->classDiscovery()->findClassesWithAttribute(FromTable::class);
+        $mapperClasses ??= $this->classDiscovery()->findClassesWithAttribute(AsMapper::class);
 
         $metadataRegistry = $this->metadataRegistry ?? TableModelMetadataRegistry::default();
         foreach ($tableModelClasses as $tableModelClass) {
@@ -51,5 +51,10 @@ final class OrmBootstrapValidator
             mapperClasses: array_values($mapperClasses),
             domainModelClasses: array_values($domainModelClasses),
         );
+    }
+
+    private function classDiscovery(): ClassDiscovery
+    {
+        return $this->classDiscovery ?? new ClassDiscovery();
     }
 }
