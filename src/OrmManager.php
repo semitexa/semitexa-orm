@@ -4,8 +4,9 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm;
 
+use Semitexa\Core\Discovery\ClassDiscovery;
 use Semitexa\Core\Environment;
-use Semitexa\Core\Util\ProjectRoot;
+use Semitexa\Core\Support\ProjectRoot;
 use Semitexa\Orm\Adapter\ConnectionPool;
 use Semitexa\Orm\Adapter\ConnectionPoolInterface;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
@@ -28,6 +29,7 @@ use Semitexa\Orm\Transaction\TransactionManager;
 
 class OrmManager
 {
+    private ClassDiscovery $classDiscovery;
     private ?ConnectionPoolInterface $pool = null;
     private ?DatabaseAdapterInterface $adapter = null;
     private ?SchemaCollector $schemaCollector = null;
@@ -41,6 +43,16 @@ class OrmManager
     private ?TableModelRelationLoader $tableModelRelationLoader = null;
     private ?AggregateWriteEngine $aggregateWriteEngine = null;
     private ?OrmBootstrapValidator $bootstrapValidator = null;
+
+    public function __construct(?ClassDiscovery $classDiscovery = null)
+    {
+        $this->classDiscovery = $classDiscovery ?? new ClassDiscovery();
+    }
+
+    public function getClassDiscovery(): ClassDiscovery
+    {
+        return $this->classDiscovery;
+    }
 
     public function getAdapter(): DatabaseAdapterInterface
     {
@@ -63,7 +75,7 @@ class OrmManager
     public function getSchemaCollector(): SchemaCollector
     {
         if ($this->schemaCollector === null) {
-            $this->schemaCollector = new SchemaCollector();
+            $this->schemaCollector = new SchemaCollector($this->classDiscovery);
         }
 
         return $this->schemaCollector;
@@ -110,7 +122,7 @@ class OrmManager
     public function getSeedRunner(): SeedRunner
     {
         if ($this->seedRunner === null) {
-            $this->seedRunner = new SeedRunner($this->getAdapter());
+            $this->seedRunner = new SeedRunner($this->getAdapter(), $this->classDiscovery);
         }
 
         return $this->seedRunner;
@@ -119,7 +131,7 @@ class OrmManager
     public function getMapperRegistry(): MapperRegistry
     {
         if ($this->mapperRegistry === null) {
-            $this->mapperRegistry = new MapperRegistry();
+            $this->mapperRegistry = new MapperRegistry($this->classDiscovery);
             $this->mapperRegistry->build();
         }
 
@@ -176,6 +188,7 @@ class OrmManager
     {
         if ($this->bootstrapValidator === null) {
             $this->bootstrapValidator = new OrmBootstrapValidator(
+                classDiscovery: $this->classDiscovery,
                 metadataRegistry: $this->getTableModelMetadataRegistry(),
                 mapperRegistry: $this->getMapperRegistry(),
             );

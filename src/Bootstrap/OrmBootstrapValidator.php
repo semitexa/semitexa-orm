@@ -13,6 +13,7 @@ use Semitexa\Orm\Metadata\TableModelMetadataRegistry;
 final class OrmBootstrapValidator
 {
     public function __construct(
+        private readonly ?ClassDiscovery $classDiscovery = null,
         private readonly ?TableModelMetadataRegistry $metadataRegistry = null,
         private readonly ?MapperRegistry $mapperRegistry = null,
     ) {}
@@ -27,15 +28,15 @@ final class OrmBootstrapValidator
         ?array $mapperClasses = null,
         ?array $domainModelClasses = null,
     ): OrmBootstrapReport {
-        $tableModelClasses ??= ClassDiscovery::findClassesWithAttribute(FromTable::class);
-        $mapperClasses ??= ClassDiscovery::findClassesWithAttribute(AsMapper::class);
+        $tableModelClasses ??= $this->classDiscovery?->findClassesWithAttribute(FromTable::class) ?? [];
+        $mapperClasses ??= $this->classDiscovery?->findClassesWithAttribute(AsMapper::class) ?? [];
 
         $metadataRegistry = $this->metadataRegistry ?? TableModelMetadataRegistry::default();
         foreach ($tableModelClasses as $tableModelClass) {
             $metadataRegistry->for($tableModelClass);
         }
 
-        $mapperRegistry = $this->mapperRegistry ?? new MapperRegistry();
+        $mapperRegistry = $this->mapperRegistry ?? new MapperRegistry($this->classDiscovery);
         $mapperRegistry->build(
             mapperClasses: array_values($mapperClasses),
         );

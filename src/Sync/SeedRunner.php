@@ -12,6 +12,7 @@ class SeedRunner
 {
     public function __construct(
         private readonly DatabaseAdapterInterface $adapter,
+        private readonly ClassDiscovery $classDiscovery,
     ) {}
 
     /**
@@ -23,7 +24,7 @@ class SeedRunner
      */
     public function run(): array
     {
-        $classes = ClassDiscovery::findClassesWithAttribute(FromTable::class);
+        $classes = $this->classDiscovery->findClassesWithAttribute(FromTable::class);
         $upsert = new SmartUpsert($this->adapter);
 
         $results = [];

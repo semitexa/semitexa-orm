@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Event;
 
-use Semitexa\Core\Attributes\AsEventListener;
-use Semitexa\Core\Attributes\InjectAsReadonly;
+use Semitexa\Core\Attribute\AsEventListener;
+use Semitexa\Core\Attribute\InjectAsReadonly;
 use Semitexa\Core\Event\EventExecution;
 use Semitexa\Core\Tenant\Layer\OrganizationLayer;
 use Semitexa\Orm\Adapter\ConnectionPoolInterface;
