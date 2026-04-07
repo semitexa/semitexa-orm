@@ -77,11 +77,16 @@ class ConnectionPool implements ConnectionPoolInterface
      */
     public function fill(): void
     {
+        $pool = $this->pool;
+        if (! $pool instanceof Channel) {
+            throw new \RuntimeException('Connection pool is closed.');
+        }
+
         $current = $this->created->get();
 
         while ($current < $this->size) {
             if ($this->created->cmpset($current, $current + 1)) {
-                $this->pool->push(($this->factory)());
+                $pool->push(($this->factory)());
             }
 
             $current = $this->created->get();
