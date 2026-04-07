@@ -9,7 +9,7 @@ use Swoole\Coroutine\Channel;
 
 class ConnectionPool implements ConnectionPoolInterface
 {
-    private Channel $pool;
+    private ?Channel $pool;
 
     /**
      * Atomic counter for the number of connections created so far.
@@ -33,6 +33,10 @@ class ConnectionPool implements ConnectionPoolInterface
 
     public function pop(float $timeout = -1): \PDO
     {
+        if ($this->pool === null) {
+            throw new \RuntimeException('Connection pool is closed.');
+        }
+
         // Atomically claim a slot: increment only if we are still below the
         // limit. cmpset(expected, new) returns true exactly once per slot.
         $current = $this->created->get();
@@ -58,6 +62,10 @@ class ConnectionPool implements ConnectionPoolInterface
 
     public function push(\PDO $connection): void
     {
+        if ($this->pool === null) {
+            return;
+        }
+
         $this->pool->push($connection);
     }
 
@@ -94,6 +102,7 @@ class ConnectionPool implements ConnectionPoolInterface
         } catch (\Error) {
             return;
         }
+        $this->pool = null;
         $this->created->set(0);
     }
 
