@@ -81,15 +81,19 @@ class ConnectionPool implements ConnectionPoolInterface
 
     public function close(): void
     {
-        if (!isset($this->pool)) {
+        if ($this->pool === null) {
             return;
         }
 
-        while (!$this->pool->isEmpty()) {
-            $this->pool->pop();
-        }
+        try {
+            while (!$this->pool->isEmpty()) {
+                $this->pool->pop();
+            }
 
-        $this->pool->close();
+            $this->pool->close();
+        } catch (\Error) {
+            return;
+        }
         $this->created->set(0);
     }
 
@@ -100,11 +104,15 @@ class ConnectionPool implements ConnectionPoolInterface
 
     public function getAvailable(): int
     {
-        if (!isset($this->pool)) {
+        if ($this->pool === null) {
             return 0;
         }
 
-        return $this->pool->length();
+        try {
+            return $this->pool->length();
+        } catch (\Error) {
+            return 0;
+        }
     }
 
     public function switchTo(string $tenantId): void
