@@ -62,11 +62,12 @@ class ConnectionPool implements ConnectionPoolInterface
 
     public function push(\PDO $connection): void
     {
-        if ($this->pool === null) {
+        $pool = $this->pool;
+        if ($pool === null) {
             return;
         }
 
-        $this->pool->push($connection);
+        $pool->push($connection);
     }
 
     /**
