@@ -81,6 +81,10 @@ class ConnectionPool implements ConnectionPoolInterface
 
     public function close(): void
     {
+        if (!isset($this->pool)) {
+            return;
+        }
+
         while (!$this->pool->isEmpty()) {
             $this->pool->pop();
         }
@@ -96,6 +100,10 @@ class ConnectionPool implements ConnectionPoolInterface
 
     public function getAvailable(): int
     {
+        if (!isset($this->pool)) {
+            return 0;
+        }
+
         return $this->pool->length();
     }
 
