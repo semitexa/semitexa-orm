@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Schema;
 
 use Semitexa\Core\Discovery\ClassDiscovery;
+use Semitexa\Orm\Adapter\DatabaseType;
 use Semitexa\Orm\Adapter\MySqlType;
+use Semitexa\Orm\Adapter\SqliteType;
 use Semitexa\Orm\Attribute\Aggregate;
 use Semitexa\Orm\Attribute\BelongsTo;
 use Semitexa\Orm\Attribute\Column;
@@ -27,8 +29,12 @@ class SchemaCollector
     /** @var string[] */
     private array $warnings = [];
 
+    /**
+     * @param string $driver The database driver ('mysql' or 'sqlite')
+     */
     public function __construct(
         private ?ClassDiscovery $classDiscovery = null,
+        private readonly string $driver = 'mysql',
     ) {}
 
     /**
@@ -130,7 +136,7 @@ class SchemaCollector
             if ($tenantAttr->strategy === 'same_storage' && $table->getColumn($tenantColumn) === null) {
                 $table->addColumn(new ColumnDefinition(
                     name: $tenantColumn,
-                    type: MySqlType::Varchar,
+                    type: $this->resolveDefaultType(),
                     phpType: 'string',
                     nullable: false,
                     length: 64,
@@ -210,7 +216,9 @@ class SchemaCollector
             if ($pkStrategy === 'uuid' && $columnAttrs !== []) {
                 /** @var Column $colCheck */
                 $colCheck = $columnAttrs[0]->newInstance();
-                if ($colCheck->type !== MySqlType::Binary && $colCheck->type !== MySqlType::Varchar) {
+                $isBinaryOrVarchar = ($colCheck->type instanceof MySqlType && in_array($colCheck->type, [MySqlType::Binary, MySqlType::Varchar], true))
+                    || ($colCheck->type instanceof SqliteType && in_array($colCheck->type, [SqliteType::Binary, SqliteType::Varchar], true));
+                if (!$isBinaryOrVarchar) {
                     $this->errors[] = "Property '{$property->getName()}' in '{$className}': uuid strategy requires Binary or Varchar column type.";
                 }
             }
@@ -317,21 +325,35 @@ class SchemaCollector
         return 'mixed';
     }
 
-    private function validateTypeMatch(string $phpType, MySqlType $sqlType, string $propName, string $className): void
+    private function validateTypeMatch(string $phpType, DatabaseType $sqlType, string $propName, string $className): void
     {
         // Backed enums: StringBackedEnum → Varchar/Text, IntBackedEnum → Int/Bigint
         if (enum_exists($phpType)) {
             $ref = new \ReflectionEnum($phpType);
             if ($ref->isBacked()) {
                 $backingType = (string) $ref->getBackingType();
-                $phpType = $backingType; // Replace enum class name with its backing type
+                $phpType = $backingType;
             } else {
                 $this->errors[] = "Property '{$propName}' in '{$className}': non-backed enum '{$phpType}' cannot be mapped to a database column.";
                 return;
             }
         }
 
-        $valid = match ($sqlType) {
+        $valid = match (true) {
+            $sqlType instanceof MySqlType => $this->validateMySqlTypeMatch($phpType, $sqlType),
+            $sqlType instanceof SqliteType => $this->validateSqliteTypeMatch($phpType, $sqlType),
+            default => true,
+        };
+
+        if (!$valid) {
+            $driverName = $sqlType instanceof MySqlType ? 'MySQL' : 'SQLite';
+            $this->errors[] = "Property '{$propName}' in '{$className}': PHP type '{$phpType}' is incompatible with {$driverName} type '{$sqlType->value}'.";
+        }
+    }
+
+    private function validateMySqlTypeMatch(string $phpType, MySqlType $sqlType): bool
+    {
+        return match ($sqlType) {
             MySqlType::Varchar, MySqlType::Char,
             MySqlType::Text, MySqlType::MediumText,
             MySqlType::LongText, MySqlType::Time        => in_array($phpType, ['string', 'mixed']),
@@ -346,10 +368,22 @@ class SchemaCollector
             MySqlType::Date                             => in_array($phpType, ['DateTimeImmutable', 'DateTime', 'string', 'mixed']),
             MySqlType::Blob, MySqlType::Binary          => in_array($phpType, ['string', 'mixed']),
         };
+    }
 
-        if (!$valid) {
-            $this->errors[] = "Property '{$propName}' in '{$className}': PHP type '{$phpType}' is incompatible with MySQL type '{$sqlType->value}'.";
-        }
+    private function validateSqliteTypeMatch(string $phpType, SqliteType $sqlType): bool
+    {
+        return match ($sqlType) {
+            SqliteType::Varchar, SqliteType::Char,
+            SqliteType::Text, SqliteType::Time,
+            SqliteType::Datetime, SqliteType::Date,
+            SqliteType::Json                          => in_array($phpType, ['string', 'mixed']),
+            SqliteType::TinyInt, SqliteType::SmallInt,
+            SqliteType::Int, SqliteType::Bigint       => in_array($phpType, ['int', 'mixed']),
+            SqliteType::Float, SqliteType::Double,
+            SqliteType::Decimal                       => in_array($phpType, ['float', 'mixed']),
+            SqliteType::Boolean                       => in_array($phpType, ['bool', 'int', 'mixed']),
+            SqliteType::Blob, SqliteType::Binary      => in_array($phpType, ['string', 'mixed']),
+        };
     }
 
     /**
@@ -425,9 +459,10 @@ class SchemaCollector
                     continue;
                 }
                 $pivot = new TableDefinition($pivotTable);
+                $intType = $this->resolveIntType();
                 $pivot->addColumn(new ColumnDefinition(
                     name: 'id',
-                    type: MySqlType::Int,
+                    type: $intType,
                     phpType: 'int',
                     nullable: false,
                     isPrimaryKey: true,
@@ -435,13 +470,13 @@ class SchemaCollector
                 ));
                 $pivot->addColumn(new ColumnDefinition(
                     name: $foreignKey,
-                    type: MySqlType::Int,
+                    type: $intType,
                     phpType: 'int',
                     nullable: false,
                 ));
                 $pivot->addColumn(new ColumnDefinition(
                     name: $relatedKey,
-                    type: MySqlType::Int,
+                    type: $intType,
                     phpType: 'int',
                     nullable: false,
                 ));
@@ -602,5 +637,29 @@ class SchemaCollector
     private function classDiscovery(): ClassDiscovery
     {
         return $this->classDiscovery ??= new ClassDiscovery();
+    }
+
+    /**
+     * Resolve the default Varchar type for the current driver.
+     */
+    private function resolveDefaultType(): DatabaseType
+    {
+        return $this->driver === 'sqlite' ? SqliteType::Varchar : MySqlType::Varchar;
+    }
+
+    /**
+     * Resolve the Integer type for the current driver.
+     */
+    private function resolveIntType(): DatabaseType
+    {
+        return $this->driver === 'sqlite' ? SqliteType::Int : MySqlType::Int;
+    }
+
+    /**
+     * Resolve the Varchar type for the current driver.
+     */
+    private function resolveVarcharType(): DatabaseType
+    {
+        return $this->driver === 'sqlite' ? SqliteType::Varchar : MySqlType::Varchar;
     }
 }

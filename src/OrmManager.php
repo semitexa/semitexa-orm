@@ -12,6 +12,8 @@ use Semitexa\Orm\Adapter\ConnectionPoolInterface;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Adapter\MysqlAdapter;
 use Semitexa\Orm\Adapter\SingleConnectionPool;
+use Semitexa\Orm\Adapter\SqliteAdapter;
+use Semitexa\Orm\Schema\SqliteSchemaComparator;
 use Semitexa\Orm\Bootstrap\OrmBootstrapReport;
 use Semitexa\Orm\Bootstrap\OrmBootstrapValidator;
 use Semitexa\Orm\Hydration\TableModelHydrator;
@@ -57,7 +59,13 @@ class OrmManager
     public function getAdapter(): DatabaseAdapterInterface
     {
         if ($this->adapter === null) {
-            $this->adapter = new MysqlAdapter($this->getPool());
+            $driver = $this->resolveDriver();
+
+            if ($driver === 'sqlite') {
+                $this->adapter = $this->createSqliteAdapter();
+            } else {
+                $this->adapter = new MysqlAdapter($this->getPool());
+            }
         }
 
         return $this->adapter;
@@ -66,6 +74,13 @@ class OrmManager
     public function getPool(): ConnectionPoolInterface
     {
         if ($this->pool === null) {
+            $driver = $this->resolveDriver();
+
+            // SQLite doesn't need connection pooling
+            if ($driver === 'sqlite') {
+                throw new \LogicException('getPool() is not applicable for SQLite adapter. Use getAdapter() directly.');
+            }
+
             $this->pool = $this->createPool();
         }
 
@@ -75,7 +90,10 @@ class OrmManager
     public function getSchemaCollector(): SchemaCollector
     {
         if ($this->schemaCollector === null) {
-            $this->schemaCollector = new SchemaCollector($this->classDiscovery);
+            $this->schemaCollector = new SchemaCollector(
+                $this->classDiscovery,
+                $this->resolveDriver(),
+            );
         }
 
         return $this->schemaCollector;
@@ -84,11 +102,18 @@ class OrmManager
     public function getSchemaComparator(): SchemaComparator
     {
         if ($this->schemaComparator === null) {
-            $this->schemaComparator = new SchemaComparator(
-                $this->getAdapter(),
-                $this->getDatabaseName(),
-                $this->resolveIgnoreTables(),
-            );
+            if ($this->resolveDriver() === 'sqlite') {
+                $this->schemaComparator = new SqliteSchemaComparator(
+                    $this->getAdapter(),
+                    $this->resolveIgnoreTables(),
+                );
+            } else {
+                $this->schemaComparator = new SchemaComparator(
+                    $this->getAdapter(),
+                    $this->getDatabaseName(),
+                    $this->resolveIgnoreTables(),
+                );
+            }
         }
 
         return $this->schemaComparator;
@@ -110,8 +135,23 @@ class OrmManager
     public function getTransactionManager(): TransactionManager
     {
         if ($this->transactionManager === null) {
+            $driver = $this->resolveDriver();
+
+            // For SQLite, we pass a dummy pool since TransactionManager
+            // handles SQLite separately and won't actually use the pool
+            $pool = $driver === 'sqlite'
+                ? new class implements ConnectionPoolInterface {
+                    public function pop(float $timeout = -1): \PDO { throw new \LogicException('Not used for SQLite'); }
+                    public function push(\PDO $connection): void {}
+                    public function close(): void {}
+                    public function getSize(): int { return 0; }
+                    public function getAvailable(): int { return 0; }
+                    public function switchTo(string $tenantId): void {}
+                }
+                : $this->getPool();
+
             $this->transactionManager = new TransactionManager(
-                $this->getPool(),
+                $pool,
                 $this->getAdapter(),
             );
         }
@@ -330,5 +370,43 @@ class OrmManager
     private function isRunningInDocker(): bool
     {
         return file_exists('/.dockerenv');
+    }
+
+    /**
+     * Resolve the database driver from environment configuration.
+     * Defaults to 'mysql' for backward compatibility.
+     */
+    private function resolveDriver(): string
+    {
+        return Environment::getEnvValue('DB_DRIVER', 'mysql');
+    }
+
+    /**
+     * Create a SQLite adapter based on environment configuration.
+     *
+     * Supports:
+     * - DB_SQLITE_PATH: absolute or relative path to SQLite file
+     * - DB_SQLITE_MEMORY: if set to "1" or "true", use in-memory database
+     */
+    private function createSqliteAdapter(): SqliteAdapter
+    {
+        $memory = Environment::getEnvValue('DB_SQLITE_MEMORY');
+        if (in_array(strtolower((string) $memory), ['1', 'true', 'yes'], true)) {
+            return new SqliteAdapter('sqlite::memory:');
+        }
+
+        $path = Environment::getEnvValue('DB_SQLITE_PATH');
+        if ($path === null || $path === '') {
+            // Default to var/database/semitexa.sqlite
+            $path = ProjectRoot::get() . '/var/database/semitexa.sqlite';
+        }
+
+        // Ensure directory exists
+        $dir = dirname($path);
+        if (!is_dir($dir)) {
+            mkdir($dir, 0755, true);
+        }
+
+        return new SqliteAdapter("sqlite:{$path}");
     }
 }

@@ -7,6 +7,7 @@ namespace Semitexa\Orm\Transaction;
 use Semitexa\Core\Event\EventDispatcherInterface;
 use Semitexa\Orm\Adapter\ConnectionPoolInterface;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
+use Semitexa\Orm\Adapter\SqliteAdapter;
 
 class TransactionManager
 {
@@ -82,6 +83,10 @@ class TransactionManager
      */
     private function runOuter(callable $callback): mixed
     {
+        if ($this->adapter instanceof SqliteAdapter) {
+            return $this->runOuterSqlite($callback);
+        }
+
         $pdo = $this->pool->pop();
         $this->activeConnection = $pdo;
         $this->depth = 1;
@@ -93,16 +98,7 @@ class TransactionManager
             $result = $callback($connAdapter);
             $pdo->commit();
 
-            // Flush buffered events after successful commit
-            if ($this->eventDispatcher !== null) {
-                $events = $this->pendingEvents;
-                $this->pendingEvents = [];
-                foreach ($events as $event) {
-                    $this->eventDispatcher->dispatch($event);
-                }
-            } else {
-                $this->pendingEvents = [];
-            }
+            $this->flushPendingEvents();
 
             return $result;
         } catch (\Throwable $e) {
@@ -113,6 +109,41 @@ class TransactionManager
             throw $e;
         } finally {
             $this->pool->push($pdo);
+            $this->activeConnection = null;
+            $this->depth = 0;
+        }
+    }
+
+    /**
+     * Handle outer transaction for SQLite adapter.
+     *
+     * @template T
+     * @param callable(DatabaseAdapterInterface): T $callback
+     * @return T
+     */
+    private function runOuterSqlite(callable $callback): mixed
+    {
+        $pdo = $this->adapter->getPdo();
+        $this->activeConnection = $pdo;
+        $this->depth = 1;
+
+        $connAdapter = new SingleConnectionAdapter($pdo, $this->adapter->getServerVersion());
+        $pdo->beginTransaction();
+
+        try {
+            $result = $callback($connAdapter);
+            $pdo->commit();
+
+            $this->flushPendingEvents();
+
+            return $result;
+        } catch (\Throwable $e) {
+            $this->pendingEvents = [];
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        } finally {
             $this->activeConnection = null;
             $this->depth = 0;
         }
@@ -141,6 +172,19 @@ class TransactionManager
             throw $e;
         } finally {
             $this->depth--;
+        }
+    }
+
+    private function flushPendingEvents(): void
+    {
+        if ($this->eventDispatcher !== null) {
+            $events = $this->pendingEvents;
+            $this->pendingEvents = [];
+            foreach ($events as $event) {
+                $this->eventDispatcher->dispatch($event);
+            }
+        } else {
+            $this->pendingEvents = [];
         }
     }
 }

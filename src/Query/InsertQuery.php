@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Query;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
+use Semitexa\Orm\Adapter\SqliteAdapter;
 
 class InsertQuery
 {
@@ -17,7 +18,7 @@ class InsertQuery
      * Insert a single row.
      *
      * @param array<string, mixed> $data Column name → value
-     * @param bool $upsert When true, appends ON DUPLICATE KEY UPDATE for all columns in $data
+     * @param bool $upsert When true, appends ON DUPLICATE KEY UPDATE (MySQL) or ON CONFLICT DO UPDATE (SQLite) for all columns in $data
      * @return string Last insert ID
      */
     public function execute(array $data, bool $upsert = false): string
@@ -31,8 +32,7 @@ class InsertQuery
         $sql = "INSERT INTO `{$this->table}` ({$colList}) VALUES ({$phList})";
 
         if ($upsert) {
-            $updateParts = array_map(fn(string $c) => "`{$c}` = VALUES(`{$c}`)", $columns);
-            $sql .= ' ON DUPLICATE KEY UPDATE ' . implode(', ', $updateParts);
+            $sql .= $this->buildUpsertClause($columns);
         }
 
         $result = $this->adapter->execute($sql, $data);
@@ -75,5 +75,23 @@ class InsertQuery
         $result = $this->adapter->execute($sql, $params);
 
         return $result->lastInsertId;
+    }
+
+    /**
+     * Build the upsert clause appropriate for the current database.
+     *
+     * @param string[] $columns
+     */
+    private function buildUpsertClause(array $columns): string
+    {
+        if ($this->adapter instanceof SqliteAdapter) {
+            // SQLite: ON CONFLICT DO UPDATE SET
+            $updateParts = array_map(fn(string $c) => "\"{$c}\" = excluded.\"{$c}\"", $columns);
+            return ' ON CONFLICT DO UPDATE SET ' . implode(', ', $updateParts);
+        }
+
+        // MySQL: ON DUPLICATE KEY UPDATE
+        $updateParts = array_map(fn(string $c) => "`{$c}` = VALUES(`{$c}`)", $columns);
+        return ' ON DUPLICATE KEY UPDATE ' . implode(', ', $updateParts);
     }
 }
