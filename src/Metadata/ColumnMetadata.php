@@ -4,14 +4,14 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Metadata;
 
-use Semitexa\Orm\Adapter\MySqlType;
+use Semitexa\Orm\Adapter\DatabaseType;
 
 final readonly class ColumnMetadata
 {
     public function __construct(
         public string $propertyName,
         public string $columnName,
-        public MySqlType $type,
+        public DatabaseType $type,
         public string $phpType,
         public bool $nullable,
         public ?int $length = null,

@@ -6,7 +6,7 @@ namespace Semitexa\Orm\Console\Command;
 
 use Semitexa\Core\Attribute\AsCommand;
 use Semitexa\Core\Console\Command\BaseCommand;
-use Semitexa\Orm\OrmManager;
+use Semitexa\Orm\Connection\ConnectionRegistry;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
@@ -17,7 +17,7 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 class OrmSyncCommand extends BaseCommand
 {
     public function __construct(
-        private readonly OrmManager $orm,
+        private readonly ConnectionRegistry $connections,
     ) {
         parent::__construct();
     }
@@ -26,6 +26,7 @@ class OrmSyncCommand extends BaseCommand
     {
         $this->setName('orm:sync')
             ->setDescription('Synchronize ORM schema with the database')
+            ->addOption('connection', 'c', InputOption::VALUE_REQUIRED, 'Connection name to sync', 'default')
             ->addOption('dry-run', null, InputOption::VALUE_NONE, 'Show SQL plan without executing')
             ->addOption('allow-destructive', null, InputOption::VALUE_NONE, 'Allow destructive operations (DROP, type narrowing)')
             ->addOption('output', 'o', InputOption::VALUE_REQUIRED, 'Save SQL plan to file');
@@ -34,15 +35,16 @@ class OrmSyncCommand extends BaseCommand
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $io = new SymfonyStyle($input, $output);
+        $connection = (string) $input->getOption('connection');
         $dryRun = (bool) $input->getOption('dry-run');
         $allowDestructive = (bool) $input->getOption('allow-destructive');
         $outputFile = $input->getOption('output');
 
         try {
-            $orm = $this->orm;
+            $orm = $this->connections->manager($connection);
 
             // 1. Collect schema from code
-            $io->section('Collecting schema from code...');
+            $io->section("Collecting schema from code (connection: {$connection})...");
             $collector = $orm->getSchemaCollector();
             $codeSchema = $collector->collect();
 

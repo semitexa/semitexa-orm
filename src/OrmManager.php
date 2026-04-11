@@ -25,6 +25,7 @@ use Semitexa\Orm\Persistence\AggregateWriteEngine;
 use Semitexa\Orm\Repository\DomainRepository;
 use Semitexa\Orm\Schema\SchemaCollector;
 use Semitexa\Orm\Schema\SchemaComparator;
+use Semitexa\Orm\Schema\SchemaComparatorInterface;
 use Semitexa\Orm\Sync\AuditLogger;
 use Semitexa\Orm\Sync\SeedRunner;
 use Semitexa\Orm\Sync\SyncEngine;
@@ -36,7 +37,7 @@ class OrmManager
     private ?ConnectionPoolInterface $pool = null;
     private ?DatabaseAdapterInterface $adapter = null;
     private ?SchemaCollector $schemaCollector = null;
-    private ?SchemaComparator $schemaComparator = null;
+    private ?SchemaComparatorInterface $schemaComparator = null;
     private ?SyncEngine $syncEngine = null;
     private ?TransactionManager $transactionManager = null;
     private ?SeedRunner $seedRunner = null;
@@ -50,6 +51,7 @@ class OrmManager
     public function __construct(
         ?ClassDiscovery $classDiscovery = null,
         private readonly ?ConnectionConfig $config = null,
+        private readonly string $connectionName = 'default',
     ) {
         $this->classDiscovery = $classDiscovery ?? new ClassDiscovery();
     }
@@ -96,13 +98,14 @@ class OrmManager
             $this->schemaCollector = new SchemaCollector(
                 $this->classDiscovery,
                 $this->resolveDriver(),
+                $this->connectionName,
             );
         }
 
         return $this->schemaCollector;
     }
 
-    public function getSchemaComparator(): SchemaComparator
+    public function getSchemaComparator(): SchemaComparatorInterface
     {
         if ($this->schemaComparator === null) {
             if ($this->resolveDriver() === 'sqlite') {
@@ -262,7 +265,22 @@ class OrmManager
     public function getDatabaseName(): string
     {
         if ($this->config !== null) {
+            if ($this->config->driver === 'sqlite') {
+                return $this->config->sqliteMemory
+                    ? ':memory:'
+                    : ($this->config->sqlitePath ?? 'sqlite');
+            }
+
             return $this->config->database;
+        }
+
+        if ($this->resolveDriver() === 'sqlite') {
+            $memory = Environment::getEnvValue('DB_SQLITE_MEMORY');
+            if (in_array(strtolower((string) $memory), ['1', 'true', 'yes'], true)) {
+                return ':memory:';
+            }
+
+            return Environment::getEnvValue('DB_SQLITE_PATH', ProjectRoot::get() . '/var/database/semitexa.sqlite');
         }
 
         return Environment::getEnvValue('DB_DATABASE', 'semitexa');

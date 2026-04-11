@@ -20,7 +20,7 @@ use Semitexa\Orm\Adapter\SqliteType;
  * - No column comments support
  * - No table comments support
  */
-class SqliteSchemaComparator
+class SqliteSchemaComparator implements SchemaComparatorInterface
 {
     /** @param string[] $ignoreTables Table names to exclude from DROP detection */
     public function __construct(

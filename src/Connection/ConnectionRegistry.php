@@ -29,7 +29,7 @@ final class ConnectionRegistry
     {
         if (!isset($this->managers[$name])) {
             $config = ConnectionConfig::fromEnvironment($name);
-            $this->managers[$name] = new OrmManager(config: $config);
+            $this->managers[$name] = new OrmManager(config: $config, connectionName: $name);
         }
 
         return $this->managers[$name];

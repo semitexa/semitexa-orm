@@ -5,13 +5,13 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Attribute;
 
 use Attribute;
-use Semitexa\Orm\Adapter\MySqlType;
+use Semitexa\Orm\Adapter\DatabaseType;
 
 #[Attribute(Attribute::TARGET_PROPERTY)]
 readonly class Column
 {
     public function __construct(
-        public MySqlType $type,
+        public DatabaseType $type,
         public ?int $length = null,
         public ?int $precision = null,
         public ?int $scale = null,

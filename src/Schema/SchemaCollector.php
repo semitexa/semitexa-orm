@@ -11,6 +11,7 @@ use Semitexa\Orm\Adapter\SqliteType;
 use Semitexa\Orm\Attribute\Aggregate;
 use Semitexa\Orm\Attribute\BelongsTo;
 use Semitexa\Orm\Attribute\Column;
+use Semitexa\Orm\Attribute\Connection;
 use Semitexa\Orm\Attribute\Deprecated;
 use Semitexa\Orm\Attribute\Filterable;
 use Semitexa\Orm\Attribute\FromTable;
@@ -35,6 +36,7 @@ class SchemaCollector
     public function __construct(
         private ?ClassDiscovery $classDiscovery = null,
         private readonly string $driver = 'mysql',
+        private readonly ?string $connectionNameFilter = null,
     ) {}
 
     /**
@@ -50,10 +52,15 @@ class SchemaCollector
         $tables = [];
 
         foreach ($classes as $className) {
+            if (!$this->matchesConnectionFilter($className)) {
+                continue;
+            }
+
             $this->processClass($className, $tables);
         }
 
-        $this->addPivotTables($classes, $tables);
+        $filteredClasses = array_values(array_filter($classes, fn (string $className): bool => $this->matchesConnectionFilter($className)));
+        $this->addPivotTables($filteredClasses, $tables);
 
         foreach ($tables as $table) {
             $tableErrors = $table->validate();
@@ -70,6 +77,19 @@ class SchemaCollector
         $this->resolveForeignKeys($tables);
 
         return $tables;
+    }
+
+    private function matchesConnectionFilter(string $className): bool
+    {
+        if ($this->connectionNameFilter === null) {
+            return true;
+        }
+
+        $ref = new \ReflectionClass($className);
+        $attrs = $ref->getAttributes(Connection::class);
+        $connectionName = $attrs !== [] ? $attrs[0]->newInstance()->name : 'default';
+
+        return $connectionName === $this->connectionNameFilter;
     }
 
     /** @return string[] */
