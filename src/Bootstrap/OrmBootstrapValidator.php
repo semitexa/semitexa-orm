@@ -8,6 +8,7 @@ use Semitexa\Core\Discovery\ClassDiscovery;
 use Semitexa\Orm\Attribute\AsMapper;
 use Semitexa\Orm\Attribute\FromTable;
 use Semitexa\Orm\Mapping\MapperRegistry;
+use Semitexa\Orm\Metadata\TableModelMetadata;
 use Semitexa\Orm\Metadata\TableModelMetadataRegistry;
 
 final class OrmBootstrapValidator
@@ -32,8 +33,32 @@ final class OrmBootstrapValidator
         $mapperClasses ??= $this->classDiscovery()->findClassesWithAttribute(AsMapper::class);
 
         $metadataRegistry = $this->metadataRegistry ?? TableModelMetadataRegistry::default();
+        /** @var array<class-string, TableModelMetadata> $metadataByClass */
+        $metadataByClass = [];
         foreach ($tableModelClasses as $tableModelClass) {
-            $metadataRegistry->for($tableModelClass);
+            $metadataByClass[$tableModelClass] = $metadataRegistry->for($tableModelClass);
+        }
+
+        // Detect cross-connection relations
+        $crossConnectionWarnings = [];
+        foreach ($metadataByClass as $className => $metadata) {
+            foreach ($metadata->relations() as $relation) {
+                $targetClass = $relation->targetClass;
+                if (!isset($metadataByClass[$targetClass])) {
+                    continue;
+                }
+                $targetMetadata = $metadataByClass[$targetClass];
+                if ($metadata->connectionName !== $targetMetadata->connectionName) {
+                    $crossConnectionWarnings[] = sprintf(
+                        '%s (%s) -> %s (%s) via property "%s"',
+                        $className,
+                        $metadata->connectionName,
+                        $targetClass,
+                        $targetMetadata->connectionName,
+                        $relation->propertyName,
+                    );
+                }
+            }
         }
 
         $mapperRegistry = $this->mapperRegistry ?? new MapperRegistry($this->classDiscovery);
@@ -50,6 +75,7 @@ final class OrmBootstrapValidator
             tableModelClasses: array_values($tableModelClasses),
             mapperClasses: array_values($mapperClasses),
             domainModelClasses: array_values($domainModelClasses),
+            crossConnectionWarnings: $crossConnectionWarnings,
         );
     }
 

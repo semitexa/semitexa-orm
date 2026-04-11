@@ -9,6 +9,7 @@ use Semitexa\Core\Environment;
 use Semitexa\Core\Support\ProjectRoot;
 use Semitexa\Orm\Adapter\ConnectionPool;
 use Semitexa\Orm\Adapter\ConnectionPoolInterface;
+use Semitexa\Orm\Connection\ConnectionConfig;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Adapter\MysqlAdapter;
 use Semitexa\Orm\Adapter\SingleConnectionPool;
@@ -46,8 +47,10 @@ class OrmManager
     private ?AggregateWriteEngine $aggregateWriteEngine = null;
     private ?OrmBootstrapValidator $bootstrapValidator = null;
 
-    public function __construct(?ClassDiscovery $classDiscovery = null)
-    {
+    public function __construct(
+        ?ClassDiscovery $classDiscovery = null,
+        private readonly ?ConnectionConfig $config = null,
+    ) {
         $this->classDiscovery = $classDiscovery ?? new ClassDiscovery();
     }
 
@@ -258,6 +261,10 @@ class OrmManager
 
     public function getDatabaseName(): string
     {
+        if ($this->config !== null) {
+            return $this->config->database;
+        }
+
         return Environment::getEnvValue('DB_DATABASE', 'semitexa');
     }
 
@@ -312,13 +319,27 @@ class OrmManager
             Environment::syncEnvFromFiles();
         }
 
-        $host = $this->resolveDbHost();
-        $port = $this->resolveDbPort();
-        $database = Environment::getEnvValue('DB_DATABASE', 'semitexa');
-        $username = Environment::getEnvValue('DB_USERNAME') ?? Environment::getEnvValue('DB_USER', 'root');
-        $password = Environment::getEnvValue('DB_PASSWORD', '');
-        $charset = Environment::getEnvValue('DB_CHARSET', 'utf8mb4');
-        $poolSize = (int) Environment::getEnvValue('DB_POOL_SIZE', '10');
+        if ($this->config !== null) {
+            $host = $this->config->cliHost && !$this->isRunningInDocker()
+                ? $this->config->cliHost
+                : $this->config->host;
+            $port = $this->config->cliPort && !$this->isRunningInDocker()
+                ? $this->config->cliPort
+                : $this->config->port;
+            $database = $this->config->database;
+            $username = $this->config->username;
+            $password = $this->config->password;
+            $charset = $this->config->charset;
+            $poolSize = $this->config->poolSize;
+        } else {
+            $host = $this->resolveDbHost();
+            $port = $this->resolveDbPort();
+            $database = Environment::getEnvValue('DB_DATABASE', 'semitexa');
+            $username = Environment::getEnvValue('DB_USERNAME') ?? Environment::getEnvValue('DB_USER', 'root');
+            $password = Environment::getEnvValue('DB_PASSWORD', '');
+            $charset = Environment::getEnvValue('DB_CHARSET', 'utf8mb4');
+            $poolSize = (int) Environment::getEnvValue('DB_POOL_SIZE', '10');
+        }
 
         $dsn = "mysql:host={$host};port={$port};dbname={$database};charset={$charset}";
 
@@ -378,6 +399,10 @@ class OrmManager
      */
     private function resolveDriver(): string
     {
+        if ($this->config !== null) {
+            return $this->config->driver;
+        }
+
         return Environment::getEnvValue('DB_DRIVER', 'mysql');
     }
 
@@ -390,15 +415,25 @@ class OrmManager
      */
     private function createSqliteAdapter(): SqliteAdapter
     {
-        $memory = Environment::getEnvValue('DB_SQLITE_MEMORY');
-        if (in_array(strtolower((string) $memory), ['1', 'true', 'yes'], true)) {
-            return new SqliteAdapter('sqlite::memory:');
-        }
+        if ($this->config !== null) {
+            if ($this->config->sqliteMemory) {
+                return new SqliteAdapter('sqlite::memory:');
+            }
 
-        $path = Environment::getEnvValue('DB_SQLITE_PATH');
-        if ($path === null || $path === '') {
-            // Default to var/database/semitexa.sqlite
-            $path = ProjectRoot::get() . '/var/database/semitexa.sqlite';
+            $path = $this->config->sqlitePath;
+            if ($path === null || $path === '') {
+                $path = ProjectRoot::get() . '/var/database/semitexa.sqlite';
+            }
+        } else {
+            $memory = Environment::getEnvValue('DB_SQLITE_MEMORY');
+            if (in_array(strtolower((string) $memory), ['1', 'true', 'yes'], true)) {
+                return new SqliteAdapter('sqlite::memory:');
+            }
+
+            $path = Environment::getEnvValue('DB_SQLITE_PATH');
+            if ($path === null || $path === '') {
+                $path = ProjectRoot::get() . '/var/database/semitexa.sqlite';
+            }
         }
 
         // Ensure directory exists
