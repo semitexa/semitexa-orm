@@ -49,6 +49,9 @@ final class ConnectionRegistry
      * Reads the #[Connection] attribute from the class to determine
      * which named connection to use.
      */
+    /**
+     * @param class-string $tableModelClass
+     */
     public function adapterFor(string $tableModelClass): DatabaseAdapterInterface
     {
         $connectionName = $this->resolveConnectionName($tableModelClass);
@@ -67,6 +70,10 @@ final class ConnectionRegistry
     /**
      * Create a DomainRepository that automatically uses the correct connection
      * based on the table model's #[Connection] attribute.
+     */
+    /**
+     * @param class-string $tableModelClass
+     * @param class-string $domainModelClass
      */
     public function repository(string $tableModelClass, string $domainModelClass): DomainRepository
     {

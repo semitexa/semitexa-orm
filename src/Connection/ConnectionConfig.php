@@ -36,17 +36,26 @@ final readonly class ConnectionConfig
             : 'DB_' . strtoupper(str_replace('-', '_', $name)) . '_';
 
         $sqliteMemory = Environment::getEnvValue($prefix . 'SQLITE_MEMORY');
+        $driver = Environment::getEnvValue($prefix . 'DRIVER', 'mysql') ?? 'mysql';
+        $host = Environment::getEnvValue($prefix . 'HOST', '127.0.0.1') ?? '127.0.0.1';
+        $port = Environment::getEnvValue($prefix . 'PORT', '3306') ?? '3306';
+        $database = Environment::getEnvValue($prefix . 'DATABASE', 'semitexa') ?? 'semitexa';
+        $username = Environment::getEnvValue($prefix . 'USERNAME')
+            ?? Environment::getEnvValue($prefix . 'USER', 'root')
+            ?? 'root';
+        $password = Environment::getEnvValue($prefix . 'PASSWORD', '') ?? '';
+        $charset = Environment::getEnvValue($prefix . 'CHARSET', 'utf8mb4') ?? 'utf8mb4';
+        $poolSize = (int) (Environment::getEnvValue($prefix . 'POOL_SIZE', '10') ?? '10');
 
         return new self(
-            driver: Environment::getEnvValue($prefix . 'DRIVER', 'mysql'),
-            host: Environment::getEnvValue($prefix . 'HOST', '127.0.0.1'),
-            port: Environment::getEnvValue($prefix . 'PORT', '3306'),
-            database: Environment::getEnvValue($prefix . 'DATABASE', 'semitexa'),
-            username: Environment::getEnvValue($prefix . 'USERNAME')
-                ?? Environment::getEnvValue($prefix . 'USER', 'root'),
-            password: Environment::getEnvValue($prefix . 'PASSWORD', ''),
-            charset: Environment::getEnvValue($prefix . 'CHARSET', 'utf8mb4'),
-            poolSize: (int) Environment::getEnvValue($prefix . 'POOL_SIZE', '10'),
+            driver: $driver,
+            host: $host,
+            port: $port,
+            database: $database,
+            username: $username,
+            password: $password,
+            charset: $charset,
+            poolSize: $poolSize,
             sqlitePath: Environment::getEnvValue($prefix . 'SQLITE_PATH'),
             sqliteMemory: $sqliteMemory !== null && in_array(
                 strtolower($sqliteMemory),

@@ -52,6 +52,7 @@ class SqliteAdapter implements DatabaseAdapterInterface
         $stmt = $pdo->prepare($sql);
         $stmt->execute($params);
 
+        /** @var array<int, array<string, mixed>> $rows */
         $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
         $rowCount = $stmt->rowCount();
         $lastInsertId = $pdo->lastInsertId() ?: '0';
@@ -72,6 +73,7 @@ class SqliteAdapter implements DatabaseAdapterInterface
         if ($stmt === false) {
             throw new \RuntimeException("Query failed: {$sql}");
         }
+        /** @var array<int, array<string, mixed>> $rows */
         $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
         $rowCount = $stmt->rowCount();
         $lastInsertId = $pdo->lastInsertId() ?: '0';

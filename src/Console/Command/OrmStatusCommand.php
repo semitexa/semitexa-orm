@@ -33,7 +33,8 @@ class OrmStatusCommand extends BaseCommand
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $io = new SymfonyStyle($input, $output);
-        $connection = (string) $input->getOption('connection');
+        $connectionOption = $input->getOption('connection');
+        $connection = is_string($connectionOption) && $connectionOption !== '' ? $connectionOption : 'default';
 
         try {
             $orm = $this->connections->manager($connection);

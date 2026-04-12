@@ -35,10 +35,12 @@ class OrmSyncCommand extends BaseCommand
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $io = new SymfonyStyle($input, $output);
-        $connection = (string) $input->getOption('connection');
+        $connectionOption = $input->getOption('connection');
+        $connection = is_string($connectionOption) && $connectionOption !== '' ? $connectionOption : 'default';
         $dryRun = (bool) $input->getOption('dry-run');
         $allowDestructive = (bool) $input->getOption('allow-destructive');
-        $outputFile = $input->getOption('output');
+        $outputOption = $input->getOption('output');
+        $outputFile = is_string($outputOption) && $outputOption !== '' ? $outputOption : null;
 
         try {
             $orm = $this->connections->manager($connection);

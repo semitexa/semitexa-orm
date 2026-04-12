@@ -32,7 +32,8 @@ class OrmDiffCommand extends BaseCommand
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $io = new SymfonyStyle($input, $output);
-        $connection = (string) $input->getOption('connection');
+        $connectionOption = $input->getOption('connection');
+        $connection = is_string($connectionOption) && $connectionOption !== '' ? $connectionOption : 'default';
 
         try {
             $orm = $this->connections->manager($connection);
@@ -62,14 +63,14 @@ class OrmDiffCommand extends BaseCommand
             foreach ($diff->getCreateTables() as $table) {
                 $io->section("+ CREATE TABLE `{$table->name}`");
                 foreach ($table->getColumns() as $col) {
-                    $io->text("    + {$col->name} ({$col->type->value})");
+                    $io->text("    + {$col->name} ({$col->type->canonicalName($col->length, $col->precision, $col->scale)})");
                 }
             }
 
             foreach ($diff->getAddColumns() as $tableName => $columns) {
                 $io->section("~ ALTER TABLE `{$tableName}`");
                 foreach ($columns as $col) {
-                    $io->text("    <info>+ ADD COLUMN</info> {$col->name} ({$col->type->value})");
+                    $io->text("    <info>+ ADD COLUMN</info> {$col->name} ({$col->type->canonicalName($col->length, $col->precision, $col->scale)})");
                 }
             }
 

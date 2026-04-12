@@ -236,29 +236,11 @@ class SchemaComparator implements SchemaComparatorInterface
 
     private function buildExpectedColumnType(ColumnDefinition $col): string
     {
-        return match ($col->type) {
-            MySqlType::Varchar    => 'varchar(' . ($col->length ?? 255) . ')',
-            MySqlType::Char       => 'char(' . ($col->length ?? 1) . ')',
-            MySqlType::Text       => 'text',
-            MySqlType::MediumText => 'mediumtext',
-            MySqlType::LongText   => 'longtext',
-            MySqlType::TinyInt    => 'tinyint',
-            MySqlType::SmallInt   => 'smallint',
-            MySqlType::Int        => 'int',
-            MySqlType::Bigint     => 'bigint',
-            MySqlType::Float      => 'float',
-            MySqlType::Double     => 'double',
-            MySqlType::Decimal    => 'decimal(' . ($col->precision ?? 10) . ',' . ($col->scale ?? 0) . ')',
-            MySqlType::Boolean    => 'tinyint(1)',
-            MySqlType::Datetime   => 'datetime',
-            MySqlType::Timestamp  => 'timestamp',
-            MySqlType::Date       => 'date',
-            MySqlType::Time       => 'time',
-            MySqlType::Year       => 'year',
-            MySqlType::Json       => 'json',
-            MySqlType::Blob       => 'blob',
-            MySqlType::Binary     => 'binary(' . ($col->length ?? 16) . ')',
-        };
+        if (!$col->type instanceof MySqlType) {
+            return $col->type->canonicalName($col->length, $col->precision, $col->scale);
+        }
+
+        return $col->type->canonicalName($col->length, $col->precision, $col->scale);
     }
 
     /**

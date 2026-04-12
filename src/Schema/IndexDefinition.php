@@ -6,6 +6,9 @@ namespace Semitexa\Orm\Schema;
 
 readonly class IndexDefinition
 {
+    /**
+     * @param array<string> $columns
+     */
     public function __construct(
         public array $columns,
         public bool $unique = false,

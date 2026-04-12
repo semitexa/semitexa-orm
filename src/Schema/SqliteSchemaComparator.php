@@ -87,7 +87,10 @@ class SqliteSchemaComparator implements SchemaComparatorInterface
         );
 
         foreach ($result->rows as $row) {
-            $tableName = $row['name'];
+            $tableName = $this->stringValue($row['name'] ?? null);
+            if ($tableName === '') {
+                continue;
+            }
             if (in_array($tableName, $this->ignoreTables, true)) {
                 continue;
             }
@@ -97,13 +100,23 @@ class SqliteSchemaComparator implements SchemaComparatorInterface
             // Read columns via PRAGMA table_info
             $columns = $this->adapter->execute("PRAGMA table_info({$tableName})");
             foreach ($columns->rows as $col) {
+                $columnName = $this->stringValue($col['name'] ?? null);
+                if ($columnName === '') {
+                    continue;
+                }
+
+                $columnType = strtolower($this->stringValue($col['type'] ?? null));
+                if ($columnType === '') {
+                    $columnType = 'text';
+                }
+
                 $tables[$tableName]->addColumn(new DbColumnState(
-                    name: $col['name'],
-                    dataType: $this->extractDataType((string) $col['type']),
-                    columnType: strtolower((string) $col['type']) ?: 'text',
-                    nullable: (int) $col['pk'] === 1 ? false : (int) $col['notnull'] === 0,
-                    defaultValue: $col['dflt_value'],
-                    isPrimaryKey: (int) $col['pk'] === 1,
+                    name: $columnName,
+                    dataType: $this->extractDataType($columnType),
+                    columnType: $columnType,
+                    nullable: $this->intValue($col['pk'] ?? null) === 1 ? false : $this->intValue($col['notnull'] ?? null) === 0,
+                    defaultValue: $this->nullableStringValue($col['dflt_value'] ?? null),
+                    isPrimaryKey: $this->intValue($col['pk'] ?? null) === 1,
                     isAutoIncrement: false, // SQLite autoincrement is implicit for INTEGER PRIMARY KEY
                     maxLength: null,
                     numericPrecision: null,
@@ -115,23 +128,31 @@ class SqliteSchemaComparator implements SchemaComparatorInterface
             // Read indexes via PRAGMA index_list
             $indexes = $this->adapter->execute("PRAGMA index_list({$tableName})");
             foreach ($indexes->rows as $idx) {
+                $indexName = $this->stringValue($idx['name'] ?? null);
+                if ($indexName === '') {
+                    continue;
+                }
+
                 // Skip autoindex (internal indexes for UNIQUE constraints)
-                if (str_starts_with((string) $idx['name'], 'sqlite_autoindex_')) {
+                if (str_starts_with($indexName, 'sqlite_autoindex_')) {
                     continue;
                 }
 
                 // Get columns for this index
-                $indexCols = $this->adapter->execute("PRAGMA index_info({$idx['name']})");
+                $indexCols = $this->adapter->execute("PRAGMA index_info({$indexName})");
                 $colNames = [];
                 foreach ($indexCols->rows as $ic) {
-                    $colNames[] = $ic['name'];
+                    $indexColumn = $this->stringValue($ic['name'] ?? null);
+                    if ($indexColumn !== '') {
+                        $colNames[] = $indexColumn;
+                    }
                 }
 
                 if ($colNames !== []) {
                     $tables[$tableName]->addIndex(new DbIndexState(
-                        name: $idx['name'],
+                        name: $indexName,
                         columns: $colNames,
-                        unique: (int) $idx['unique'] === 1,
+                        unique: $this->intValue($idx['unique'] ?? null) === 1,
                     ));
                 }
             }
@@ -233,7 +254,7 @@ class SqliteSchemaComparator implements SchemaComparatorInterface
         $type = strtolower(trim($type));
 
         // Strip parameters for comparison
-        $base = preg_replace('/\([^)]*\)/', '', $type);
+        $base = preg_replace('/\([^)]*\)/', '', $type) ?? $type;
 
         return match ($base) {
             'integer', 'int', 'tinyint', 'smallint', 'bigint' => $base === 'integer' ? 'integer' : 'integer',
@@ -247,7 +268,7 @@ class SqliteSchemaComparator implements SchemaComparatorInterface
     private function normalizeType(string $type): string
     {
         $type = strtolower(trim($type));
-        $type = preg_replace('/\(\d+\)/', '', $type);
+        $type = preg_replace('/\(\d+\)/', '', $type) ?? $type;
 
         return match ($type) {
             'int', 'tinyint', 'smallint', 'bigint', 'integer' => 'integer',
@@ -266,7 +287,7 @@ class SqliteSchemaComparator implements SchemaComparatorInterface
         if (is_bool($default)) {
             return $default ? '1' : '0';
         }
-        $normalized = (string) $default;
+        $normalized = $this->stringValue($default);
 
         if (strlen($normalized) >= 2) {
             $quote = $normalized[0];
@@ -346,6 +367,7 @@ class SqliteSchemaComparator implements SchemaComparatorInterface
      * Compare foreign keys.
      *
      * @param array<string, TableDefinition> $codeSchema
+     * @param array<string, array{table: string, column: string, referencedTable: string, referencedColumn: string, onDelete: string, onUpdate: string}> $dbFks
      */
     private function compareForeignKeys(array $codeSchema, SchemaDiff $diff, array $dbFks): void
     {
@@ -398,19 +420,28 @@ class SqliteSchemaComparator implements SchemaComparatorInterface
         );
 
         foreach ($tables->rows as $tableRow) {
-            $tableName = $tableRow['name'];
+            $tableName = $this->stringValue($tableRow['name'] ?? null);
+            if ($tableName === '') {
+                continue;
+            }
             $fkList = $this->adapter->execute("PRAGMA foreign_key_list({$tableName})");
 
             foreach ($fkList->rows as $fk) {
+                $from = $this->stringValue($fk['from'] ?? null);
+                $referencedTable = $this->stringValue($fk['table'] ?? null);
+                if ($from === '' || $referencedTable === '') {
+                    continue;
+                }
+
                 // SQLite FK names are numeric IDs from PRAGMA
-                $constraintName = "fk_{$tableName}_{$fk['from']}";
+                $constraintName = "fk_{$tableName}_{$from}";
                 $fks[$constraintName] = [
                     'table'            => $tableName,
-                    'column'           => $fk['from'],
-                    'referencedTable'  => $fk['table'],
-                    'referencedColumn' => $fk['to'] ?? 'id',
-                    'onDelete'         => $fk['on_delete'] ?? 'NO ACTION',
-                    'onUpdate'         => $fk['on_update'] ?? 'NO ACTION',
+                    'column'           => $from,
+                    'referencedTable'  => $referencedTable,
+                    'referencedColumn' => $this->stringValue($fk['to'] ?? 'id', 'id'),
+                    'onDelete'         => $this->stringValue($fk['on_delete'] ?? 'NO ACTION', 'NO ACTION'),
+                    'onUpdate'         => $this->stringValue($fk['on_update'] ?? 'NO ACTION', 'NO ACTION'),
                 ];
             }
         }
@@ -432,27 +463,71 @@ class SqliteSchemaComparator implements SchemaComparatorInterface
         );
 
         foreach ($tables->rows as $tableRow) {
-            $tableName = $tableRow['name'];
+            $tableName = $this->stringValue($tableRow['name'] ?? null);
+            if ($tableName === '') {
+                continue;
+            }
             $fkList = $this->adapter->execute("PRAGMA foreign_key_list({$tableName})");
 
             foreach ($fkList->rows as $fk) {
+                $fkFrom = $this->stringValue($fk['from'] ?? null);
+                if ($fkFrom === '') {
+                    continue;
+                }
+
                 // Protect only exact single-column FK indexes. Composite indexes that merely
                 // include the FK column still need to be droppable when code removes them.
                 $indexList = $this->adapter->execute("PRAGMA index_list({$tableName})");
                 foreach ($indexList->rows as $idx) {
-                    $indexInfo = $this->adapter->execute("PRAGMA index_info({$idx['name']})");
+                    $indexName = $this->stringValue($idx['name'] ?? null);
+                    if ($indexName === '') {
+                        continue;
+                    }
+
+                    $indexInfo = $this->adapter->execute("PRAGMA index_info({$indexName})");
                     if (count($indexInfo->rows) !== 1) {
                         continue;
                     }
 
-                    $indexedColumn = $indexInfo->rows[0]['name'] ?? null;
-                    if ($indexedColumn === $fk['from']) {
-                        $names[$tableName . '.' . $idx['name']] = true;
+                    $indexedColumn = $this->stringValue($indexInfo->rows[0]['name'] ?? null);
+                    if ($indexedColumn === $fkFrom) {
+                        $names[$tableName . '.' . $indexName] = true;
                     }
                 }
             }
         }
 
         return $names;
+    }
+
+    private function stringValue(mixed $value, string $default = ''): string
+    {
+        if (is_scalar($value) || $value instanceof \Stringable) {
+            return (string) $value;
+        }
+
+        return $default;
+    }
+
+    private function nullableStringValue(mixed $value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        return $this->stringValue($value);
+    }
+
+    private function intValue(mixed $value): int
+    {
+        if (is_int($value)) {
+            return $value;
+        }
+
+        if (is_numeric($value) || is_bool($value)) {
+            return (int) $value;
+        }
+
+        return 0;
     }
 }

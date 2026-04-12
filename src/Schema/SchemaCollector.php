@@ -140,8 +140,10 @@ class SchemaCollector
         foreach ($indexAttrs as $indexAttr) {
             /** @var Index $index */
             $index = $indexAttr->newInstance();
+            /** @var array<string> $columns */
+            $columns = array_values(array_filter($index->columns, static fn (mixed $column): bool => is_string($column) && $column !== ''));
             $table->addIndex(new IndexDefinition(
-                columns: $index->columns,
+                columns: $columns,
                 unique: $index->unique,
                 name: $index->name,
             ));
@@ -455,8 +457,8 @@ class SchemaCollector
                 $pivotTable = $relation['pivotTable'] ?? null;
                 $foreignKey = $relation['foreignKey'] ?? null;
                 $relatedKey = $relation['relatedKey'] ?? null;
-                $targetClass = $relation['target'] ?? null;
-                if ($pivotTable === null || $foreignKey === null || $relatedKey === null || $targetClass === null) {
+                $targetClass = $relation['target'];
+                if ($pivotTable === null || $foreignKey === null || $relatedKey === null || $targetClass === '') {
                     continue;
                 }
                 if (isset($tables[$pivotTable])) {
@@ -466,6 +468,7 @@ class SchemaCollector
                 $targetTable = $classToTable[$targetClass] ?? null;
                 if ($targetTable === null) {
                     try {
+                        /** @var class-string $targetClass */
                         $ref = new \ReflectionClass($targetClass);
                         $attrs = $ref->getAttributes(FromTable::class);
                         if (!empty($attrs)) {
@@ -538,8 +541,12 @@ class SchemaCollector
         foreach ($tables as $tableName => $table) {
             foreach ($table->getRelations() as $relation) {
                 $targetClass = $relation['target'];
+                if ($targetClass === '') {
+                    continue;
+                }
                 if (!isset($classToTable[$targetClass])) {
                     try {
+                        /** @var class-string $targetClass */
                         $ref = new \ReflectionClass($targetClass);
                         $attrs = $ref->getAttributes(FromTable::class);
                         if (!empty($attrs)) {
@@ -682,11 +689,4 @@ class SchemaCollector
         return $this->driver === 'sqlite' ? SqliteType::Int : MySqlType::Int;
     }
 
-    /**
-     * Resolve the Varchar type for the current driver.
-     */
-    private function resolveVarcharType(): DatabaseType
-    {
-        return $this->driver === 'sqlite' ? SqliteType::Varchar : MySqlType::Varchar;
-    }
 }

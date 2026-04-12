@@ -45,6 +45,7 @@ class TypeCaster
                 : $value,
             MySqlType::Datetime, MySqlType::Timestamp,
             MySqlType::Date                                   => $this->castToDateTime($value),
+            default                                           => $value,
         };
     }
 
@@ -130,16 +131,6 @@ class TypeCaster
 
         return new \DateTimeImmutable((string) $value);
     }
-
-    private function castToArray(mixed $value): array
-    {
-        if (is_array($value)) {
-            return $value;
-        }
-
-        return json_decode((string) $value, true) ?? [];
-    }
-
     /**
      * Cache: phpType → true (backed enum) | false (not a backed enum).
      * Populated on first encounter; ReflectionEnum is never constructed twice
