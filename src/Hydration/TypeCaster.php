@@ -34,6 +34,7 @@ class TypeCaster
             MySqlType::Varchar, MySqlType::Char,
             MySqlType::Text, MySqlType::MediumText,
             MySqlType::LongText, MySqlType::Time,
+            MySqlType::Json,
             SqliteType::Varchar, SqliteType::Char,
             SqliteType::Text, SqliteType::Time,
             SqliteType::Datetime, SqliteType::Date,
