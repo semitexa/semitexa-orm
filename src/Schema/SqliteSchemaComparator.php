@@ -96,7 +96,7 @@ class SqliteSchemaComparator implements SchemaComparatorInterface
                     name: $col['name'],
                     dataType: $this->extractDataType((string) $col['type']),
                     columnType: strtolower((string) $col['type']) ?: 'text',
-                    nullable: (int) $col['notnull'] === 0,
+                    nullable: (int) $col['pk'] === 1 ? false : (int) $col['notnull'] === 0,
                     defaultValue: $col['dflt_value'],
                     isPrimaryKey: (int) $col['pk'] === 1,
                     isAutoIncrement: false, // SQLite autoincrement is implicit for INTEGER PRIMARY KEY

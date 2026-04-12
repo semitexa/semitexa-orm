@@ -251,14 +251,14 @@ class SyncEngine
             $q = $this->quoteChar();
             if ($dbTable->tableComment !== self::DEPRECATED_COMMENT) {
                 if ($this->isSqlite()) {
-                    // SQLite doesn't support table comments — skip deprecation marking
-                    // and just mark as destructive drop
+                    // SQLite lacks table comments, so do not drop the table implicitly.
+                    // Force an explicit/manual follow-up instead of risking silent data loss.
                     $plan->addOperation(new DdlOperation(
-                        sql: "DROP TABLE {$q}{$tableName}{$q}",
-                        type: DdlOperationType::DropTable,
+                        sql: "-- SQLITE_DROP_TABLE_REQUIRES_MANUAL_REVIEW:{$tableName}",
+                        type: DdlOperationType::AlterColumn,
                         tableName: $tableName,
-                        isDestructive: true,
-                        description: "Drop table '{$tableName}' (SQLite: no deprecation support)",
+                        isDestructive: false,
+                        description: "Manual review required before dropping SQLite table '{$tableName}'",
                     ));
                 } else {
                     // Table was not previously marked as deprecated → block drop, add deprecation comment instead.
@@ -427,7 +427,7 @@ class SyncEngine
         }
 
         $default = $this->defaultClause($col);
-        $deprecated = $col->isDeprecated ? " COMMENT '" . self::DEPRECATED_COMMENT . "'" : '';
+        $deprecated = !$isSqlite && $col->isDeprecated ? " COMMENT '" . self::DEPRECATED_COMMENT . "'" : '';
 
         return "{$q}{$col->name}{$q} {$type} {$null}{$auto}{$default}{$deprecated}";
     }
