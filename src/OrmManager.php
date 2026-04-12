@@ -280,10 +280,11 @@ class OrmManager
                 return ':memory:';
             }
 
-            return Environment::getEnvValue('DB_SQLITE_PATH', ProjectRoot::get() . '/var/database/semitexa.sqlite');
+            return Environment::getEnvValue('DB_SQLITE_PATH', ProjectRoot::get() . '/var/database/semitexa.sqlite')
+                ?? ProjectRoot::get() . '/var/database/semitexa.sqlite';
         }
 
-        return Environment::getEnvValue('DB_DATABASE', 'semitexa');
+        return Environment::getEnvValue('DB_DATABASE', 'semitexa') ?? 'semitexa';
     }
 
     public function shutdown(): void
@@ -417,7 +418,10 @@ class OrmManager
      */
     private function resolveDriver(): string
     {
-        $driver = strtolower((string) ($this->config?->driver ?? Environment::getEnvValue('DB_DRIVER', 'mysql') ?? 'mysql'));
+        $driverSource = $this->config !== null
+            ? $this->config->driver
+            : (Environment::getEnvValue('DB_DRIVER', 'mysql') ?? 'mysql');
+        $driver = strtolower($driverSource);
 
         return match ($driver) {
             'mysql', 'sqlite' => $driver,

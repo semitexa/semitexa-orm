@@ -123,6 +123,10 @@ class TransactionManager
      */
     private function runOuterSqlite(callable $callback): mixed
     {
+        if (!$this->adapter instanceof SqliteAdapter) {
+            throw new \LogicException('SQLite transactions require the SQLite adapter.');
+        }
+
         $pdo = $this->adapter->getPdo();
         $this->activeConnection = $pdo;
         $this->depth = 1;
@@ -157,6 +161,10 @@ class TransactionManager
     private function runNested(callable $callback): mixed
     {
         $pdo = $this->activeConnection;
+        if (!$pdo instanceof \PDO) {
+            throw new \LogicException('Nested transaction requested without an active PDO connection.');
+        }
+
         $this->depth++;
         $savepointName = 'sp_' . $this->depth;
 
