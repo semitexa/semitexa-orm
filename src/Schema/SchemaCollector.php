@@ -395,9 +395,9 @@ class SchemaCollector
     {
         return match ($sqlType) {
             SqliteType::Varchar, SqliteType::Char,
-            SqliteType::Text, SqliteType::Time,
-            SqliteType::Datetime, SqliteType::Date,
-            SqliteType::Json                          => in_array($phpType, ['string', 'mixed']),
+            SqliteType::Text, SqliteType::Time       => in_array($phpType, ['string', 'mixed']),
+            SqliteType::Datetime, SqliteType::Date   => in_array($phpType, ['DateTimeImmutable', 'DateTime', 'string', 'mixed']),
+            SqliteType::Json                          => in_array($phpType, ['string', 'array', 'mixed']),
             SqliteType::TinyInt, SqliteType::SmallInt,
             SqliteType::Int, SqliteType::Bigint       => in_array($phpType, ['int', 'mixed']),
             SqliteType::Float, SqliteType::Double,

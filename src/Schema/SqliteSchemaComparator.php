@@ -33,6 +33,9 @@ class SqliteSchemaComparator implements SchemaComparatorInterface
      */
     private array $fkIndexNames = [];
 
+    /** @var array<string, true> */
+    private array $newTableNames = [];
+
     /**
      * Compare code schema with actual DB state.
      *
@@ -43,12 +46,14 @@ class SqliteSchemaComparator implements SchemaComparatorInterface
     {
         $dbSchema = $this->readDatabaseSchema();
         $diff = new SchemaDiff();
+        $this->newTableNames = [];
 
         $this->fkIndexNames = $this->readFkIndexNames();
         $dbFks = $this->readDbForeignKeys();
 
         foreach ($codeSchema as $tableName => $tableDefinition) {
             if (!isset($dbSchema[$tableName])) {
+                $this->newTableNames[$tableName] = true;
                 $diff->addCreateTable($tableDefinition);
                 continue;
             }
@@ -353,7 +358,9 @@ class SqliteSchemaComparator implements SchemaComparatorInterface
 
         foreach ($codeFks as $name => $fk) {
             if (!isset($dbFks[$name])) {
-                $diff->addForeignKey($fk);
+                if (!isset($this->newTableNames[$fk->table])) {
+                    $diff->addForeignKey($fk);
+                }
                 continue;
             }
 
@@ -429,15 +436,18 @@ class SqliteSchemaComparator implements SchemaComparatorInterface
             $fkList = $this->adapter->execute("PRAGMA foreign_key_list({$tableName})");
 
             foreach ($fkList->rows as $fk) {
-                // Find indexes that include this FK column
+                // Protect only exact single-column FK indexes. Composite indexes that merely
+                // include the FK column still need to be droppable when code removes them.
                 $indexList = $this->adapter->execute("PRAGMA index_list({$tableName})");
                 foreach ($indexList->rows as $idx) {
                     $indexInfo = $this->adapter->execute("PRAGMA index_info({$idx['name']})");
-                    foreach ($indexInfo->rows as $ii) {
-                        if ($ii['name'] === $fk['from']) {
-                            $names[$tableName . '.' . $idx['name']] = true;
-                            break;
-                        }
+                    if (count($indexInfo->rows) !== 1) {
+                        continue;
+                    }
+
+                    $indexedColumn = $indexInfo->rows[0]['name'] ?? null;
+                    if ($indexedColumn === $fk['from']) {
+                        $names[$tableName . '.' . $idx['name']] = true;
                     }
                 }
             }
