@@ -243,7 +243,14 @@ class SqliteSchemaComparator implements SchemaComparatorInterface
     {
         $type = strtolower(trim($type));
         $type = preg_replace('/\(\d+\)/', '', $type);
-        return $type;
+
+        return match ($type) {
+            'int', 'tinyint', 'smallint', 'bigint', 'integer' => 'integer',
+            'varchar', 'char', 'text', 'mediumtext', 'longtext', 'json', 'datetime', 'date', 'time' => 'text',
+            'float', 'double', 'decimal', 'real', 'numeric' => 'real',
+            'binary', 'blob', 'varbinary' => 'blob',
+            default => $type,
+        };
     }
 
     private function normalizeDefault(mixed $default): ?string

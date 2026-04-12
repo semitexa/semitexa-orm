@@ -568,6 +568,12 @@ class SchemaCollector
                 if ($targetTable === null) {
                     continue;
                 }
+                if (!isset($tables[$targetTable]) && $type !== 'belongs_to') {
+                    continue;
+                }
+                if ($type === 'belongs_to' && !isset($tables[$targetTable])) {
+                    continue;
+                }
 
                 if ($type === 'belongs_to') {
                     // FK is on THIS table — references the target's PK

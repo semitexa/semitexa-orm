@@ -10,6 +10,36 @@ use Semitexa\Orm\Connection\ConnectionConfig;
 
 final class ConnectionConfigTest extends TestCase
 {
+    /**
+     * @param list<string> $keys
+     * @return array<string, string|false>
+     */
+    private function snapshotEnv(array $keys): array
+    {
+        $snapshot = [];
+
+        foreach ($keys as $key) {
+            $snapshot[$key] = getenv($key);
+        }
+
+        return $snapshot;
+    }
+
+    /**
+     * @param array<string, string|false> $snapshot
+     */
+    private function restoreEnv(array $snapshot): void
+    {
+        foreach ($snapshot as $key => $value) {
+            if ($value === false) {
+                putenv($key);
+                continue;
+            }
+
+            putenv("{$key}={$value}");
+        }
+    }
+
     #[Test]
     public function defaults_are_sane(): void
     {
@@ -64,6 +94,17 @@ final class ConnectionConfigTest extends TestCase
     #[Test]
     public function from_environment_default_uses_unprefixed_vars(): void
     {
+        $snapshot = $this->snapshotEnv([
+            'DB_DRIVER',
+            'DB_HOST',
+            'DB_PORT',
+            'DB_DATABASE',
+            'DB_USERNAME',
+            'DB_PASSWORD',
+            'DB_CHARSET',
+            'DB_POOL_SIZE',
+        ]);
+
         // Set unprefixed DB_* vars
         putenv('DB_DRIVER=mysql');
         putenv('DB_HOST=testhost');
@@ -86,20 +127,21 @@ final class ConnectionConfigTest extends TestCase
             $this->assertSame('latin1', $config->charset);
             $this->assertSame(20, $config->poolSize);
         } finally {
-            putenv('DB_DRIVER');
-            putenv('DB_HOST');
-            putenv('DB_PORT');
-            putenv('DB_DATABASE');
-            putenv('DB_USERNAME');
-            putenv('DB_PASSWORD');
-            putenv('DB_CHARSET');
-            putenv('DB_POOL_SIZE');
+            $this->restoreEnv($snapshot);
         }
     }
 
     #[Test]
     public function from_environment_named_uses_prefixed_vars(): void
     {
+        $snapshot = $this->snapshotEnv([
+            'DB_ANALYTICS_DRIVER',
+            'DB_ANALYTICS_HOST',
+            'DB_ANALYTICS_DATABASE',
+            'DB_ANALYTICS_SQLITE_PATH',
+            'DB_ANALYTICS_SQLITE_MEMORY',
+        ]);
+
         putenv('DB_ANALYTICS_DRIVER=sqlite');
         putenv('DB_ANALYTICS_HOST=analytics.db');
         putenv('DB_ANALYTICS_DATABASE=analytics_db');
@@ -115,17 +157,18 @@ final class ConnectionConfigTest extends TestCase
             $this->assertSame('/tmp/analytics.sqlite', $config->sqlitePath);
             $this->assertTrue($config->sqliteMemory);
         } finally {
-            putenv('DB_ANALYTICS_DRIVER');
-            putenv('DB_ANALYTICS_HOST');
-            putenv('DB_ANALYTICS_DATABASE');
-            putenv('DB_ANALYTICS_SQLITE_PATH');
-            putenv('DB_ANALYTICS_SQLITE_MEMORY');
+            $this->restoreEnv($snapshot);
         }
     }
 
     #[Test]
     public function from_environment_converts_hyphens_to_underscores(): void
     {
+        $snapshot = $this->snapshotEnv([
+            'DB_PRIMARY_READ_DRIVER',
+            'DB_PRIMARY_READ_HOST',
+        ]);
+
         putenv('DB_PRIMARY_READ_DRIVER=mysql');
         putenv('DB_PRIMARY_READ_HOST=replica.db');
 
@@ -135,8 +178,7 @@ final class ConnectionConfigTest extends TestCase
             $this->assertSame('mysql', $config->driver);
             $this->assertSame('replica.db', $config->host);
         } finally {
-            putenv('DB_PRIMARY_READ_DRIVER');
-            putenv('DB_PRIMARY_READ_HOST');
+            $this->restoreEnv($snapshot);
         }
     }
 }

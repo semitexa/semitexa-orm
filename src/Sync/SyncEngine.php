@@ -38,6 +38,19 @@ class SyncEngine
                 isDestructive: false,
                 description: "Create table '{$table->name}'",
             ));
+
+            if ($this->isSqlite()) {
+                foreach ($table->getIndexes() as $index) {
+                    $name = $index->name ?? $this->generateIndexName($table->name, $index->columns, $index->unique);
+                    $plan->addOperation(new DdlOperation(
+                        sql: $this->generateAddIndex($table->name, $index, $name),
+                        type: DdlOperationType::AddIndex,
+                        tableName: $table->name,
+                        isDestructive: false,
+                        description: "Add index '{$name}' on '{$table->name}'",
+                    ));
+                }
+            }
         }
 
         // 2. ADD COLUMNs (safe)
@@ -121,6 +134,13 @@ class SyncEngine
                             tableName: $tableName,
                             isDestructive: true,
                             description: "Drop index '{$indexName}' from '{$tableName}'",
+                        ));
+                        $plan->addOperation(new DdlOperation(
+                            sql: $this->generateAddIndex($tableName, $index, $indexName),
+                            type: DdlOperationType::AddIndex,
+                            tableName: $tableName,
+                            isDestructive: false,
+                            description: "Recreate index '{$indexName}' on '{$tableName}'",
                         ));
                     } else {
                         $cols = implode('`, `', $index->columns);
@@ -295,9 +315,10 @@ class SyncEngine
             }
 
             foreach ($operations as $operation) {
-                // Skip SQLite placeholder operations for unsupported ALTER TABLE actions
                 if ($isSqlite && $this->isSqlitePlaceholder($operation->sql)) {
-                    continue;
+                    throw new \RuntimeException(
+                        "SQLite sync requires table recreation for unsupported operation: {$operation->description}",
+                    );
                 }
 
                 $this->adapter->execute($operation->sql);
@@ -343,7 +364,7 @@ class SyncEngine
         }
 
         if ($pk !== null) {
-            if ($isSqlite && $pk->type instanceof SqliteType && $pk->pkStrategy === 'auto') {
+            if ($isSqlite && $pk->pkStrategy === 'auto' && $this->isSqliteAutoIncrementPrimaryKey($pk)) {
                 // SQLite: INTEGER PRIMARY KEY implies AUTOINCREMENT behavior
                 // Already handled in generateColumnDdl
             } else {
@@ -392,7 +413,7 @@ class SyncEngine
         // Auto-increment handling
         $auto = '';
         if ($col->isPrimaryKey && $col->pkStrategy === 'auto') {
-            if ($isSqlite && $col->type instanceof SqliteType) {
+            if ($isSqlite && $this->isSqliteAutoIncrementPrimaryKey($col)) {
                 // SQLite: INTEGER PRIMARY KEY auto-increments implicitly
                 // Type is already INTEGER from sqlType()
                 $auto = ' PRIMARY KEY AUTOINCREMENT';
@@ -415,6 +436,19 @@ class SyncEngine
     {
         // Delegate to the type's own toSql() method
         return $col->type->toSql($col->length, $col->precision, $col->scale);
+    }
+
+    private function isSqliteAutoIncrementPrimaryKey(ColumnDefinition $col): bool
+    {
+        if ($col->type instanceof SqliteType) {
+            return in_array($col->type, [SqliteType::Int, SqliteType::Bigint], true);
+        }
+
+        if ($col->type instanceof MySqlType) {
+            return in_array($col->type, [MySqlType::Int, MySqlType::Bigint], true);
+        }
+
+        return false;
     }
 
     private function defaultClause(ColumnDefinition $col): string
