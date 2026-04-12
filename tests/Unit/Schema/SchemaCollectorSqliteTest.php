@@ -11,6 +11,7 @@ use Semitexa\Core\Discovery\ClassDiscovery;
 use Semitexa\Orm\Adapter\SqliteType;
 use Semitexa\Orm\Attribute\Column;
 use Semitexa\Orm\Attribute\FromTable;
+use Semitexa\Orm\Attribute\Index;
 use Semitexa\Orm\Attribute\PrimaryKey;
 use Semitexa\Orm\Schema\SchemaCollector;
 
@@ -30,6 +31,20 @@ final readonly class SqliteValidTypesTableModel
 
         #[Column(type: SqliteType::Date, nullable: true)]
         public ?DateTimeImmutable $publishedOn = null,
+    ) {}
+}
+
+#[FromTable(name: 'sqlite_invalid_index')]
+#[Index(columns: ['slug', ''])]
+final readonly class SqliteInvalidIndexTableModel
+{
+    public function __construct(
+        #[PrimaryKey(strategy: 'uuid')]
+        #[Column(type: SqliteType::Varchar, length: 36)]
+        public string $id,
+
+        #[Column(type: SqliteType::Varchar, length: 255)]
+        public string $slug,
     ) {}
 }
 
@@ -53,5 +68,27 @@ final class SchemaCollectorSqliteTest extends TestCase
 
         $this->assertArrayHasKey('sqlite_documents', $tables);
         $this->assertSame([], $collector->getErrors());
+    }
+
+    #[Test]
+    public function reports_invalid_index_column_lists_instead_of_silently_rewriting_them(): void
+    {
+        $classDiscovery = $this->createMock(ClassDiscovery::class);
+        $classDiscovery
+            ->expects($this->once())
+            ->method('findClassesWithAttribute')
+            ->willReturn([SqliteInvalidIndexTableModel::class]);
+
+        $collector = new SchemaCollector(
+            classDiscovery: $classDiscovery,
+            driver: 'sqlite',
+        );
+
+        $collector->collect();
+
+        $this->assertContains(
+            "Table 'sqlite_invalid_index': #[Index] columns must be non-empty strings.",
+            $collector->getErrors(),
+        );
     }
 }

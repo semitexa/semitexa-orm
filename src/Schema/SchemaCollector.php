@@ -142,8 +142,8 @@ class SchemaCollector
             $index = $indexAttr->newInstance();
             /** @var array<string> $columns */
             $columns = array_values(array_filter($index->columns, static fn (mixed $column): bool => is_string($column) && $column !== ''));
-            if ($columns === []) {
-                $this->warnings[] = "Table '{$table->name}': skipping index with no valid columns.";
+            if ($columns === [] || count($columns) !== count($index->columns)) {
+                $this->errors[] = "Table '{$table->name}': #[Index] columns must be non-empty strings.";
                 continue;
             }
 

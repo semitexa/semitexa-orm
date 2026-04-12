@@ -110,13 +110,15 @@ class SqliteSchemaComparator implements SchemaComparatorInterface
                     $columnType = 'text';
                 }
 
+                $pkOrdinal = $this->intValue($col['pk'] ?? null);
+
                 $tables[$tableName]->addColumn(new DbColumnState(
                     name: $columnName,
                     dataType: $this->extractDataType($columnType),
                     columnType: $columnType,
-                    nullable: $this->intValue($col['pk'] ?? null) === 1 ? false : $this->intValue($col['notnull'] ?? null) === 0,
+                    nullable: $pkOrdinal > 0 ? false : $this->intValue($col['notnull'] ?? null) === 0,
                     defaultValue: $this->nullableStringValue($col['dflt_value'] ?? null),
-                    isPrimaryKey: $this->intValue($col['pk'] ?? null) === 1,
+                    isPrimaryKey: $pkOrdinal > 0,
                     isAutoIncrement: false, // SQLite autoincrement is implicit for INTEGER PRIMARY KEY
                     maxLength: null,
                     numericPrecision: null,
