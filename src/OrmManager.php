@@ -417,11 +417,14 @@ class OrmManager
      */
     private function resolveDriver(): string
     {
-        if ($this->config !== null) {
-            return $this->config->driver;
-        }
+        $driver = strtolower((string) ($this->config?->driver ?? Environment::getEnvValue('DB_DRIVER', 'mysql') ?? 'mysql'));
 
-        return Environment::getEnvValue('DB_DRIVER', 'mysql');
+        return match ($driver) {
+            'mysql', 'sqlite' => $driver,
+            default => throw new \InvalidArgumentException(
+                "Unsupported DB driver '{$driver}'. Expected 'mysql' or 'sqlite'.",
+            ),
+        };
     }
 
     /**

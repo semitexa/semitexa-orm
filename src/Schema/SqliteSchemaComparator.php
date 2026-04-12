@@ -254,7 +254,17 @@ class SqliteSchemaComparator implements SchemaComparatorInterface
         if (is_bool($default)) {
             return $default ? '1' : '0';
         }
-        return (string) $default;
+        $normalized = (string) $default;
+
+        if (strlen($normalized) >= 2) {
+            $quote = $normalized[0];
+            $last = substr($normalized, -1);
+            if (($quote === "'" || $quote === '"') && $quote === $last) {
+                return substr($normalized, 1, -1);
+            }
+        }
+
+        return $normalized;
     }
 
     /**
@@ -379,7 +389,7 @@ class SqliteSchemaComparator implements SchemaComparatorInterface
 
             foreach ($fkList->rows as $fk) {
                 // SQLite FK names are numeric IDs from PRAGMA
-                $constraintName = "fk_{$tableName}_{$fk['from']}_{$fk['id']}";
+                $constraintName = "fk_{$tableName}_{$fk['from']}";
                 $fks[$constraintName] = [
                     'table'            => $tableName,
                     'column'           => $fk['from'],

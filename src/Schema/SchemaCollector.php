@@ -367,7 +367,8 @@ class SchemaCollector
 
         if (!$valid) {
             $driverName = $sqlType instanceof MySqlType ? 'MySQL' : 'SQLite';
-            $this->errors[] = "Property '{$propName}' in '{$className}': PHP type '{$phpType}' is incompatible with {$driverName} type '{$sqlType->value}'.";
+            $typeName = $sqlType->canonicalName();
+            $this->errors[] = "Property '{$propName}' in '{$className}': PHP type '{$phpType}' is incompatible with {$driverName} type '{$typeName}'.";
         }
     }
 

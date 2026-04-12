@@ -136,12 +136,13 @@ class SqliteAdapter implements DatabaseAdapterInterface
     private function detectVersion(): void
     {
         $result = $this->query('SELECT sqlite_version()');
-        $raw = $result->fetchColumn();
+        $raw = $result->rows[0]['sqlite_version()'] ?? null;
+        $rawString = is_scalar($raw) ? (string) $raw : '';
 
-        if (preg_match('/^(\d+\.\d+\.\d+)/', (string) $raw, $matches)) {
+        if (preg_match('/^(\d+\.\d+\.\d+)/', $rawString, $matches)) {
             $this->serverVersion = $matches[1];
         } else {
-            throw new \RuntimeException("Unable to parse SQLite server version from: {$raw}");
+            throw new \RuntimeException("Unable to parse SQLite server version from: {$rawString}");
         }
 
         if (version_compare($this->serverVersion, '3.38.0', '<')) {
