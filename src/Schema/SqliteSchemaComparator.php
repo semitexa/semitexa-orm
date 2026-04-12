@@ -98,7 +98,7 @@ class SqliteSchemaComparator implements SchemaComparatorInterface
             $tables[$tableName] = new DbTableState($tableName, '');
 
             // Read columns via PRAGMA table_info
-            $columns = $this->adapter->execute("PRAGMA table_info({$tableName})");
+            $columns = $this->adapter->execute($this->buildPragmaStatement('table_info', $tableName));
             foreach ($columns->rows as $col) {
                 $columnName = $this->stringValue($col['name'] ?? null);
                 if ($columnName === '') {
@@ -126,7 +126,7 @@ class SqliteSchemaComparator implements SchemaComparatorInterface
             }
 
             // Read indexes via PRAGMA index_list
-            $indexes = $this->adapter->execute("PRAGMA index_list({$tableName})");
+            $indexes = $this->adapter->execute($this->buildPragmaStatement('index_list', $tableName));
             foreach ($indexes->rows as $idx) {
                 $indexName = $this->stringValue($idx['name'] ?? null);
                 if ($indexName === '') {
@@ -139,7 +139,7 @@ class SqliteSchemaComparator implements SchemaComparatorInterface
                 }
 
                 // Get columns for this index
-                $indexCols = $this->adapter->execute("PRAGMA index_info({$indexName})");
+                $indexCols = $this->adapter->execute($this->buildPragmaStatement('index_info', $indexName));
                 $colNames = [];
                 foreach ($indexCols->rows as $ic) {
                     $indexColumn = $this->stringValue($ic['name'] ?? null);
@@ -424,7 +424,7 @@ class SqliteSchemaComparator implements SchemaComparatorInterface
             if ($tableName === '') {
                 continue;
             }
-            $fkList = $this->adapter->execute("PRAGMA foreign_key_list({$tableName})");
+            $fkList = $this->adapter->execute($this->buildPragmaStatement('foreign_key_list', $tableName));
 
             foreach ($fkList->rows as $fk) {
                 $from = $this->stringValue($fk['from'] ?? null);
@@ -467,7 +467,7 @@ class SqliteSchemaComparator implements SchemaComparatorInterface
             if ($tableName === '') {
                 continue;
             }
-            $fkList = $this->adapter->execute("PRAGMA foreign_key_list({$tableName})");
+            $fkList = $this->adapter->execute($this->buildPragmaStatement('foreign_key_list', $tableName));
 
             foreach ($fkList->rows as $fk) {
                 $fkFrom = $this->stringValue($fk['from'] ?? null);
@@ -477,14 +477,14 @@ class SqliteSchemaComparator implements SchemaComparatorInterface
 
                 // Protect only exact single-column FK indexes. Composite indexes that merely
                 // include the FK column still need to be droppable when code removes them.
-                $indexList = $this->adapter->execute("PRAGMA index_list({$tableName})");
+                $indexList = $this->adapter->execute($this->buildPragmaStatement('index_list', $tableName));
                 foreach ($indexList->rows as $idx) {
                     $indexName = $this->stringValue($idx['name'] ?? null);
                     if ($indexName === '') {
                         continue;
                     }
 
-                    $indexInfo = $this->adapter->execute("PRAGMA index_info({$indexName})");
+                    $indexInfo = $this->adapter->execute($this->buildPragmaStatement('index_info', $indexName));
                     if (count($indexInfo->rows) !== 1) {
                         continue;
                     }
@@ -529,5 +529,15 @@ class SqliteSchemaComparator implements SchemaComparatorInterface
         }
 
         return 0;
+    }
+
+    private function buildPragmaStatement(string $pragma, string $identifier): string
+    {
+        return sprintf('PRAGMA %s(%s)', $pragma, $this->quoteSqliteIdentifier($identifier));
+    }
+
+    private function quoteSqliteIdentifier(string $identifier): string
+    {
+        return '"' . str_replace('"', '""', $identifier) . '"';
     }
 }

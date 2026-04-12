@@ -142,6 +142,11 @@ class SchemaCollector
             $index = $indexAttr->newInstance();
             /** @var array<string> $columns */
             $columns = array_values(array_filter($index->columns, static fn (mixed $column): bool => is_string($column) && $column !== ''));
+            if ($columns === []) {
+                $this->warnings[] = "Table '{$table->name}': skipping index with no valid columns.";
+                continue;
+            }
+
             $table->addIndex(new IndexDefinition(
                 columns: $columns,
                 unique: $index->unique,

@@ -6,7 +6,6 @@ namespace Semitexa\Orm\Schema;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Adapter\MySqlType;
-
 class SchemaComparator implements SchemaComparatorInterface
 {
     /** @param string[] $ignoreTables Table names to exclude from DROP detection */
@@ -236,10 +235,6 @@ class SchemaComparator implements SchemaComparatorInterface
 
     private function buildExpectedColumnType(ColumnDefinition $col): string
     {
-        if (!$col->type instanceof MySqlType) {
-            return $col->type->canonicalName($col->length, $col->precision, $col->scale);
-        }
-
         return $col->type->canonicalName($col->length, $col->precision, $col->scale);
     }
 

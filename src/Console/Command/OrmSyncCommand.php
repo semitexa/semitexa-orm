@@ -36,7 +36,19 @@ class OrmSyncCommand extends BaseCommand
     {
         $io = new SymfonyStyle($input, $output);
         $connectionOption = $input->getOption('connection');
-        $connection = is_string($connectionOption) && $connectionOption !== '' ? $connectionOption : 'default';
+        if (!is_string($connectionOption)) {
+            $io->error('Invalid --connection option value.');
+
+            return Command::FAILURE;
+        }
+
+        $connection = trim($connectionOption);
+        if ($connection === '') {
+            $io->error('The --connection option must not be empty.');
+
+            return Command::FAILURE;
+        }
+
         $dryRun = (bool) $input->getOption('dry-run');
         $allowDestructive = (bool) $input->getOption('allow-destructive');
         $outputOption = $input->getOption('output');
