@@ -9,9 +9,12 @@ use Semitexa\Core\Environment;
 use Semitexa\Core\Support\ProjectRoot;
 use Semitexa\Orm\Adapter\ConnectionPool;
 use Semitexa\Orm\Adapter\ConnectionPoolInterface;
+use Semitexa\Orm\Connection\ConnectionConfig;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Adapter\MysqlAdapter;
 use Semitexa\Orm\Adapter\SingleConnectionPool;
+use Semitexa\Orm\Adapter\SqliteAdapter;
+use Semitexa\Orm\Schema\SqliteSchemaComparator;
 use Semitexa\Orm\Bootstrap\OrmBootstrapReport;
 use Semitexa\Orm\Bootstrap\OrmBootstrapValidator;
 use Semitexa\Orm\Hydration\TableModelHydrator;
@@ -22,6 +25,7 @@ use Semitexa\Orm\Persistence\AggregateWriteEngine;
 use Semitexa\Orm\Repository\DomainRepository;
 use Semitexa\Orm\Schema\SchemaCollector;
 use Semitexa\Orm\Schema\SchemaComparator;
+use Semitexa\Orm\Schema\SchemaComparatorInterface;
 use Semitexa\Orm\Sync\AuditLogger;
 use Semitexa\Orm\Sync\SeedRunner;
 use Semitexa\Orm\Sync\SyncEngine;
@@ -33,7 +37,7 @@ class OrmManager
     private ?ConnectionPoolInterface $pool = null;
     private ?DatabaseAdapterInterface $adapter = null;
     private ?SchemaCollector $schemaCollector = null;
-    private ?SchemaComparator $schemaComparator = null;
+    private ?SchemaComparatorInterface $schemaComparator = null;
     private ?SyncEngine $syncEngine = null;
     private ?TransactionManager $transactionManager = null;
     private ?SeedRunner $seedRunner = null;
@@ -44,8 +48,11 @@ class OrmManager
     private ?AggregateWriteEngine $aggregateWriteEngine = null;
     private ?OrmBootstrapValidator $bootstrapValidator = null;
 
-    public function __construct(?ClassDiscovery $classDiscovery = null)
-    {
+    public function __construct(
+        ?ClassDiscovery $classDiscovery = null,
+        private readonly ?ConnectionConfig $config = null,
+        private readonly string $connectionName = 'default',
+    ) {
         $this->classDiscovery = $classDiscovery ?? new ClassDiscovery();
     }
 
@@ -57,7 +64,13 @@ class OrmManager
     public function getAdapter(): DatabaseAdapterInterface
     {
         if ($this->adapter === null) {
-            $this->adapter = new MysqlAdapter($this->getPool());
+            $driver = $this->resolveDriver();
+
+            if ($driver === 'sqlite') {
+                $this->adapter = $this->createSqliteAdapter();
+            } else {
+                $this->adapter = new MysqlAdapter($this->getPool());
+            }
         }
 
         return $this->adapter;
@@ -66,6 +79,13 @@ class OrmManager
     public function getPool(): ConnectionPoolInterface
     {
         if ($this->pool === null) {
+            $driver = $this->resolveDriver();
+
+            // SQLite doesn't need connection pooling
+            if ($driver === 'sqlite') {
+                throw new \LogicException('getPool() is not applicable for SQLite adapter. Use getAdapter() directly.');
+            }
+
             $this->pool = $this->createPool();
         }
 
@@ -75,20 +95,31 @@ class OrmManager
     public function getSchemaCollector(): SchemaCollector
     {
         if ($this->schemaCollector === null) {
-            $this->schemaCollector = new SchemaCollector($this->classDiscovery);
+            $this->schemaCollector = new SchemaCollector(
+                $this->classDiscovery,
+                $this->resolveDriver(),
+                $this->connectionName,
+            );
         }
 
         return $this->schemaCollector;
     }
 
-    public function getSchemaComparator(): SchemaComparator
+    public function getSchemaComparator(): SchemaComparatorInterface
     {
         if ($this->schemaComparator === null) {
-            $this->schemaComparator = new SchemaComparator(
-                $this->getAdapter(),
-                $this->getDatabaseName(),
-                $this->resolveIgnoreTables(),
-            );
+            if ($this->resolveDriver() === 'sqlite') {
+                $this->schemaComparator = new SqliteSchemaComparator(
+                    $this->getAdapter(),
+                    $this->resolveIgnoreTables(),
+                );
+            } else {
+                $this->schemaComparator = new SchemaComparator(
+                    $this->getAdapter(),
+                    $this->getDatabaseName(),
+                    $this->resolveIgnoreTables(),
+                );
+            }
         }
 
         return $this->schemaComparator;
@@ -110,8 +141,23 @@ class OrmManager
     public function getTransactionManager(): TransactionManager
     {
         if ($this->transactionManager === null) {
+            $driver = $this->resolveDriver();
+
+            // For SQLite, we pass a dummy pool since TransactionManager
+            // handles SQLite separately and won't actually use the pool
+            $pool = $driver === 'sqlite'
+                ? new class implements ConnectionPoolInterface {
+                    public function pop(float $timeout = -1): \PDO { throw new \LogicException('Not used for SQLite'); }
+                    public function push(\PDO $connection): void {}
+                    public function close(): void {}
+                    public function getSize(): int { return 0; }
+                    public function getAvailable(): int { return 0; }
+                    public function switchTo(string $tenantId): void {}
+                }
+                : $this->getPool();
+
             $this->transactionManager = new TransactionManager(
-                $this->getPool(),
+                $pool,
                 $this->getAdapter(),
             );
         }
@@ -218,6 +264,25 @@ class OrmManager
 
     public function getDatabaseName(): string
     {
+        if ($this->config !== null) {
+            if ($this->config->driver === 'sqlite') {
+                return $this->config->sqliteMemory
+                    ? ':memory:'
+                    : ($this->config->sqlitePath ?? 'sqlite');
+            }
+
+            return $this->config->database;
+        }
+
+        if ($this->resolveDriver() === 'sqlite') {
+            $memory = Environment::getEnvValue('DB_SQLITE_MEMORY');
+            if (in_array(strtolower((string) $memory), ['1', 'true', 'yes'], true)) {
+                return ':memory:';
+            }
+
+            return Environment::getEnvValue('DB_SQLITE_PATH', ProjectRoot::get() . '/var/database/semitexa.sqlite');
+        }
+
         return Environment::getEnvValue('DB_DATABASE', 'semitexa');
     }
 
@@ -272,13 +337,27 @@ class OrmManager
             Environment::syncEnvFromFiles();
         }
 
-        $host = $this->resolveDbHost();
-        $port = $this->resolveDbPort();
-        $database = Environment::getEnvValue('DB_DATABASE', 'semitexa');
-        $username = Environment::getEnvValue('DB_USERNAME') ?? Environment::getEnvValue('DB_USER', 'root');
-        $password = Environment::getEnvValue('DB_PASSWORD', '');
-        $charset = Environment::getEnvValue('DB_CHARSET', 'utf8mb4');
-        $poolSize = (int) Environment::getEnvValue('DB_POOL_SIZE', '10');
+        if ($this->config !== null) {
+            $host = $this->config->cliHost && !$this->isRunningInDocker()
+                ? $this->config->cliHost
+                : $this->config->host;
+            $port = $this->config->cliPort && !$this->isRunningInDocker()
+                ? $this->config->cliPort
+                : $this->config->port;
+            $database = $this->config->database;
+            $username = $this->config->username;
+            $password = $this->config->password;
+            $charset = $this->config->charset;
+            $poolSize = $this->config->poolSize;
+        } else {
+            $host = $this->resolveDbHost();
+            $port = $this->resolveDbPort();
+            $database = Environment::getEnvValue('DB_DATABASE', 'semitexa');
+            $username = Environment::getEnvValue('DB_USERNAME') ?? Environment::getEnvValue('DB_USER', 'root');
+            $password = Environment::getEnvValue('DB_PASSWORD', '');
+            $charset = Environment::getEnvValue('DB_CHARSET', 'utf8mb4');
+            $poolSize = (int) Environment::getEnvValue('DB_POOL_SIZE', '10');
+        }
 
         $dsn = "mysql:host={$host};port={$port};dbname={$database};charset={$charset}";
 
@@ -330,5 +409,60 @@ class OrmManager
     private function isRunningInDocker(): bool
     {
         return file_exists('/.dockerenv');
+    }
+
+    /**
+     * Resolve the database driver from environment configuration.
+     * Defaults to 'mysql' for backward compatibility.
+     */
+    private function resolveDriver(): string
+    {
+        $driver = strtolower((string) ($this->config?->driver ?? Environment::getEnvValue('DB_DRIVER', 'mysql') ?? 'mysql'));
+
+        return match ($driver) {
+            'mysql', 'sqlite' => $driver,
+            default => throw new \InvalidArgumentException(
+                "Unsupported DB driver '{$driver}'. Expected 'mysql' or 'sqlite'.",
+            ),
+        };
+    }
+
+    /**
+     * Create a SQLite adapter based on environment configuration.
+     *
+     * Supports:
+     * - DB_SQLITE_PATH: absolute or relative path to SQLite file
+     * - DB_SQLITE_MEMORY: if set to "1" or "true", use in-memory database
+     */
+    private function createSqliteAdapter(): SqliteAdapter
+    {
+        if ($this->config !== null) {
+            if ($this->config->sqliteMemory) {
+                return new SqliteAdapter('sqlite::memory:');
+            }
+
+            $path = $this->config->sqlitePath;
+            if ($path === null || $path === '') {
+                $path = ProjectRoot::get() . '/var/database/semitexa.sqlite';
+            }
+        } else {
+            $memory = Environment::getEnvValue('DB_SQLITE_MEMORY');
+            if (in_array(strtolower((string) $memory), ['1', 'true', 'yes'], true)) {
+                return new SqliteAdapter('sqlite::memory:');
+            }
+
+            $path = Environment::getEnvValue('DB_SQLITE_PATH');
+            if ($path === null || $path === '') {
+                $path = ProjectRoot::get() . '/var/database/semitexa.sqlite';
+            }
+        }
+
+        // Ensure directory exists
+        $dir = dirname($path);
+        if (!is_dir($dir)) {
+            mkdir($dir, 0755, true);
+        }
+
+        return new SqliteAdapter("sqlite:{$path}");
     }
 }

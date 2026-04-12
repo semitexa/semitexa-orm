@@ -6,6 +6,7 @@ namespace Semitexa\Orm\Metadata;
 
 use Semitexa\Orm\Attribute\BelongsTo;
 use Semitexa\Orm\Attribute\Column;
+use Semitexa\Orm\Attribute\Connection;
 use Semitexa\Orm\Attribute\FromTable;
 use Semitexa\Orm\Attribute\HasMany;
 use Semitexa\Orm\Attribute\ManyToMany;
@@ -32,6 +33,9 @@ final class TableModelMetadataExtractor
 
         /** @var FromTable $fromTable */
         $fromTable = $fromTableAttrs[0]->newInstance();
+
+        $connectionAttrs = $ref->getAttributes(Connection::class);
+        $connectionName = $connectionAttrs !== [] ? $connectionAttrs[0]->newInstance()->name : 'default';
 
         $columnsByProperty = [];
         $relationsByProperty = [];
@@ -60,6 +64,7 @@ final class TableModelMetadataExtractor
             tenantPolicy: $this->extractTenantPolicy($ref),
             softDelete: $this->extractSoftDelete($ref, $columnsByProperty),
             primaryKeyProperty: $primaryKeyProperty,
+            connectionName: $connectionName,
         );
     }
 

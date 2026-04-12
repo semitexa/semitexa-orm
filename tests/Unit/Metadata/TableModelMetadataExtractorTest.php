@@ -9,11 +9,13 @@ use PHPUnit\Framework\TestCase;
 use Semitexa\Orm\Metadata\RelationKind;
 use Semitexa\Orm\Metadata\TableModelMetadataExtractor;
 use Semitexa\Orm\Persistence\RelationWritePolicy;
+use Semitexa\Orm\Tests\Fixture\Metadata\AnalyticsEventTableModel;
 use Semitexa\Orm\Tests\Fixture\Metadata\ValidProductTableModel;
 
 require_once __DIR__ . '/../../Fixture/Metadata/ValidCategoryTableModel.php';
 require_once __DIR__ . '/../../Fixture/Metadata/ValidReviewTableModel.php';
 require_once __DIR__ . '/../../Fixture/Metadata/ValidProductTableModel.php';
+require_once __DIR__ . '/../../Fixture/Metadata/AnalyticsEventTableModel.php';
 
 final class TableModelMetadataExtractorTest extends TestCase
 {
@@ -48,5 +50,22 @@ final class TableModelMetadataExtractorTest extends TestCase
 
         $this->assertNotNull($metadata->softDelete);
         $this->assertSame('deletedAt', $metadata->softDelete?->propertyName);
+    }
+
+    #[Test]
+    public function defaults_connection_name_to_default(): void
+    {
+        $metadata = (new TableModelMetadataExtractor())->extract(ValidProductTableModel::class);
+
+        $this->assertSame('default', $metadata->connectionName);
+    }
+
+    #[Test]
+    public function extracts_explicit_connection_name(): void
+    {
+        $metadata = (new TableModelMetadataExtractor())->extract(AnalyticsEventTableModel::class);
+
+        $this->assertSame('analytics', $metadata->connectionName);
+        $this->assertSame('analytics_events', $metadata->tableName);
     }
 }

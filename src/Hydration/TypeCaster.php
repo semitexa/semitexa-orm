@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Hydration;
 
 use Semitexa\Orm\Adapter\MySqlType;
+use Semitexa\Orm\Adapter\SqliteType;
 use Semitexa\Orm\Schema\ColumnDefinition;
 use Semitexa\Orm\Uuid\Uuid7;
 
@@ -21,20 +22,29 @@ class TypeCaster
 
         return match ($column->type) {
             MySqlType::TinyInt, MySqlType::SmallInt,
-            MySqlType::Int, MySqlType::Bigint, MySqlType::Year => (int) $value,
+            MySqlType::Int, MySqlType::Bigint, MySqlType::Year,
+            SqliteType::TinyInt, SqliteType::SmallInt,
+            SqliteType::Int, SqliteType::Bigint               => (int) $value,
             MySqlType::Float, MySqlType::Double,
-            MySqlType::Decimal                                 => (float) $value,
-            MySqlType::Boolean                                 => (bool) $value,
+            MySqlType::Decimal,
+            SqliteType::Float, SqliteType::Double,
+            SqliteType::Decimal                               => (float) $value,
+            MySqlType::Boolean,
+            SqliteType::Boolean                               => (bool) $value,
             MySqlType::Varchar, MySqlType::Char,
             MySqlType::Text, MySqlType::MediumText,
-            MySqlType::LongText, MySqlType::Time               => (string) $value,
-            MySqlType::Blob                                    => $value, // raw bytes
-            MySqlType::Binary                                  => is_string($value) && strlen($value) === 16
+            MySqlType::LongText, MySqlType::Time,
+            MySqlType::Json,
+            SqliteType::Varchar, SqliteType::Char,
+            SqliteType::Text, SqliteType::Time,
+            SqliteType::Datetime, SqliteType::Date,
+            SqliteType::Json                                  => (string) $value,
+            MySqlType::Blob, SqliteType::Blob                 => $value, // raw bytes
+            MySqlType::Binary, SqliteType::Binary             => is_string($value) && strlen($value) === 16
                 ? Uuid7::fromBytes($value)
                 : $value,
             MySqlType::Datetime, MySqlType::Timestamp,
-            MySqlType::Date                                    => $this->castToDateTime($value),
-            MySqlType::Json                                    => $this->castToArray($value),
+            MySqlType::Date                                   => $this->castToDateTime($value),
         };
     }
 
@@ -84,19 +94,23 @@ class TypeCaster
         // DateTimeImmutable / DateTime → string
         if ($value instanceof \DateTimeInterface) {
             return match ($column->type) {
-                MySqlType::Date => $value->format('Y-m-d'),
-                MySqlType::Time => $value->format('H:i:s'),
-                default         => $value->format('Y-m-d H:i:s'),
+                MySqlType::Date, SqliteType::Date => $value->format('Y-m-d'),
+                MySqlType::Time, SqliteType::Time => $value->format('H:i:s'),
+                default                           => $value->format('Y-m-d H:i:s'),
             };
         }
 
         // Array → JSON
-        if (is_array($value) && $column->type === MySqlType::Json) {
+        if (is_array($value) && ($column->type === MySqlType::Json || $column->type === SqliteType::Json)) {
             return json_encode($value, JSON_UNESCAPED_UNICODE);
         }
 
         // UUID string → binary for BINARY columns
-        if ($column->type === MySqlType::Binary && is_string($value) && strlen($value) === 36 && str_contains($value, '-')) {
+        if (($column->type === MySqlType::Binary || $column->type === SqliteType::Binary)
+            && is_string($value)
+            && strlen($value) === 36
+            && str_contains($value, '-')
+        ) {
             return Uuid7::toBytes($value);
         }
 

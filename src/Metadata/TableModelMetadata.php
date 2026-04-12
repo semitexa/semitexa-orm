@@ -18,6 +18,7 @@ final readonly class TableModelMetadata
         public ?TenantPolicyMetadata $tenantPolicy = null,
         public ?SoftDeleteMetadata $softDelete = null,
         public ?string $primaryKeyProperty = null,
+        public string $connectionName = 'default',
     ) {}
 
     /**

@@ -6,9 +6,10 @@ namespace Semitexa\Orm\Console\Command;
 
 use Semitexa\Core\Attribute\AsCommand;
 use Semitexa\Core\Console\Command\BaseCommand;
-use Semitexa\Orm\OrmManager;
+use Semitexa\Orm\Connection\ConnectionRegistry;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
 
@@ -16,7 +17,7 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 class OrmDiffCommand extends BaseCommand
 {
     public function __construct(
-        private readonly OrmManager $orm,
+        private readonly ConnectionRegistry $connections,
     ) {
         parent::__construct();
     }
@@ -24,15 +25,17 @@ class OrmDiffCommand extends BaseCommand
     protected function configure(): void
     {
         $this->setName('orm:diff')
-            ->setDescription('Show differences between code schema and database');
+            ->setDescription('Show differences between code schema and database')
+            ->addOption('connection', 'c', InputOption::VALUE_REQUIRED, 'Connection name to diff', 'default');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $io = new SymfonyStyle($input, $output);
+        $connection = (string) $input->getOption('connection');
 
         try {
-            $orm = $this->orm;
+            $orm = $this->connections->manager($connection);
 
             // 1. Collect schema from code
             $collector = $orm->getSchemaCollector();

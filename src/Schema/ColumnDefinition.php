@@ -4,14 +4,14 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Schema;
 
-use Semitexa\Orm\Adapter\MySqlType;
+use Semitexa\Orm\Adapter\DatabaseType;
 
 readonly class ColumnDefinition
 {
     public function __construct(
         /** DB column name */
         public string $name,
-        public MySqlType $type,
+        public DatabaseType $type,
         public string $phpType,
         public bool $nullable = false,
         public ?int $length = null,

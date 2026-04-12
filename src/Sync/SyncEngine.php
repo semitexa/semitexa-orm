@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Sync;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
+use Semitexa\Orm\Adapter\DatabaseType;
 use Semitexa\Orm\Adapter\MySqlType;
+use Semitexa\Orm\Adapter\SqliteType;
 use Semitexa\Orm\Schema\ColumnDefinition;
 use Semitexa\Orm\Schema\DbColumnState;
 use Semitexa\Orm\Schema\ForeignKeyDefinition;
@@ -36,6 +38,19 @@ class SyncEngine
                 isDestructive: false,
                 description: "Create table '{$table->name}'",
             ));
+
+            if ($this->isSqlite()) {
+                foreach ($table->getIndexes() as $index) {
+                    $name = $index->name ?? $this->generateIndexName($table->name, $index->columns, $index->unique);
+                    $plan->addOperation(new DdlOperation(
+                        sql: $this->generateAddIndex($table->name, $index, $name),
+                        type: DdlOperationType::AddIndex,
+                        tableName: $table->name,
+                        isDestructive: false,
+                        description: "Add index '{$name}' on '{$table->name}'",
+                    ));
+                }
+            }
         }
 
         // 2. ADD COLUMNs (safe)
@@ -104,31 +119,61 @@ class SyncEngine
         foreach ($dropIndexes as $tableName => $indexNames) {
             foreach ($indexNames as $indexName) {
                 $key = $tableName . '.' . $indexName;
+                $q = $this->quoteChar();
 
                 if (isset($addByTableAndName[$key])) {
                     // Same index name is being dropped and re-added → combine into one statement
                     $entry = $addByTableAndName[$key];
                     $index = $entry['index'];
-                    $cols = implode('`, `', $index->columns);
-                    $type = $index->unique ? 'UNIQUE INDEX' : 'INDEX';
-                    $sql = "ALTER TABLE `{$tableName}` DROP INDEX `{$indexName}`, ADD {$type} `{$indexName}` (`{$cols}`)";
 
-                    $plan->addOperation(new DdlOperation(
-                        sql: $sql,
-                        type: DdlOperationType::DropIndex,
-                        tableName: $tableName,
-                        isDestructive: true,
-                        description: "Recreate index '{$indexName}' on '{$tableName}'",
-                    ));
+                    if ($this->isSqlite()) {
+                        // SQLite: separate DROP and CREATE
+                        $plan->addOperation(new DdlOperation(
+                            sql: "DROP INDEX {$q}{$indexName}{$q}",
+                            type: DdlOperationType::DropIndex,
+                            tableName: $tableName,
+                            isDestructive: true,
+                            description: "Drop index '{$indexName}' from '{$tableName}'",
+                        ));
+                        $plan->addOperation(new DdlOperation(
+                            sql: $this->generateAddIndex($tableName, $index, $indexName),
+                            type: DdlOperationType::AddIndex,
+                            tableName: $tableName,
+                            isDestructive: false,
+                            description: "Recreate index '{$indexName}' on '{$tableName}'",
+                        ));
+                    } else {
+                        $cols = implode('`, `', $index->columns);
+                        $type = $index->unique ? 'UNIQUE INDEX' : 'INDEX';
+                        $sql = "ALTER TABLE `{$tableName}` DROP INDEX `{$indexName}`, ADD {$type} `{$indexName}` (`{$cols}`)";
+
+                        $plan->addOperation(new DdlOperation(
+                            sql: $sql,
+                            type: DdlOperationType::DropIndex,
+                            tableName: $tableName,
+                            isDestructive: true,
+                            description: "Recreate index '{$indexName}' on '{$tableName}'",
+                        ));
+                    }
                     $pairedAdds[$key] = true;
                 } else {
-                    $plan->addOperation(new DdlOperation(
-                        sql: "ALTER TABLE `{$tableName}` DROP INDEX `{$indexName}`",
-                        type: DdlOperationType::DropIndex,
-                        tableName: $tableName,
-                        isDestructive: true,
-                        description: "Drop index '{$indexName}' from '{$tableName}'",
-                    ));
+                    if ($this->isSqlite()) {
+                        $plan->addOperation(new DdlOperation(
+                            sql: "DROP INDEX {$q}{$indexName}{$q}",
+                            type: DdlOperationType::DropIndex,
+                            tableName: $tableName,
+                            isDestructive: true,
+                            description: "Drop index '{$indexName}' from '{$tableName}'",
+                        ));
+                    } else {
+                        $plan->addOperation(new DdlOperation(
+                            sql: "ALTER TABLE `{$tableName}` DROP INDEX `{$indexName}`",
+                            type: DdlOperationType::DropIndex,
+                            tableName: $tableName,
+                            isDestructive: true,
+                            description: "Drop index '{$indexName}' from '{$tableName}'",
+                        ));
+                    }
                 }
             }
         }
@@ -172,8 +217,9 @@ class SyncEngine
                     ));
                 } else {
                     // Column was already deprecated → safe to drop
+                    $q = $this->quoteChar();
                     $plan->addOperation(new DdlOperation(
-                        sql: "ALTER TABLE `{$tableName}` DROP COLUMN `{$columnName}`",
+                        sql: "ALTER TABLE {$q}{$tableName}{$q} DROP COLUMN {$q}{$columnName}{$q}",
                         type: DdlOperationType::DropColumn,
                         tableName: $tableName,
                         isDestructive: true,
@@ -185,6 +231,11 @@ class SyncEngine
 
         // 8. DROP FOREIGN KEYs (destructive — must happen before DROP TABLE/COLUMN)
         foreach ($diff->getDropForeignKeys() as $entry) {
+            if ($this->isSqlite()) {
+                // SQLite: FK constraints cannot be dropped separately.
+                // Table recreation would be needed — skip for now.
+                continue;
+            }
             $plan->addOperation(new DdlOperation(
                 sql: "ALTER TABLE `{$entry['table']}` DROP FOREIGN KEY `{$entry['constraintName']}`",
                 type: DdlOperationType::DropForeignKey,
@@ -197,15 +248,28 @@ class SyncEngine
         // 9. DROP TABLEs — two-phase logic (destructive)
         foreach ($diff->getDropTables() as $dbTable) {
             $tableName = $dbTable->name;
+            $q = $this->quoteChar();
             if ($dbTable->tableComment !== self::DEPRECATED_COMMENT) {
-                // Table was not previously marked as deprecated → block drop, add deprecation comment instead.
-                $plan->addOperation(new DdlOperation(
-                    sql: "ALTER TABLE `{$tableName}` COMMENT '" . self::DEPRECATED_COMMENT . "'",
-                    type: DdlOperationType::AlterColumn,
-                    tableName: $tableName,
-                    isDestructive: false,
-                    description: "Mark table '{$tableName}' as deprecated (two-phase drop, phase 1)",
-                ));
+                if ($this->isSqlite()) {
+                    // SQLite lacks table comments, so do not drop the table implicitly.
+                    // Force an explicit/manual follow-up instead of risking silent data loss.
+                    $plan->addOperation(new DdlOperation(
+                        sql: "-- SQLITE_DROP_TABLE_REQUIRES_MANUAL_REVIEW:{$tableName}",
+                        type: DdlOperationType::AlterColumn,
+                        tableName: $tableName,
+                        isDestructive: false,
+                        description: "Manual review required before dropping SQLite table '{$tableName}'",
+                    ));
+                } else {
+                    // Table was not previously marked as deprecated → block drop, add deprecation comment instead.
+                    $plan->addOperation(new DdlOperation(
+                        sql: "ALTER TABLE `{$tableName}` COMMENT '" . self::DEPRECATED_COMMENT . "'",
+                        type: DdlOperationType::AlterColumn,
+                        tableName: $tableName,
+                        isDestructive: false,
+                        description: "Mark table '{$tableName}' as deprecated (two-phase drop, phase 1)",
+                    ));
+                }
             } else {
                 // Table was already deprecated → safe to drop
                 $plan->addOperation(new DdlOperation(
@@ -242,24 +306,31 @@ class SyncEngine
         }
 
         $useTransaction = $this->adapter->supports(\Semitexa\Orm\Adapter\ServerCapability::AtomicDdl);
+        $isSqlite = $this->isSqlite();
 
         $executed = [];
         try {
             if ($useTransaction) {
-                $this->adapter->query('START TRANSACTION');
+                $this->adapter->query($isSqlite ? 'BEGIN' : 'START TRANSACTION');
             }
 
             foreach ($operations as $operation) {
+                if ($isSqlite && $this->isSqlitePlaceholder($operation->sql)) {
+                    throw new \RuntimeException(
+                        "SQLite sync requires table recreation for unsupported operation: {$operation->description}",
+                    );
+                }
+
                 $this->adapter->execute($operation->sql);
                 $executed[] = $operation;
             }
 
             if ($useTransaction) {
-                $this->adapter->query('COMMIT');
+                $this->adapter->query($isSqlite ? 'COMMIT' : 'COMMIT');
             }
         } catch (\Throwable $e) {
             if ($useTransaction) {
-                $this->adapter->query('ROLLBACK');
+                $this->adapter->query($isSqlite ? 'ROLLBACK' : 'ROLLBACK');
             }
             throw $e;
         }
@@ -269,10 +340,20 @@ class SyncEngine
         return $executed;
     }
 
+    /**
+     * Check if SQL is a SQLite placeholder for unsupported operations.
+     */
+    private function isSqlitePlaceholder(string $sql): bool
+    {
+        return str_starts_with($sql, '-- SQLITE_');
+    }
+
     private function generateCreateTable(TableDefinition $table): string
     {
+        $isSqlite = $this->isSqlite();
         $lines = [];
         $pk = null;
+        $inlineFks = [];
 
         foreach ($table->getColumns() as $col) {
             $line = '  ' . $this->generateColumnDdl($col);
@@ -283,58 +364,91 @@ class SyncEngine
         }
 
         if ($pk !== null) {
-            $lines[] = "  PRIMARY KEY (`{$pk->name}`)";
+            if ($isSqlite && $pk->pkStrategy === 'auto' && $this->isSqliteAutoIncrementPrimaryKey($pk)) {
+                // SQLite: INTEGER PRIMARY KEY implies AUTOINCREMENT behavior
+                // Already handled in generateColumnDdl
+            } else {
+                $q = $isSqlite ? '"' : '`';
+                $lines[] = "  PRIMARY KEY ({$q}{$pk->name}{$q})";
+            }
         }
 
         foreach ($table->getIndexes() as $index) {
             $name = $index->name ?? $this->generateIndexName($table->name, $index->columns, $index->unique);
-            $cols = implode('`, `', $index->columns);
-            $prefix = $index->unique ? 'UNIQUE KEY' : 'KEY';
-            $lines[] = "  {$prefix} `{$name}` (`{$cols}`)";
+            $q = $isSqlite ? '"' : '`';
+            $cols = implode("{$q}, {$q}", $index->columns);
+            if ($isSqlite) {
+                // SQLite: indexes are created separately, not inline in CREATE TABLE
+                // We'll handle them after table creation
+            } else {
+                $prefix = $index->unique ? 'UNIQUE KEY' : 'KEY';
+                $lines[] = "  {$prefix} `{$name}` (`{$cols}`)";
+            }
+        }
+
+        // Add inline FK constraints for SQLite (must be in CREATE TABLE)
+        if ($isSqlite) {
+            foreach ($table->getForeignKeys() as $fk) {
+                $lines[] = "  FOREIGN KEY (\"{$fk->column}\") REFERENCES \"{$fk->referencedTable}\"(\"{$fk->referencedColumn}\") ON DELETE {$fk->onDelete->value} ON UPDATE {$fk->onUpdate->value}";
+            }
         }
 
         $body = implode(",\n", $lines);
+        $q = $isSqlite ? '"' : '`';
+
+        if ($isSqlite) {
+            return "CREATE TABLE {$q}{$table->name}{$q} (\n{$body}\n)";
+        }
+
         return "CREATE TABLE `{$table->name}` (\n{$body}\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci";
     }
 
     private function generateColumnDdl(ColumnDefinition $col): string
     {
+        $isSqlite = $this->isSqlite();
+        $q = $this->quoteChar();
         $type = $this->sqlType($col);
         $null = $col->nullable ? 'NULL' : 'NOT NULL';
-        $auto = ($col->isPrimaryKey && $col->pkStrategy === 'auto' && in_array($col->type, [MySqlType::Int, MySqlType::Bigint], true))
-            ? ' AUTO_INCREMENT'
-            : '';
-        $default = $this->defaultClause($col);
-        $deprecated = $col->isDeprecated ? " COMMENT '" . self::DEPRECATED_COMMENT . "'" : '';
 
-        return "`{$col->name}` {$type} {$null}{$auto}{$default}{$deprecated}";
+        // Auto-increment handling
+        $auto = '';
+        if ($col->isPrimaryKey && $col->pkStrategy === 'auto') {
+            if ($isSqlite && $this->isSqliteAutoIncrementPrimaryKey($col)) {
+                // SQLite: INTEGER PRIMARY KEY auto-increments implicitly
+                // Type is already INTEGER from sqlType()
+                $auto = ' PRIMARY KEY AUTOINCREMENT';
+                // In SQLite, we skip the separate PRIMARY KEY clause
+                // and the NULL clause for autoincrement PKs
+                $deprecated = $col->isDeprecated ? " -- " . self::DEPRECATED_COMMENT : '';
+                return "{$q}{$col->name}{$q} {$type}{$auto}{$deprecated}";
+            } elseif ($col->type instanceof MySqlType && in_array($col->type, [MySqlType::Int, MySqlType::Bigint], true)) {
+                $auto = ' AUTO_INCREMENT';
+            }
+        }
+
+        $default = $this->defaultClause($col);
+        $deprecated = !$isSqlite && $col->isDeprecated ? " COMMENT '" . self::DEPRECATED_COMMENT . "'" : '';
+
+        return "{$q}{$col->name}{$q} {$type} {$null}{$auto}{$default}{$deprecated}";
     }
 
     private function sqlType(ColumnDefinition $col): string
     {
-        return match ($col->type) {
-            MySqlType::Varchar    => 'VARCHAR(' . ($col->length ?? 255) . ')',
-            MySqlType::Char       => 'CHAR(' . ($col->length ?? 1) . ')',
-            MySqlType::Text       => 'TEXT',
-            MySqlType::MediumText => 'MEDIUMTEXT',
-            MySqlType::LongText   => 'LONGTEXT',
-            MySqlType::TinyInt    => 'TINYINT',
-            MySqlType::SmallInt   => 'SMALLINT',
-            MySqlType::Int        => 'INT',
-            MySqlType::Bigint     => 'BIGINT',
-            MySqlType::Float      => 'FLOAT',
-            MySqlType::Double     => 'DOUBLE',
-            MySqlType::Decimal    => 'DECIMAL(' . ($col->precision ?? 10) . ',' . ($col->scale ?? 0) . ')',
-            MySqlType::Boolean    => 'TINYINT(1)',
-            MySqlType::Datetime   => 'DATETIME',
-            MySqlType::Timestamp  => 'TIMESTAMP',
-            MySqlType::Date       => 'DATE',
-            MySqlType::Time       => 'TIME',
-            MySqlType::Year       => 'YEAR',
-            MySqlType::Json       => 'JSON',
-            MySqlType::Blob       => 'BLOB',
-            MySqlType::Binary     => 'BINARY(' . ($col->length ?? 16) . ')',
-        };
+        // Delegate to the type's own toSql() method
+        return $col->type->toSql($col->length, $col->precision, $col->scale);
+    }
+
+    private function isSqliteAutoIncrementPrimaryKey(ColumnDefinition $col): bool
+    {
+        if ($col->type instanceof SqliteType) {
+            return in_array($col->type, [SqliteType::Int, SqliteType::Bigint], true);
+        }
+
+        if ($col->type instanceof MySqlType) {
+            return in_array($col->type, [MySqlType::Int, MySqlType::Bigint], true);
+        }
+
+        return false;
     }
 
     private function defaultClause(ColumnDefinition $col): string
@@ -360,12 +474,20 @@ class SyncEngine
 
     private function generateAddColumn(string $tableName, ColumnDefinition $col): string
     {
+        $q = $this->quoteChar();
         $ddl = $this->generateColumnDdl($col);
-        return "ALTER TABLE `{$tableName}` ADD COLUMN {$ddl}";
+        return "ALTER TABLE {$q}{$tableName}{$q} ADD COLUMN {$ddl}";
     }
 
     private function generateAlterColumn(string $tableName, ColumnDefinition $col): string
     {
+        if ($this->isSqlite()) {
+            // SQLite has very limited ALTER TABLE support.
+            // For column alterations, we need to recreate the table.
+            // This is handled specially in the execution phase.
+            return "-- SQLITE_ALTER_COLUMN:{$tableName}:{$col->name}";
+        }
+
         $ddl = $this->generateColumnDdl($col);
         return "ALTER TABLE `{$tableName}` MODIFY COLUMN {$ddl}";
     }
@@ -380,6 +502,12 @@ class SyncEngine
      */
     private function generateDeprecationDdl(string $tableName, DbColumnState $col): string
     {
+        if ($this->isSqlite()) {
+            // SQLite doesn't support column comments.
+            // We skip deprecation marking for SQLite.
+            return "-- SQLITE_DEPRECATION_NOT_SUPPORTED";
+        }
+
         // columnType from INFORMATION_SCHEMA is the authoritative full type string
         // (e.g. "varchar(255)", "decimal(10,2)", "tinyint(1)") — use it verbatim.
         $null    = $col->nullable ? 'NULL' : 'NOT NULL';
@@ -404,13 +532,28 @@ class SyncEngine
      */
     private function generateAddIndex(string $tableName, $index, string $name): string
     {
-        $cols = implode('`, `', $index->columns);
+        $q = $this->quoteChar();
+        $cols = implode("{$q}, {$q}", $index->columns);
+
+        if ($this->isSqlite()) {
+            $type = $index->unique ? 'UNIQUE INDEX' : 'INDEX';
+            return "CREATE {$type} {$q}{$name}{$q} ON {$q}{$tableName}{$q} ({$q}{$cols}{$q})";
+        }
+
         $type = $index->unique ? 'UNIQUE INDEX' : 'INDEX';
         return "ALTER TABLE `{$tableName}` ADD {$type} `{$name}` (`{$cols}`)";
     }
 
     private function generateAddForeignKey(ForeignKeyDefinition $fk): string
     {
+        $q = $this->quoteChar();
+
+        if ($this->isSqlite()) {
+            // SQLite: FK constraints must be added during table creation.
+            // For existing tables, we need to recreate the table.
+            return "-- SQLITE_ADD_FK:{$fk->table}:{$fk->column}:{$fk->referencedTable}:{$fk->referencedColumn}";
+        }
+
         $name = $fk->constraintName();
         return sprintf(
             'ALTER TABLE `%s` ADD CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES `%s`(`%s`) ON DELETE %s ON UPDATE %s',
@@ -586,5 +729,21 @@ class SyncEngine
     {
         $prefix = $unique ? 'uniq' : 'idx';
         return $prefix . '_' . $tableName . '_' . implode('_', $columns);
+    }
+
+    /**
+     * Check if the current adapter is SQLite.
+     */
+    private function isSqlite(): bool
+    {
+        return $this->adapter instanceof \Semitexa\Orm\Adapter\SqliteAdapter;
+    }
+
+    /**
+     * Get the quote character for the current database.
+     */
+    private function quoteChar(): string
+    {
+        return $this->isSqlite() ? '"' : '`';
     }
 }

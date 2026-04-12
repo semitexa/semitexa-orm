@@ -32,4 +32,23 @@ enum ServerCapability: string
             self::DescendingIndexes->value  => '8.0.0',
         ];
     }
+
+    /**
+     * Whether this capability is supported by SQLite.
+     *
+     * SQLite support varies by version. This reflects capabilities
+     * available in SQLite 3.38.0+ (widely available as of 2024).
+     */
+    public function isSupportedBySqlite(): bool
+    {
+        return match ($this) {
+            self::AtomicDdl => true,          // SQLite has transactional DDL
+            self::CheckConstraints => true,   // Supported since early versions
+            self::DefaultExpressions => true, // Supported (limited expressions)
+            self::InvisibleColumns => false,  // Not supported in SQLite
+            self::JsonTableFunc => true,      // json_each() available, json_table() since 3.45.0
+            self::WindowFunctions => true,    // Supported since 3.25.0
+            self::DescendingIndexes => true,  // Supported (but ignored until 3.30.0, works since)
+        };
+    }
 }

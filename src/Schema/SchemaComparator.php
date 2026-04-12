@@ -7,7 +7,7 @@ namespace Semitexa\Orm\Schema;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Adapter\MySqlType;
 
-class SchemaComparator
+class SchemaComparator implements SchemaComparatorInterface
 {
     /** @param string[] $ignoreTables Table names to exclude from DROP detection */
     public function __construct(

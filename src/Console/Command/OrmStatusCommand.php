@@ -7,9 +7,10 @@ namespace Semitexa\Orm\Console\Command;
 use Semitexa\Core\Attribute\AsCommand;
 use Semitexa\Core\Console\Command\BaseCommand;
 use Semitexa\Orm\Adapter\ServerCapability;
-use Semitexa\Orm\OrmManager;
+use Semitexa\Orm\Connection\ConnectionRegistry;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
 
@@ -17,7 +18,7 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 class OrmStatusCommand extends BaseCommand
 {
     public function __construct(
-        private readonly OrmManager $orm,
+        private readonly ConnectionRegistry $connections,
     ) {
         parent::__construct();
     }
@@ -25,24 +26,30 @@ class OrmStatusCommand extends BaseCommand
     protected function configure(): void
     {
         $this->setName('orm:status')
-            ->setDescription('Show ORM status: database info, server capabilities, schema summary');
+            ->setDescription('Show ORM status: database info, server capabilities, schema summary')
+            ->addOption('connection', 'c', InputOption::VALUE_REQUIRED, 'Connection name to inspect', 'default');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $io = new SymfonyStyle($input, $output);
+        $connection = (string) $input->getOption('connection');
 
         try {
-            $orm = $this->orm;
+            $orm = $this->connections->manager($connection);
             $adapter = $orm->getAdapter();
+            $isSqlite = str_contains(strtolower($adapter::class), 'sqlite');
 
             // Server info
             $io->section('Database Server');
-            $io->definitionList(
+            $serverInfo = [
                 ['Server Version' => $adapter->getServerVersion()],
                 ['Database' => $orm->getDatabaseName()],
-                ['Pool Size' => (string) $orm->getPool()->getSize()],
-            );
+            ];
+            if (!$isSqlite) {
+                $serverInfo[] = ['Pool Size' => (string) $orm->getPool()->getSize()];
+            }
+            $io->definitionList(...$serverInfo);
 
             // Capabilities
             $io->section('Server Capabilities');
