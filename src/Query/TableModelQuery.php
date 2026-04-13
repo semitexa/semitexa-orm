@@ -212,7 +212,7 @@ final class TableModelQuery
         $conditions = [];
 
         if ($metadata->tenantPolicy !== null && !$this->skipTenantScope) {
-            $tenantColumn = $metadata->tenantPolicy->column ?? 'tenantId';
+            $tenantColumn = $this->resolveTenantColumnName($metadata);
             $conditions[] = sprintf('`%s` = :tenant_scope', $tenantColumn);
         }
 
@@ -270,6 +270,17 @@ final class TableModelQuery
         }
 
         return $sql;
+    }
+
+    private function resolveTenantColumnName(\Semitexa\Orm\Metadata\TableModelMetadata $metadata): string
+    {
+        $tenantColumn = $metadata->tenantPolicy?->column ?? 'tenantId';
+
+        if ($metadata->hasColumn($tenantColumn)) {
+            return $metadata->column($tenantColumn)->columnName;
+        }
+
+        return $tenantColumn;
     }
 
     /**

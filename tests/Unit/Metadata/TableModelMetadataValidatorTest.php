@@ -11,6 +11,7 @@ use Semitexa\Orm\Exception\InvalidSoftDeleteDeclarationException;
 use Semitexa\Orm\Exception\InvalidTenantPolicyException;
 use Semitexa\Orm\Metadata\TableModelMetadataExtractor;
 use Semitexa\Orm\Metadata\TableModelMetadataValidator;
+use Semitexa\Orm\Tests\Fixture\Metadata\DirectTenantColumnTableModel;
 use Semitexa\Orm\Tests\Fixture\Metadata\InvalidRelationPolicyTableModel;
 use Semitexa\Orm\Tests\Fixture\Metadata\InvalidRelationTargetTableModel;
 use Semitexa\Orm\Tests\Fixture\Metadata\InvalidSyncPivotBelongsToTableModel;
@@ -21,6 +22,7 @@ use Semitexa\Orm\Tests\Fixture\Metadata\ValidProductTableModel;
 require_once __DIR__ . '/../../Fixture/Metadata/ValidCategoryTableModel.php';
 require_once __DIR__ . '/../../Fixture/Metadata/ValidReviewTableModel.php';
 require_once __DIR__ . '/../../Fixture/Metadata/ValidProductTableModel.php';
+require_once __DIR__ . '/../../Fixture/Metadata/DirectTenantColumnTableModel.php';
 require_once __DIR__ . '/../../Fixture/Metadata/InvalidTenantTableModel.php';
 require_once __DIR__ . '/../../Fixture/Metadata/InvalidSoftDeleteTableModel.php';
 require_once __DIR__ . '/../../Fixture/Metadata/InvalidRelationPolicyTableModel.php';
@@ -42,6 +44,16 @@ final class TableModelMetadataValidatorTest extends TestCase
     public function validates_a_correct_table_model(): void
     {
         $metadata = $this->extractor->extract(ValidProductTableModel::class);
+
+        $this->validator->validate($metadata);
+
+        $this->assertTrue(true);
+    }
+
+    #[Test]
+    public function accepts_tenant_policy_declared_with_sql_column_name(): void
+    {
+        $metadata = $this->extractor->extract(DirectTenantColumnTableModel::class);
 
         $this->validator->validate($metadata);
 

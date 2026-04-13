@@ -107,10 +107,14 @@ final class TableModelMetadataValidator
                 ));
             }
 
-            if (!$metadata->hasColumn($metadata->tenantPolicy->column)) {
+            $tenantColumn = $metadata->tenantPolicy->column;
+            $matchesDeclaredColumn = $metadata->hasColumn($tenantColumn)
+                || $this->hasDeclaredColumnName($metadata, $tenantColumn);
+
+            if (!$matchesDeclaredColumn) {
                 throw new InvalidTenantPolicyException(sprintf(
                     'Tenant policy column "%s" is not a declared column on %s.',
-                    $metadata->tenantPolicy->column,
+                    $tenantColumn,
                     $metadata->className,
                 ));
             }
@@ -134,5 +138,16 @@ final class TableModelMetadataValidator
                 ));
             }
         }
+    }
+
+    private function hasDeclaredColumnName(TableModelMetadata $metadata, string $columnName): bool
+    {
+        foreach ($metadata->columns() as $column) {
+            if ($column->columnName === $columnName) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
