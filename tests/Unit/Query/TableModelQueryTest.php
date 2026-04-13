@@ -15,6 +15,7 @@ use Semitexa\Orm\Query\SystemScopeToken;
 use Semitexa\Orm\Query\TableModelQuery;
 use Semitexa\Orm\Tests\Fixture\Hydration\FakeDatabaseAdapter;
 use Semitexa\Orm\Tests\Fixture\Hydration\HydratableProductTableModel;
+use Semitexa\Orm\Tests\Fixture\Metadata\MappedTenantPropertyTableModel;
 use Semitexa\Orm\Tests\Fixture\Metadata\ValidCategoryTableModel;
 use Semitexa\Orm\Tests\Fixture\Mapping\HydratableProductDomainModel;
 use Semitexa\Orm\Tests\Fixture\Mapping\HydratableProductMapper;
@@ -22,6 +23,7 @@ use Semitexa\Orm\Tests\Fixture\Metadata\ValidReviewTableModel;
 
 require_once __DIR__ . '/../../Fixture/Metadata/ValidCategoryTableModel.php';
 require_once __DIR__ . '/../../Fixture/Metadata/ValidReviewTableModel.php';
+require_once __DIR__ . '/../../Fixture/Metadata/MappedTenantPropertyTableModel.php';
 require_once __DIR__ . '/../../Fixture/Hydration/HydratableProductTableModel.php';
 require_once __DIR__ . '/../../Fixture/Hydration/FakeDatabaseAdapter.php';
 require_once __DIR__ . '/../../Fixture/Mapping/HydratableProductDomainModel.php';
@@ -197,6 +199,28 @@ final class TableModelQueryTest extends TestCase
 
         $this->expectException(\LogicException::class);
         $query->toSql();
+    }
+
+    #[Test]
+    public function resolves_tenant_scope_property_to_declared_column_name(): void
+    {
+        $adapter = new FakeDatabaseAdapter([]);
+        $hydrator = new TableModelHydrator();
+        $relationLoader = new TableModelRelationLoader($adapter, $hydrator);
+        $query = new TableModelQuery(
+            MappedTenantPropertyTableModel::class,
+            $adapter,
+            $hydrator,
+            $relationLoader,
+        );
+
+        $query->forTenant('tenant-1');
+
+        $this->assertSame(
+            'SELECT * FROM `mapped_tenant_property_models` WHERE `tenant_id` = :tenant_scope',
+            $query->toSql(),
+        );
+        $this->assertSame(['tenant_scope' => 'tenant-1'], $query->toParams());
     }
 
     #[Test]
