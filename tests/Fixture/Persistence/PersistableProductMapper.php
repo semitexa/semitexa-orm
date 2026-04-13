@@ -10,7 +10,7 @@ use Semitexa\Orm\Tests\Fixture\Metadata\ValidCategoryTableModel;
 use Semitexa\Orm\Tests\Fixture\Metadata\ValidProductTableModel;
 use Semitexa\Orm\Tests\Fixture\Metadata\ValidReviewTableModel;
 
-#[AsMapper(tableModel: ValidProductTableModel::class, domainModel: PersistableProductDomainModel::class)]
+#[AsMapper(resourceModel: ValidProductTableModel::class, domainModel: PersistableProductDomainModel::class)]
 final class PersistableProductMapper implements TableModelMapper
 {
     public function toDomain(object $tableModel): object

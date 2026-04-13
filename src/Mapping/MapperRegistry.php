@@ -129,11 +129,11 @@ final class MapperRegistry
         /** @var AsMapper $asMapper */
         $asMapper = $attrs[0]->newInstance();
 
-        if (!class_exists($asMapper->tableModel)) {
+        if (!class_exists($asMapper->resourceModel)) {
             throw new InvalidMapperDeclarationException(sprintf(
                 'Mapper %s declares missing table model %s.',
                 $mapperClass,
-                $asMapper->tableModel,
+                $asMapper->resourceModel,
             ));
         }
 
@@ -147,7 +147,7 @@ final class MapperRegistry
 
         return new MapperDefinition(
             mapperClass: $mapperClass,
-            tableModelClass: $asMapper->tableModel,
+            tableModelClass: $asMapper->resourceModel,
             domainModelClass: $asMapper->domainModel,
         );
     }

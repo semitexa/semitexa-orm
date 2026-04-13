@@ -10,7 +10,7 @@ use Attribute;
 final readonly class AsMapper
 {
     public function __construct(
-        public string $tableModel,
+        public string $resourceModel,
         public string $domainModel,
     ) {}
 }
