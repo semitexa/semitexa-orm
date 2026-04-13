@@ -15,6 +15,12 @@ final class TableModelMetadataRegistry
         private readonly ?TableModelMetadataValidator $validator = null,
     ) {}
 
+    public static function reset(): void
+    {
+        self::$cache = [];
+        self::$default = null;
+    }
+
     /**
      * @param class-string $tableModelClass
      */

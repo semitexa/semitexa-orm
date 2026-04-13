@@ -8,7 +8,7 @@ use Semitexa\Orm\Attribute\AsMapper;
 use Semitexa\Orm\Contract\TableModelMapper;
 use Semitexa\Orm\Tests\Fixture\Hydration\HydratableProductTableModel;
 
-#[AsMapper(tableModel: HydratableProductTableModel::class, domainModel: HydratableProductDomainModel::class)]
+#[AsMapper(resourceModel: HydratableProductTableModel::class, domainModel: HydratableProductDomainModel::class)]
 final class HydratableProductMapper implements TableModelMapper
 {
     public function toDomain(object $tableModel): object

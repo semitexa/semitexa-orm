@@ -8,7 +8,7 @@ use Semitexa\Orm\Attribute\AsMapper;
 use Semitexa\Orm\Contract\TableModelMapper;
 use Semitexa\Orm\Tests\Fixture\Metadata\ValidTaggedProductTableModel;
 
-#[AsMapper(tableModel: ValidTaggedProductTableModel::class, domainModel: TaggedProductDomainModel::class)]
+#[AsMapper(resourceModel: ValidTaggedProductTableModel::class, domainModel: TaggedProductDomainModel::class)]
 final class TaggedProductMapper implements TableModelMapper
 {
     public function toDomain(object $tableModel): object
