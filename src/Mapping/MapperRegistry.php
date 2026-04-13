@@ -131,7 +131,7 @@ final class MapperRegistry
 
         if (!class_exists($asMapper->resourceModel)) {
             throw new InvalidMapperDeclarationException(sprintf(
-                'Mapper %s declares missing table model %s.',
+                'Mapper %s declares missing resource model %s.',
                 $mapperClass,
                 $asMapper->resourceModel,
             ));
