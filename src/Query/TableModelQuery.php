@@ -274,7 +274,7 @@ final class TableModelQuery
 
     private function resolveTenantColumnName(\Semitexa\Orm\Metadata\TableModelMetadata $metadata): string
     {
-        $tenantColumn = $metadata->tenantPolicy?->column ?? 'tenantId';
+        $tenantColumn = $metadata->tenantPolicy->column ?? 'tenantId';
 
         if ($metadata->hasColumn($tenantColumn)) {
             return $metadata->column($tenantColumn)->columnName;
