@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Metadata;
 
-final readonly class TableModelMetadata
+final readonly class ResourceModelMetadata
 {
     /**
      * @param array<string, ColumnMetadata> $columnsByProperty

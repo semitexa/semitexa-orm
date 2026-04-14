@@ -11,30 +11,26 @@ use Semitexa\Orm\Exception\InvalidMapperDeclarationException;
 use Semitexa\Orm\Exception\MissingMapperException;
 use Semitexa\Orm\Mapping\MapperRegistry;
 use Semitexa\Orm\Tests\Fixture\Mapping\DuplicateValidProductMapper;
-use Semitexa\Orm\Tests\Fixture\Mapping\HydratableProductDomainModel;
-use Semitexa\Orm\Tests\Fixture\Mapping\HydratableProductMapper;
-use Semitexa\Orm\Tests\Fixture\Mapping\InvalidMappedDomainModel;
-use Semitexa\Orm\Tests\Fixture\Mapping\InvalidMappedProductMapper;
-use Semitexa\Orm\Tests\Fixture\Mapping\MissingMapperDomainModel;
-use Semitexa\Orm\Tests\Fixture\Mapping\NonImplementingMapper;
-use Semitexa\Orm\Tests\Fixture\Mapping\ValidProductDomainModel;
-use Semitexa\Orm\Tests\Fixture\Mapping\ValidProductMapper;
-use Semitexa\Orm\Tests\Fixture\Hydration\HydratableProductTableModel;
-use Semitexa\Orm\Tests\Fixture\Metadata\ValidProductTableModel;
 
-require_once __DIR__ . '/../../Fixture/Metadata/ValidCategoryTableModel.php';
-require_once __DIR__ . '/../../Fixture/Metadata/ValidReviewTableModel.php';
-require_once __DIR__ . '/../../Fixture/Metadata/ValidProductTableModel.php';
-require_once __DIR__ . '/../../Fixture/Mapping/ValidProductDomainModel.php';
-require_once __DIR__ . '/../../Fixture/Hydration/HydratableProductTableModel.php';
-require_once __DIR__ . '/../../Fixture/Mapping/HydratableProductDomainModel.php';
-require_once __DIR__ . '/../../Fixture/Mapping/HydratableProductMapper.php';
-require_once __DIR__ . '/../../Fixture/Mapping/MissingMapperDomainModel.php';
-require_once __DIR__ . '/../../Fixture/Mapping/InvalidMappedDomainModel.php';
-require_once __DIR__ . '/../../Fixture/Mapping/ValidProductMapper.php';
-require_once __DIR__ . '/../../Fixture/Mapping/DuplicateValidProductMapper.php';
-require_once __DIR__ . '/../../Fixture/Mapping/InvalidMappedProductMapper.php';
-require_once __DIR__ . '/../../Fixture/Mapping/NonImplementingMapper.php';
+use Semitexa\Orm\Tests\Fixture\Mapping\HydratableProductDomainModel;
+
+use Semitexa\Orm\Tests\Fixture\Mapping\HydratableProductMapper;
+
+use Semitexa\Orm\Tests\Fixture\Mapping\InvalidMappedDomainModel;
+
+use Semitexa\Orm\Tests\Fixture\Mapping\InvalidMappedProductMapper;
+
+use Semitexa\Orm\Tests\Fixture\Mapping\MissingMapperDomainModel;
+
+use Semitexa\Orm\Tests\Fixture\Mapping\NonImplementingMapper;
+
+use Semitexa\Orm\Tests\Fixture\Mapping\ValidProductDomainModel;
+
+use Semitexa\Orm\Tests\Fixture\Mapping\ValidProductMapperInterface;
+
+use Semitexa\Orm\Tests\Fixture\Hydration\HydratableProductResourceModel;
+
+use Semitexa\Orm\Tests\Fixture\Metadata\ValidProductResourceModel;
 
 final class MapperRegistryTest extends TestCase
 {
@@ -42,12 +38,12 @@ final class MapperRegistryTest extends TestCase
     public function builds_valid_mapper_definitions(): void
     {
         $registry = new MapperRegistry();
-        $registry->build(mapperClasses: [ValidProductMapper::class]);
+        $registry->build(mapperClasses: [ValidProductMapperInterface::class]);
 
-        $definition = $registry->definitionFor(ValidProductTableModel::class, ValidProductDomainModel::class);
+        $definition = $registry->definitionFor(ValidProductResourceModel::class, ValidProductDomainModel::class);
 
-        $this->assertSame(ValidProductMapper::class, $definition->mapperClass);
-        $this->assertSame(ValidProductTableModel::class, $definition->tableModelClass);
+        $this->assertSame(ValidProductMapperInterface::class, $definition->mapperClass);
+        $this->assertSame(ValidProductResourceModel::class, $definition->resourceModelClass);
         $this->assertSame(ValidProductDomainModel::class, $definition->domainModelClass);
     }
 
@@ -55,11 +51,11 @@ final class MapperRegistryTest extends TestCase
     public function rejects_missing_mapper_for_unregistered_pair(): void
     {
         $registry = new MapperRegistry();
-        $registry->build(mapperClasses: [ValidProductMapper::class]);
+        $registry->build(mapperClasses: [ValidProductMapperInterface::class]);
 
         $this->expectException(MissingMapperException::class);
 
-        $registry->definitionFor(ValidProductTableModel::class, MissingMapperDomainModel::class);
+        $registry->definitionFor(ValidProductResourceModel::class, MissingMapperDomainModel::class);
     }
 
     #[Test]
@@ -69,7 +65,7 @@ final class MapperRegistryTest extends TestCase
 
         $this->expectException(DuplicateMapperException::class);
 
-        $registry->build(mapperClasses: [ValidProductMapper::class, DuplicateValidProductMapper::class]);
+        $registry->build(mapperClasses: [ValidProductMapperInterface::class, DuplicateValidProductMapper::class]);
     }
 
     #[Test]
@@ -88,7 +84,7 @@ final class MapperRegistryTest extends TestCase
         $registry = new MapperRegistry();
         $registry->build(mapperClasses: [HydratableProductMapper::class]);
 
-        $tableModel = new HydratableProductTableModel(
+        $resourceModel = new HydratableProductResourceModel(
             id: 'product-1',
             tenantId: 'tenant-1',
             name: 'Product 1',
@@ -96,7 +92,7 @@ final class MapperRegistryTest extends TestCase
             deletedAt: null,
         );
 
-        $domainModel = $registry->mapToDomain($tableModel, HydratableProductDomainModel::class);
+        $domainModel = $registry->mapToDomain($resourceModel, HydratableProductDomainModel::class);
 
         $this->assertInstanceOf(HydratableProductDomainModel::class, $domainModel);
         $this->assertSame('product-1', $domainModel->id);

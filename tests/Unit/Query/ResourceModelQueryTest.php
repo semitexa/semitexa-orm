@@ -6,40 +6,38 @@ namespace Semitexa\Orm\Tests\Unit\Query;
 
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
-use Semitexa\Orm\Hydration\TableModelHydrator;
-use Semitexa\Orm\Hydration\TableModelRelationLoader;
+use Semitexa\Orm\Hydration\ResourceModelHydrator;
+use Semitexa\Orm\Hydration\ResourceModelRelationLoader;
 use Semitexa\Orm\Mapping\MapperRegistry;
 use Semitexa\Orm\Query\Direction;
 use Semitexa\Orm\Query\Operator;
 use Semitexa\Orm\Query\SystemScopeToken;
-use Semitexa\Orm\Query\TableModelQuery;
+use Semitexa\Orm\Query\ResourceModelQuery;
 use Semitexa\Orm\Tests\Fixture\Hydration\FakeDatabaseAdapter;
-use Semitexa\Orm\Tests\Fixture\Hydration\HydratableProductTableModel;
-use Semitexa\Orm\Tests\Fixture\Metadata\MappedTenantPropertyTableModel;
-use Semitexa\Orm\Tests\Fixture\Metadata\ValidCategoryTableModel;
+
+use Semitexa\Orm\Tests\Fixture\Hydration\HydratableProductResourceModel;
+
+use Semitexa\Orm\Tests\Fixture\Metadata\MappedTenantPropertyResourceModel;
+
+use Semitexa\Orm\Tests\Fixture\Metadata\ValidCategoryResourceModel;
+
 use Semitexa\Orm\Tests\Fixture\Mapping\HydratableProductDomainModel;
+
 use Semitexa\Orm\Tests\Fixture\Mapping\HydratableProductMapper;
-use Semitexa\Orm\Tests\Fixture\Metadata\ValidReviewTableModel;
 
-require_once __DIR__ . '/../../Fixture/Metadata/ValidCategoryTableModel.php';
-require_once __DIR__ . '/../../Fixture/Metadata/ValidReviewTableModel.php';
-require_once __DIR__ . '/../../Fixture/Metadata/MappedTenantPropertyTableModel.php';
-require_once __DIR__ . '/../../Fixture/Hydration/HydratableProductTableModel.php';
-require_once __DIR__ . '/../../Fixture/Hydration/FakeDatabaseAdapter.php';
-require_once __DIR__ . '/../../Fixture/Mapping/HydratableProductDomainModel.php';
-require_once __DIR__ . '/../../Fixture/Mapping/HydratableProductMapper.php';
+use Semitexa\Orm\Tests\Fixture\Metadata\ValidReviewResourceModel;
 
-final class TableModelQueryTest extends TestCase
+final class ResourceModelQueryTest extends TestCase
 {
     #[Test]
     public function builds_sql_and_params_from_validated_column_refs(): void
     {
         $adapter = new FakeDatabaseAdapter([]);
-        $hydrator = new TableModelHydrator();
-        $relationLoader = new TableModelRelationLoader($adapter, $hydrator);
+        $hydrator = new ResourceModelHydrator();
+        $relationLoader = new ResourceModelRelationLoader($adapter, $hydrator);
 
-        $query = new TableModelQuery(
-            HydratableProductTableModel::class,
+        $query = new ResourceModelQuery(
+            HydratableProductResourceModel::class,
             $adapter,
             $hydrator,
             $relationLoader,
@@ -47,9 +45,9 @@ final class TableModelQueryTest extends TestCase
 
         $query
             ->forTenant('tenant-1')
-            ->where(HydratableProductTableModel::column('tenantId'), Operator::Equals, 'tenant-1')
-            ->where(HydratableProductTableModel::column('name'), Operator::Like, '%Product%')
-            ->orderBy(HydratableProductTableModel::column('name'), Direction::Asc)
+            ->where(HydratableProductResourceModel::column('tenantId'), Operator::Equals, 'tenant-1')
+            ->where(HydratableProductResourceModel::column('name'), Operator::Like, '%Product%')
+            ->orderBy(HydratableProductResourceModel::column('name'), Direction::Asc)
             ->limit(20)
             ->offset(10);
 
@@ -93,10 +91,10 @@ final class TableModelQueryTest extends TestCase
             ],
         ]);
 
-        $hydrator = new TableModelHydrator();
-        $relationLoader = new TableModelRelationLoader($adapter, $hydrator);
-        $query = new TableModelQuery(
-            HydratableProductTableModel::class,
+        $hydrator = new ResourceModelHydrator();
+        $relationLoader = new ResourceModelRelationLoader($adapter, $hydrator);
+        $query = new ResourceModelQuery(
+            HydratableProductResourceModel::class,
             $adapter,
             $hydrator,
             $relationLoader,
@@ -104,24 +102,24 @@ final class TableModelQueryTest extends TestCase
 
         $items = $query
             ->forTenant('tenant-1')
-            ->where(HydratableProductTableModel::column('tenantId'), Operator::Equals, 'tenant-1')
-            ->orderBy(HydratableProductTableModel::column('name'), Direction::Asc)
-            ->withRelation(HydratableProductTableModel::relation('category'))
-            ->withRelation(HydratableProductTableModel::relation('reviews'))
+            ->where(HydratableProductResourceModel::column('tenantId'), Operator::Equals, 'tenant-1')
+            ->orderBy(HydratableProductResourceModel::column('name'), Direction::Asc)
+            ->withRelation(HydratableProductResourceModel::relation('category'))
+            ->withRelation(HydratableProductResourceModel::relation('reviews'))
             ->fetchAll();
 
         $this->assertCount(2, $items);
         $this->assertCount(3, $adapter->executed);
-        $this->assertContainsOnlyInstancesOf(HydratableProductTableModel::class, $items);
+        $this->assertContainsOnlyInstancesOf(HydratableProductResourceModel::class, $items);
 
         $first = $items[0];
         $second = $items[1];
 
         $this->assertTrue($first->category->isLoaded());
         $this->assertTrue($first->reviews->isLoaded());
-        $this->assertInstanceOf(ValidCategoryTableModel::class, $first->category->value());
+        $this->assertInstanceOf(ValidCategoryResourceModel::class, $first->category->value());
         $this->assertSame('Category 1', $first->category->value()->name);
-        $this->assertContainsOnlyInstancesOf(ValidReviewTableModel::class, $first->reviews->value());
+        $this->assertContainsOnlyInstancesOf(ValidReviewResourceModel::class, $first->reviews->value());
         $this->assertCount(1, $first->reviews->value());
 
         $this->assertTrue($second->category->isLoaded());
@@ -144,10 +142,10 @@ final class TableModelQueryTest extends TestCase
             ],
         ]);
 
-        $hydrator = new TableModelHydrator();
-        $relationLoader = new TableModelRelationLoader($adapter, $hydrator);
-        $query = new TableModelQuery(
-            HydratableProductTableModel::class,
+        $hydrator = new ResourceModelHydrator();
+        $relationLoader = new ResourceModelRelationLoader($adapter, $hydrator);
+        $query = new ResourceModelQuery(
+            HydratableProductResourceModel::class,
             $adapter,
             $hydrator,
             $relationLoader,
@@ -155,10 +153,10 @@ final class TableModelQueryTest extends TestCase
 
         $item = $query
             ->forTenant('tenant-1')
-            ->where(HydratableProductTableModel::column('id'), Operator::Equals, 'product-1')
+            ->where(HydratableProductResourceModel::column('id'), Operator::Equals, 'product-1')
             ->fetchOne();
 
-        $this->assertInstanceOf(HydratableProductTableModel::class, $item);
+        $this->assertInstanceOf(HydratableProductResourceModel::class, $item);
         $this->assertSame('product-1', $item->id);
         $this->assertCount(1, $adapter->executed);
         $this->assertSame(
@@ -168,30 +166,30 @@ final class TableModelQueryTest extends TestCase
     }
 
     #[Test]
-    public function rejects_column_and_relation_refs_from_other_table_models(): void
+    public function rejects_column_and_relation_refs_from_other_resource_models(): void
     {
         $adapter = new FakeDatabaseAdapter([]);
-        $hydrator = new TableModelHydrator();
-        $relationLoader = new TableModelRelationLoader($adapter, $hydrator);
-        $query = new TableModelQuery(
-            HydratableProductTableModel::class,
+        $hydrator = new ResourceModelHydrator();
+        $relationLoader = new ResourceModelRelationLoader($adapter, $hydrator);
+        $query = new ResourceModelQuery(
+            HydratableProductResourceModel::class,
             $adapter,
             $hydrator,
             $relationLoader,
         );
 
         $this->expectException(\InvalidArgumentException::class);
-        $query->where(ValidCategoryTableModel::column('name'), Operator::Equals, 'Category 1');
+        $query->where(ValidCategoryResourceModel::column('name'), Operator::Equals, 'Category 1');
     }
 
     #[Test]
     public function tenant_scoped_query_requires_tenant_context_by_default(): void
     {
         $adapter = new FakeDatabaseAdapter([]);
-        $hydrator = new TableModelHydrator();
-        $relationLoader = new TableModelRelationLoader($adapter, $hydrator);
-        $query = new TableModelQuery(
-            HydratableProductTableModel::class,
+        $hydrator = new ResourceModelHydrator();
+        $relationLoader = new ResourceModelRelationLoader($adapter, $hydrator);
+        $query = new ResourceModelQuery(
+            HydratableProductResourceModel::class,
             $adapter,
             $hydrator,
             $relationLoader,
@@ -205,10 +203,10 @@ final class TableModelQueryTest extends TestCase
     public function resolves_tenant_scope_property_to_declared_column_name(): void
     {
         $adapter = new FakeDatabaseAdapter([]);
-        $hydrator = new TableModelHydrator();
-        $relationLoader = new TableModelRelationLoader($adapter, $hydrator);
-        $query = new TableModelQuery(
-            MappedTenantPropertyTableModel::class,
+        $hydrator = new ResourceModelHydrator();
+        $relationLoader = new ResourceModelRelationLoader($adapter, $hydrator);
+        $query = new ResourceModelQuery(
+            MappedTenantPropertyResourceModel::class,
             $adapter,
             $hydrator,
             $relationLoader,
@@ -227,10 +225,10 @@ final class TableModelQueryTest extends TestCase
     public function can_override_soft_delete_and_tenant_scope_policies_explicitly(): void
     {
         $adapter = new FakeDatabaseAdapter([]);
-        $hydrator = new TableModelHydrator();
-        $relationLoader = new TableModelRelationLoader($adapter, $hydrator);
-        $query = new TableModelQuery(
-            HydratableProductTableModel::class,
+        $hydrator = new ResourceModelHydrator();
+        $relationLoader = new ResourceModelRelationLoader($adapter, $hydrator);
+        $query = new ResourceModelQuery(
+            HydratableProductResourceModel::class,
             $adapter,
             $hydrator,
             $relationLoader,
@@ -251,10 +249,10 @@ final class TableModelQueryTest extends TestCase
     public function supports_explicit_null_predicates_without_bound_params(): void
     {
         $adapter = new FakeDatabaseAdapter([]);
-        $hydrator = new TableModelHydrator();
-        $relationLoader = new TableModelRelationLoader($adapter, $hydrator);
-        $query = new TableModelQuery(
-            HydratableProductTableModel::class,
+        $hydrator = new ResourceModelHydrator();
+        $relationLoader = new ResourceModelRelationLoader($adapter, $hydrator);
+        $query = new ResourceModelQuery(
+            HydratableProductResourceModel::class,
             $adapter,
             $hydrator,
             $relationLoader,
@@ -262,8 +260,8 @@ final class TableModelQueryTest extends TestCase
 
         $query
             ->forTenant('tenant-1')
-            ->whereNull(HydratableProductTableModel::column('deletedAt'))
-            ->whereNotNull(HydratableProductTableModel::column('categoryId'));
+            ->whereNull(HydratableProductResourceModel::column('deletedAt'))
+            ->whereNotNull(HydratableProductResourceModel::column('categoryId'));
 
         $this->assertSame(
             'SELECT * FROM `hydratable_products` WHERE `tenantId` = :tenant_scope AND `deletedAt` IS NULL AND `deletedAt` IS NULL AND `categoryId` IS NOT NULL',
@@ -273,7 +271,7 @@ final class TableModelQueryTest extends TestCase
     }
 
     #[Test]
-    public function fetch_all_as_maps_table_models_into_domain_models_via_registry(): void
+    public function fetch_all_as_maps_resource_models_into_domain_models_via_registry(): void
     {
         $adapter = new FakeDatabaseAdapter([
             'SELECT * FROM `hydratable_products` WHERE `tenantId` = :tenant_scope AND `deletedAt` IS NULL ORDER BY `name` ASC' => [
@@ -287,10 +285,10 @@ final class TableModelQueryTest extends TestCase
             ],
         ]);
 
-        $hydrator = new TableModelHydrator();
-        $relationLoader = new TableModelRelationLoader($adapter, $hydrator);
-        $query = new TableModelQuery(
-            HydratableProductTableModel::class,
+        $hydrator = new ResourceModelHydrator();
+        $relationLoader = new ResourceModelRelationLoader($adapter, $hydrator);
+        $query = new ResourceModelQuery(
+            HydratableProductResourceModel::class,
             $adapter,
             $hydrator,
             $relationLoader,
@@ -303,7 +301,7 @@ final class TableModelQueryTest extends TestCase
 
         $items = $query
             ->forTenant('tenant-1')
-            ->orderBy(HydratableProductTableModel::column('name'), Direction::Asc)
+            ->orderBy(HydratableProductResourceModel::column('name'), Direction::Asc)
             ->fetchAllAs(HydratableProductDomainModel::class, $registry);
 
         $this->assertCount(1, $items);

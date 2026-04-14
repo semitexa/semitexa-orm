@@ -6,33 +6,29 @@ namespace Semitexa\Orm\Tests\Unit\Repository;
 
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
-use Semitexa\Orm\Hydration\TableModelHydrator;
-use Semitexa\Orm\Hydration\TableModelRelationLoader;
+use Semitexa\Orm\Hydration\ResourceModelHydrator;
+use Semitexa\Orm\Hydration\ResourceModelRelationLoader;
 use Semitexa\Orm\Mapping\MapperRegistry;
 use Semitexa\Orm\Query\Direction;
 use Semitexa\Orm\Query\SystemScopeToken;
 use Semitexa\Orm\Repository\DomainRepository;
 use Semitexa\Orm\Tests\Fixture\Hydration\FakeDatabaseAdapter;
-use Semitexa\Orm\Tests\Fixture\Hydration\HydratableProductTableModel;
-use Semitexa\Orm\Tests\Fixture\Mapping\HydratableProductDomainModel;
-use Semitexa\Orm\Tests\Fixture\Mapping\HydratableProductMapper;
-use Semitexa\Orm\Tests\Fixture\Metadata\ValidCategoryTableModel;
-use Semitexa\Orm\Tests\Fixture\Metadata\ValidReviewTableModel;
-use Semitexa\Orm\Tests\Fixture\Persistence\PersistableProductDomainModel;
-use Semitexa\Orm\Tests\Fixture\Persistence\PersistableProductMapper;
-use Semitexa\Orm\Tests\Fixture\Metadata\ValidProductTableModel;
 
-require_once __DIR__ . '/../../Fixture/Metadata/ValidCategoryTableModel.php';
-require_once __DIR__ . '/../../Fixture/Metadata/ValidReviewTableModel.php';
-require_once __DIR__ . '/../../Fixture/Metadata/ValidProductTableModel.php';
-require_once __DIR__ . '/../../Fixture/Hydration/HydratableProductTableModel.php';
-require_once __DIR__ . '/../../Fixture/Hydration/FakeDatabaseAdapter.php';
-require_once __DIR__ . '/../../Fixture/Mapping/HydratableProductDomainModel.php';
-require_once __DIR__ . '/../../Fixture/Mapping/HydratableProductMapper.php';
-require_once __DIR__ . '/../../Fixture/Persistence/PersistableCategoryDomainModel.php';
-require_once __DIR__ . '/../../Fixture/Persistence/PersistableReviewDomainModel.php';
-require_once __DIR__ . '/../../Fixture/Persistence/PersistableProductDomainModel.php';
-require_once __DIR__ . '/../../Fixture/Persistence/PersistableProductMapper.php';
+use Semitexa\Orm\Tests\Fixture\Hydration\HydratableProductResourceModel;
+
+use Semitexa\Orm\Tests\Fixture\Mapping\HydratableProductDomainModel;
+
+use Semitexa\Orm\Tests\Fixture\Mapping\HydratableProductMapper;
+
+use Semitexa\Orm\Tests\Fixture\Metadata\ValidCategoryResourceModel;
+
+use Semitexa\Orm\Tests\Fixture\Metadata\ValidReviewResourceModel;
+
+use Semitexa\Orm\Tests\Fixture\Persistence\PersistableProductDomainModel;
+
+use Semitexa\Orm\Tests\Fixture\Persistence\PersistableProductMapper;
+
+use Semitexa\Orm\Tests\Fixture\Metadata\ValidProductResourceModel;
 
 final class DomainRepositoryTest extends TestCase
 {
@@ -75,7 +71,7 @@ final class DomainRepositoryTest extends TestCase
         $repository = $this->hydratableRepository($adapter)->forTenant('tenant-1');
         $items = $repository->findBy(
             ['tenantId' => 'tenant-1'],
-            relations: [HydratableProductTableModel::relation('category')],
+            relations: [HydratableProductResourceModel::relation('category')],
             limit: 10,
         );
 
@@ -99,7 +95,7 @@ final class DomainRepositoryTest extends TestCase
 
         $repository = $this->hydratableRepository($adapter)->forTenant('tenant-1');
         $items = $repository
-            ->orderBy($repository->query(), HydratableProductTableModel::column('name'), Direction::Desc)
+            ->orderBy($repository->query(), HydratableProductResourceModel::column('name'), Direction::Desc)
             ->limit(5)
             ->fetchAllAs(HydratableProductDomainModel::class, $this->hydratableRegistry());
 
@@ -161,12 +157,12 @@ final class DomainRepositoryTest extends TestCase
     private function hydratableRepository(FakeDatabaseAdapter $adapter): DomainRepository
     {
         return new DomainRepository(
-            tableModelClass: HydratableProductTableModel::class,
+            resourceModelClass: HydratableProductResourceModel::class,
             domainModelClass: HydratableProductDomainModel::class,
             adapter: $adapter,
             mapperRegistry: $this->hydratableRegistry(),
-            hydrator: new TableModelHydrator(),
-            relationLoader: new TableModelRelationLoader($adapter, new TableModelHydrator()),
+            hydrator: new ResourceModelHydrator(),
+            relationLoader: new ResourceModelRelationLoader($adapter, new ResourceModelHydrator()),
         );
     }
 
@@ -179,12 +175,12 @@ final class DomainRepositoryTest extends TestCase
         );
 
         return new DomainRepository(
-            tableModelClass: ValidProductTableModel::class,
+            resourceModelClass: ValidProductResourceModel::class,
             domainModelClass: PersistableProductDomainModel::class,
             adapter: $adapter,
             mapperRegistry: $registry,
-            hydrator: new TableModelHydrator(),
-            relationLoader: new TableModelRelationLoader($adapter, new TableModelHydrator()),
+            hydrator: new ResourceModelHydrator(),
+            relationLoader: new ResourceModelRelationLoader($adapter, new ResourceModelHydrator()),
         );
     }
 

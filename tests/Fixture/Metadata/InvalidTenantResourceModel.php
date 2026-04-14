@@ -10,16 +10,13 @@ use Semitexa\Orm\Attribute\FromTable;
 use Semitexa\Orm\Attribute\PrimaryKey;
 use Semitexa\Orm\Attribute\TenantScoped;
 
-#[FromTable(name: 'mapped_tenant_property_models')]
+#[FromTable(name: 'invalid_tenant_models')]
 #[TenantScoped(strategy: 'column', column: 'tenantId')]
-final readonly class MappedTenantPropertyTableModel
+final readonly class InvalidTenantResourceModel
 {
     public function __construct(
         #[PrimaryKey(strategy: 'uuid')]
         #[Column(type: MySqlType::Varchar, length: 36)]
         public string $id,
-
-        #[Column(name: 'tenant_id', type: MySqlType::Varchar, length: 64)]
-        public string $tenantId,
     ) {}
 }

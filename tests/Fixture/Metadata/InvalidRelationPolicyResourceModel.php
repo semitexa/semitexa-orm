@@ -11,7 +11,7 @@ use Semitexa\Orm\Attribute\FromTable;
 use Semitexa\Orm\Attribute\PrimaryKey;
 
 #[FromTable(name: 'invalid_relation_policy_models')]
-final readonly class InvalidRelationPolicyTableModel
+final readonly class InvalidRelationPolicyResourceModel
 {
     public function __construct(
         #[PrimaryKey(strategy: 'uuid')]
@@ -21,7 +21,7 @@ final readonly class InvalidRelationPolicyTableModel
         #[Column(type: MySqlType::Varchar, length: 36)]
         public string $categoryId,
 
-        #[BelongsTo(target: ValidCategoryTableModel::class, foreignKey: 'categoryId')]
-        public ?ValidCategoryTableModel $category = null,
+        #[BelongsTo(target: ValidCategoryResourceModel::class, foreignKey: 'categoryId')]
+        public ?ValidCategoryResourceModel $category = null,
     ) {}
 }

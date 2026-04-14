@@ -5,31 +5,31 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Hydration;
 
 use Semitexa\Orm\Metadata\ColumnMetadata;
-use Semitexa\Orm\Metadata\TableModelMetadataRegistry;
+use Semitexa\Orm\Metadata\ResourceModelMetadataRegistry;
 use Semitexa\Orm\Schema\ColumnDefinition;
 
-final class TableModelHydrator
+final class ResourceModelHydrator
 {
     public function __construct(
-        private readonly ?TypeCaster $typeCaster = null,
-        private readonly ?TableModelMetadataRegistry $metadataRegistry = null,
+        private readonly ?TypeCaster                    $typeCaster = null,
+        private readonly ?ResourceModelMetadataRegistry $metadataRegistry = null,
     ) {}
 
     /**
      * @template T of object
      * @param array<string, mixed> $row
-     * @param class-string<T> $tableModelClass
+     * @param class-string<T> $resourceModelClass
      * @return T
      */
-    public function hydrate(array $row, string $tableModelClass): object
+    public function hydrate(array $row, string $resourceModelClass): object
     {
-        $metadata = ($this->metadataRegistry ?? TableModelMetadataRegistry::default())->for($tableModelClass);
+        $metadata = ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($resourceModelClass);
         $typeCaster = $this->typeCaster ?? new TypeCaster();
-        $ref = new \ReflectionClass($tableModelClass);
+        $ref = new \ReflectionClass($resourceModelClass);
         $constructor = $ref->getConstructor();
 
         if ($constructor === null) {
-            return new $tableModelClass();
+            return new $resourceModelClass();
         }
 
         $arguments = [];
@@ -60,7 +60,7 @@ final class TableModelHydrator
             throw new \InvalidArgumentException(sprintf(
                 'Cannot hydrate constructor parameter "%s" on %s.',
                 $parameterName,
-                $tableModelClass,
+                $resourceModelClass,
             ));
         }
 
@@ -70,20 +70,20 @@ final class TableModelHydrator
     /**
      * @return array<string, mixed>
      */
-    public function dehydrate(object $tableModel): array
+    public function dehydrate(object $resourceModel): array
     {
-        $metadata = ($this->metadataRegistry ?? TableModelMetadataRegistry::default())->for($tableModel::class);
+        $metadata = ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($resourceModel::class);
         $typeCaster = $this->typeCaster ?? new TypeCaster();
 
         $data = [];
         foreach ($metadata->columns() as $column) {
-            $property = new \ReflectionProperty($tableModel, $column->propertyName);
-            if (!$property->isInitialized($tableModel)) {
+            $property = new \ReflectionProperty($resourceModel, $column->propertyName);
+            if (!$property->isInitialized($resourceModel)) {
                 continue;
             }
 
             $data[$column->columnName] = $typeCaster->castToDb(
-                $property->getValue($tableModel),
+                $property->getValue($resourceModel),
                 $this->toColumnDefinition($column),
             );
         }

@@ -7,21 +7,17 @@ namespace Semitexa\Orm\Tests\Unit\Metadata;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Semitexa\Orm\Metadata\ColumnRef;
-use Semitexa\Orm\Tests\Fixture\Metadata\ValidProductTableModel;
-
-require_once __DIR__ . '/../../Fixture/Metadata/ValidCategoryTableModel.php';
-require_once __DIR__ . '/../../Fixture/Metadata/ValidReviewTableModel.php';
-require_once __DIR__ . '/../../Fixture/Metadata/ValidProductTableModel.php';
+use Semitexa\Orm\Tests\Fixture\Metadata\ValidProductResourceModel;
 
 final class ColumnRefTest extends TestCase
 {
     #[Test]
-    public function can_build_a_column_reference_from_a_table_model(): void
+    public function can_build_a_column_reference_from_a_resource_model(): void
     {
-        $ref = ValidProductTableModel::column('tenantId');
+        $ref = ValidProductResourceModel::column('tenantId');
 
         $this->assertInstanceOf(ColumnRef::class, $ref);
-        $this->assertSame(ValidProductTableModel::class, $ref->tableModelClass);
+        $this->assertSame(ValidProductResourceModel::class, $ref->resourceModelClass);
         $this->assertSame('tenantId', $ref->propertyName);
         $this->assertSame('tenantId', $ref->columnName);
     }
@@ -31,6 +27,6 @@ final class ColumnRefTest extends TestCase
     {
         $this->expectException(\InvalidArgumentException::class);
 
-        ValidProductTableModel::column('missingProperty');
+        ValidProductResourceModel::column('missingProperty');
     }
 }

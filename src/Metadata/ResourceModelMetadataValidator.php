@@ -7,32 +7,32 @@ namespace Semitexa\Orm\Metadata;
 use Semitexa\Orm\Exception\InvalidColumnDeclarationException;
 use Semitexa\Orm\Exception\InvalidRelationDeclarationException;
 use Semitexa\Orm\Exception\InvalidSoftDeleteDeclarationException;
-use Semitexa\Orm\Exception\InvalidTableModelException;
+use Semitexa\Orm\Exception\InvalidResourceModelException;
 use Semitexa\Orm\Exception\InvalidTenantPolicyException;
 
-final class TableModelMetadataValidator
+final class ResourceModelMetadataValidator
 {
-    public function validate(TableModelMetadata $metadata): void
+    public function validate(ResourceModelMetadata $metadata): void
     {
         $ref = new \ReflectionClass($metadata->className);
 
         if (!$ref->isFinal()) {
-            throw new InvalidTableModelException(sprintf(
-                'TableModel %s must be final.',
+            throw new InvalidResourceModelException(sprintf(
+                'ResourceModel %s must be final.',
                 $metadata->className,
             ));
         }
 
         if (!$ref->isReadOnly()) {
-            throw new InvalidTableModelException(sprintf(
-                'TableModel %s must be readonly.',
+            throw new InvalidResourceModelException(sprintf(
+                'ResourceModel %s must be readonly.',
                 $metadata->className,
             ));
         }
 
         if ($metadata->columns() === []) {
             throw new InvalidColumnDeclarationException(sprintf(
-                'TableModel %s must declare at least one #[Column].',
+                'ResourceModel %s must declare at least one #[Column].',
                 $metadata->className,
             ));
         }
@@ -43,7 +43,7 @@ final class TableModelMetadataValidator
         );
         if (count($primaryKeys) !== 1) {
             throw new InvalidColumnDeclarationException(sprintf(
-                'TableModel %s must declare exactly one #[PrimaryKey] column.',
+                'ResourceModel %s must declare exactly one #[PrimaryKey] column.',
                 $metadata->className,
             ));
         }
@@ -140,7 +140,7 @@ final class TableModelMetadataValidator
         }
     }
 
-    private function hasDeclaredColumnName(TableModelMetadata $metadata, string $columnName): bool
+    private function hasDeclaredColumnName(ResourceModelMetadata $metadata, string $columnName): bool
     {
         foreach ($metadata->columns() as $column) {
             if ($column->columnName === $columnName) {

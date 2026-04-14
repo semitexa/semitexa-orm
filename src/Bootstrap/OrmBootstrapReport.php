@@ -7,13 +7,13 @@ namespace Semitexa\Orm\Bootstrap;
 final readonly class OrmBootstrapReport
 {
     /**
-     * @param list<class-string> $tableModelClasses
+     * @param list<class-string> $resourceModelClasses
      * @param list<class-string> $mapperClasses
      * @param list<class-string> $domainModelClasses
      * @param list<string> $crossConnectionWarnings
      */
     public function __construct(
-        public array $tableModelClasses,
+        public array $resourceModelClasses,
         public array $mapperClasses,
         public array $domainModelClasses,
         public array $crossConnectionWarnings = [],

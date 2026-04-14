@@ -5,9 +5,9 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Tests\Fixture\Mapping;
 
 use Semitexa\Orm\Attribute\AsMapper;
-use Semitexa\Orm\Tests\Fixture\Metadata\ValidProductTableModel;
+use Semitexa\Orm\Tests\Fixture\Metadata\ValidProductResourceModel;
 
-#[AsMapper(resourceModel: ValidProductTableModel::class, domainModel: ValidProductDomainModel::class)]
+#[AsMapper(resourceModel: ValidProductResourceModel::class, domainModel: ValidProductDomainModel::class)]
 final class NonImplementingMapper
 {
 }

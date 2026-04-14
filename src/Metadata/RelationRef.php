@@ -7,20 +7,20 @@ namespace Semitexa\Orm\Metadata;
 final readonly class RelationRef
 {
     public function __construct(
-        public string $tableModelClass,
+        public string $resourceModelClass,
         public string $propertyName,
     ) {}
 
     /**
-     * @param class-string $tableModelClass
+     * @param class-string $resourceModelClass
      */
-    public static function for(string $tableModelClass, string $propertyName): self
+    public static function for(string $resourceModelClass, string $propertyName): self
     {
-        $metadata = TableModelMetadataRegistry::default()->for($tableModelClass);
+        $metadata = ResourceModelMetadataRegistry::default()->for($resourceModelClass);
         $metadata->relation($propertyName);
 
         return new self(
-            tableModelClass: $tableModelClass,
+            resourceModelClass: $resourceModelClass,
             propertyName: $propertyName,
         );
     }

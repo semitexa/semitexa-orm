@@ -8,35 +8,35 @@ use Semitexa\Core\Discovery\ClassDiscovery;
 use Semitexa\Orm\Attribute\AsMapper;
 use Semitexa\Orm\Attribute\FromTable;
 use Semitexa\Orm\Mapping\MapperRegistry;
-use Semitexa\Orm\Metadata\TableModelMetadata;
-use Semitexa\Orm\Metadata\TableModelMetadataRegistry;
+use Semitexa\Orm\Metadata\ResourceModelMetadata;
+use Semitexa\Orm\Metadata\ResourceModelMetadataRegistry;
 
 final class OrmBootstrapValidator
 {
     public function __construct(
-        private readonly ?ClassDiscovery $classDiscovery = null,
-        private readonly ?TableModelMetadataRegistry $metadataRegistry = null,
-        private readonly ?MapperRegistry $mapperRegistry = null,
+        private readonly ?ClassDiscovery                $classDiscovery = null,
+        private readonly ?ResourceModelMetadataRegistry $metadataRegistry = null,
+        private readonly ?MapperRegistry                $mapperRegistry = null,
     ) {}
 
     /**
-     * @param list<class-string>|null $tableModelClasses
+     * @param list<class-string>|null $resourceModelClasses
      * @param list<class-string>|null $mapperClasses
      * @param list<class-string>|null $domainModelClasses
      */
     public function validate(
-        ?array $tableModelClasses = null,
+        ?array $resourceModelClasses = null,
         ?array $mapperClasses = null,
         ?array $domainModelClasses = null,
     ): OrmBootstrapReport {
-        $tableModelClasses ??= $this->classDiscovery()->findClassesWithAttribute(FromTable::class);
+        $resourceModelClasses ??= $this->classDiscovery()->findClassesWithAttribute(FromTable::class);
         $mapperClasses ??= $this->classDiscovery()->findClassesWithAttribute(AsMapper::class);
 
-        $metadataRegistry = $this->metadataRegistry ?? TableModelMetadataRegistry::default();
-        /** @var array<class-string, TableModelMetadata> $metadataByClass */
+        $metadataRegistry = $this->metadataRegistry ?? ResourceModelMetadataRegistry::default();
+        /** @var array<class-string, ResourceModelMetadata> $metadataByClass */
         $metadataByClass = [];
-        foreach ($tableModelClasses as $tableModelClass) {
-            $metadataByClass[$tableModelClass] = $metadataRegistry->for($tableModelClass);
+        foreach ($resourceModelClasses as $resourceModelClass) {
+            $metadataByClass[$resourceModelClass] = $metadataRegistry->for($resourceModelClass);
         }
 
         // Detect cross-connection relations
@@ -72,7 +72,7 @@ final class OrmBootstrapValidator
         )));
 
         return new OrmBootstrapReport(
-            tableModelClasses: array_values($tableModelClasses),
+            resourceModelClasses: array_values($resourceModelClasses),
             mapperClasses: array_values($mapperClasses),
             domainModelClasses: array_values($domainModelClasses),
             crossConnectionWarnings: $crossConnectionWarnings,

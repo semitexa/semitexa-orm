@@ -8,12 +8,12 @@ final readonly class MapperDefinition
 {
     public function __construct(
         public string $mapperClass,
-        public string $tableModelClass,
+        public string $resourceModelClass,
         public string $domainModelClass,
     ) {}
 
     public function key(): string
     {
-        return $this->tableModelClass . "\0" . $this->domainModelClass;
+        return $this->resourceModelClass . "\0" . $this->domainModelClass;
     }
 }

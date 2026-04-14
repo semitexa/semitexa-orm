@@ -15,19 +15,19 @@ use Semitexa\Orm\Attribute\PrimaryKey;
 use Semitexa\Orm\Attribute\SoftDelete;
 use Semitexa\Orm\Attribute\TenantScoped;
 
-final class TableModelMetadataExtractor
+final class ResourceModelMetadataExtractor
 {
     /**
-     * @param class-string $tableModelClass
+     * @param class-string $resourceModelClass
      */
-    public function extract(string $tableModelClass): TableModelMetadata
+    public function extract(string $resourceModelClass): ResourceModelMetadata
     {
-        $ref = new \ReflectionClass($tableModelClass);
+        $ref = new \ReflectionClass($resourceModelClass);
         $fromTableAttrs = $ref->getAttributes(FromTable::class);
         if ($fromTableAttrs === []) {
             throw new \InvalidArgumentException(sprintf(
                 'Class %s has no #[FromTable] attribute.',
-                $tableModelClass,
+                $resourceModelClass,
             ));
         }
 
@@ -56,8 +56,8 @@ final class TableModelMetadataExtractor
             }
         }
 
-        return new TableModelMetadata(
-            className: $tableModelClass,
+        return new ResourceModelMetadata(
+            className: $resourceModelClass,
             tableName: $fromTable->name,
             columnsByProperty: $columnsByProperty,
             relationsByProperty: $relationsByProperty,

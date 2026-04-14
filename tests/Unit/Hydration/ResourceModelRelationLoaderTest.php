@@ -6,19 +6,17 @@ namespace Semitexa\Orm\Tests\Unit\Hydration;
 
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
-use Semitexa\Orm\Hydration\TableModelHydrator;
-use Semitexa\Orm\Hydration\TableModelRelationLoader;
+use Semitexa\Orm\Hydration\ResourceModelHydrator;
+use Semitexa\Orm\Hydration\ResourceModelRelationLoader;
 use Semitexa\Orm\Tests\Fixture\Hydration\FakeDatabaseAdapter;
-use Semitexa\Orm\Tests\Fixture\Hydration\HydratableProductTableModel;
-use Semitexa\Orm\Tests\Fixture\Metadata\ValidCategoryTableModel;
-use Semitexa\Orm\Tests\Fixture\Metadata\ValidReviewTableModel;
 
-require_once __DIR__ . '/../../Fixture/Metadata/ValidCategoryTableModel.php';
-require_once __DIR__ . '/../../Fixture/Metadata/ValidReviewTableModel.php';
-require_once __DIR__ . '/../../Fixture/Hydration/HydratableProductTableModel.php';
-require_once __DIR__ . '/../../Fixture/Hydration/FakeDatabaseAdapter.php';
+use Semitexa\Orm\Tests\Fixture\Hydration\HydratableProductResourceModel;
 
-final class TableModelRelationLoaderTest extends TestCase
+use Semitexa\Orm\Tests\Fixture\Metadata\ValidCategoryResourceModel;
+
+use Semitexa\Orm\Tests\Fixture\Metadata\ValidReviewResourceModel;
+
+final class ResourceModelRelationLoaderTest extends TestCase
 {
     #[Test]
     public function eager_loads_belongs_to_and_has_many_relations_in_batches(): void
@@ -35,8 +33,8 @@ final class TableModelRelationLoaderTest extends TestCase
             ],
         ]);
 
-        $hydrator = new TableModelHydrator();
-        $loader = new TableModelRelationLoader($adapter, $hydrator);
+        $hydrator = new ResourceModelHydrator();
+        $loader = new ResourceModelRelationLoader($adapter, $hydrator);
 
         $products = [
             $hydrator->hydrate([
@@ -45,17 +43,17 @@ final class TableModelRelationLoaderTest extends TestCase
                 'name' => 'Product 1',
                 'categoryId' => 'category-1',
                 'deletedAt' => null,
-            ], HydratableProductTableModel::class),
+            ], HydratableProductResourceModel::class),
             $hydrator->hydrate([
                 'id' => 'product-2',
                 'tenantId' => 'tenant-1',
                 'name' => 'Product 2',
                 'categoryId' => 'category-2',
                 'deletedAt' => null,
-            ], HydratableProductTableModel::class),
+            ], HydratableProductResourceModel::class),
         ];
 
-        $loader->loadRelations($products, HydratableProductTableModel::class);
+        $loader->loadRelations($products, HydratableProductResourceModel::class);
 
         $this->assertCount(2, $adapter->executed);
 
@@ -64,12 +62,12 @@ final class TableModelRelationLoaderTest extends TestCase
 
         $this->assertTrue($product1->category->isLoaded());
         $this->assertTrue($product1->reviews->isLoaded());
-        $this->assertInstanceOf(ValidCategoryTableModel::class, $product1->category->value());
+        $this->assertInstanceOf(ValidCategoryResourceModel::class, $product1->category->value());
         $this->assertSame('Category 1', $product1->category->value()->name);
         $this->assertCount(2, $product1->reviews->value());
-        $this->assertContainsOnlyInstancesOf(ValidReviewTableModel::class, $product1->reviews->value());
+        $this->assertContainsOnlyInstancesOf(ValidReviewResourceModel::class, $product1->reviews->value());
 
-        $this->assertInstanceOf(ValidCategoryTableModel::class, $product2->category->value());
+        $this->assertInstanceOf(ValidCategoryResourceModel::class, $product2->category->value());
         $this->assertSame('Category 2', $product2->category->value()->name);
         $this->assertCount(1, $product2->reviews->value());
     }
@@ -83,17 +81,17 @@ final class TableModelRelationLoaderTest extends TestCase
             ],
         ]);
 
-        $hydrator = new TableModelHydrator();
-        $loader = new TableModelRelationLoader($adapter, $hydrator);
+        $hydrator = new ResourceModelHydrator();
+        $loader = new ResourceModelRelationLoader($adapter, $hydrator);
         $product = $hydrator->hydrate([
             'id' => 'product-1',
             'tenantId' => 'tenant-1',
             'name' => 'Product 1',
             'categoryId' => 'category-1',
             'deletedAt' => null,
-        ], HydratableProductTableModel::class);
+        ], HydratableProductResourceModel::class);
 
-        $loader->loadRelations([$product], HydratableProductTableModel::class, ['category']);
+        $loader->loadRelations([$product], HydratableProductResourceModel::class, ['category']);
 
         $this->assertTrue($product->category->isLoaded());
         $this->assertTrue($product->reviews->isNotLoaded());

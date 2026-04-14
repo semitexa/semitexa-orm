@@ -7,24 +7,19 @@ namespace Semitexa\Orm\Tests\Unit\Metadata;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Semitexa\Orm\Metadata\RelationKind;
-use Semitexa\Orm\Metadata\TableModelMetadataExtractor;
+use Semitexa\Orm\Metadata\ResourceModelMetadataExtractor;
 use Semitexa\Orm\Persistence\RelationWritePolicy;
-use Semitexa\Orm\Tests\Fixture\Metadata\AnalyticsEventTableModel;
-use Semitexa\Orm\Tests\Fixture\Metadata\ValidProductTableModel;
+use Semitexa\Orm\Tests\Fixture\Metadata\AnalyticsEventResourceModel;
+use Semitexa\Orm\Tests\Fixture\Metadata\ValidProductResourceModel;
 
-require_once __DIR__ . '/../../Fixture/Metadata/ValidCategoryTableModel.php';
-require_once __DIR__ . '/../../Fixture/Metadata/ValidReviewTableModel.php';
-require_once __DIR__ . '/../../Fixture/Metadata/ValidProductTableModel.php';
-require_once __DIR__ . '/../../Fixture/Metadata/AnalyticsEventTableModel.php';
-
-final class TableModelMetadataExtractorTest extends TestCase
+final class ResourceModelMetadataExtractorTest extends TestCase
 {
     #[Test]
-    public function extracts_table_model_metadata(): void
+    public function extracts_resource_model_metadata(): void
     {
-        $metadata = (new TableModelMetadataExtractor())->extract(ValidProductTableModel::class);
+        $metadata = (new ResourceModelMetadataExtractor())->extract(ValidProductResourceModel::class);
 
-        $this->assertSame(ValidProductTableModel::class, $metadata->className);
+        $this->assertSame(ValidProductResourceModel::class, $metadata->className);
         $this->assertSame('products', $metadata->tableName);
         $this->assertSame('id', $metadata->primaryKeyProperty);
         $this->assertTrue($metadata->hasColumn('tenantId'));
@@ -55,7 +50,7 @@ final class TableModelMetadataExtractorTest extends TestCase
     #[Test]
     public function defaults_connection_name_to_default(): void
     {
-        $metadata = (new TableModelMetadataExtractor())->extract(ValidProductTableModel::class);
+        $metadata = (new ResourceModelMetadataExtractor())->extract(ValidProductResourceModel::class);
 
         $this->assertSame('default', $metadata->connectionName);
     }
@@ -63,7 +58,7 @@ final class TableModelMetadataExtractorTest extends TestCase
     #[Test]
     public function extracts_explicit_connection_name(): void
     {
-        $metadata = (new TableModelMetadataExtractor())->extract(AnalyticsEventTableModel::class);
+        $metadata = (new ResourceModelMetadataExtractor())->extract(AnalyticsEventResourceModel::class);
 
         $this->assertSame('analytics', $metadata->connectionName);
         $this->assertSame('analytics_events', $metadata->tableName);

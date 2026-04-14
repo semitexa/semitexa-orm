@@ -7,31 +7,26 @@ namespace Semitexa\Orm\Tests\Unit\Persistence;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Semitexa\Orm\Exception\InvalidRelationWriteException;
-use Semitexa\Orm\Hydration\TableModelHydrator;
+use Semitexa\Orm\Hydration\ResourceModelHydrator;
 use Semitexa\Orm\Mapping\MapperRegistry;
 use Semitexa\Orm\Persistence\AggregateWriteEngine;
 use Semitexa\Orm\Tests\Fixture\Hydration\FakeDatabaseAdapter;
-use Semitexa\Orm\Tests\Fixture\Metadata\ValidProductTableModel;
-use Semitexa\Orm\Tests\Fixture\Metadata\ValidTaggedProductTableModel;
-use Semitexa\Orm\Tests\Fixture\Persistence\PersistableCategoryDomainModel;
-use Semitexa\Orm\Tests\Fixture\Persistence\PersistableProductDomainModel;
-use Semitexa\Orm\Tests\Fixture\Persistence\PersistableProductMapper;
-use Semitexa\Orm\Tests\Fixture\Persistence\PersistableReviewDomainModel;
-use Semitexa\Orm\Tests\Fixture\Persistence\TaggedProductDomainModel;
-use Semitexa\Orm\Tests\Fixture\Persistence\TaggedProductMapper;
 
-require_once __DIR__ . '/../../Fixture/Metadata/ValidCategoryTableModel.php';
-require_once __DIR__ . '/../../Fixture/Metadata/ValidReviewTableModel.php';
-require_once __DIR__ . '/../../Fixture/Metadata/ValidProductTableModel.php';
-require_once __DIR__ . '/../../Fixture/Metadata/ValidTagTableModel.php';
-require_once __DIR__ . '/../../Fixture/Metadata/ValidTaggedProductTableModel.php';
-require_once __DIR__ . '/../../Fixture/Hydration/FakeDatabaseAdapter.php';
-require_once __DIR__ . '/../../Fixture/Persistence/PersistableCategoryDomainModel.php';
-require_once __DIR__ . '/../../Fixture/Persistence/PersistableReviewDomainModel.php';
-require_once __DIR__ . '/../../Fixture/Persistence/PersistableProductDomainModel.php';
-require_once __DIR__ . '/../../Fixture/Persistence/PersistableProductMapper.php';
-require_once __DIR__ . '/../../Fixture/Persistence/TaggedProductDomainModel.php';
-require_once __DIR__ . '/../../Fixture/Persistence/TaggedProductMapper.php';
+use Semitexa\Orm\Tests\Fixture\Metadata\ValidProductResourceModel;
+
+use Semitexa\Orm\Tests\Fixture\Metadata\ValidTaggedProductResourceModel;
+
+use Semitexa\Orm\Tests\Fixture\Persistence\PersistableCategoryDomainModel;
+
+use Semitexa\Orm\Tests\Fixture\Persistence\PersistableProductDomainModel;
+
+use Semitexa\Orm\Tests\Fixture\Persistence\PersistableProductMapper;
+
+use Semitexa\Orm\Tests\Fixture\Persistence\PersistableReviewDomainModel;
+
+use Semitexa\Orm\Tests\Fixture\Persistence\TaggedProductDomainModel;
+
+use Semitexa\Orm\Tests\Fixture\Persistence\TaggedProductMapper;
 
 final class AggregateWriteEngineTest extends TestCase
 {
@@ -39,10 +34,10 @@ final class AggregateWriteEngineTest extends TestCase
     public function insert_persists_root_row_and_owned_children_without_touching_reference_only_targets(): void
     {
         $adapter = new FakeDatabaseAdapter([]);
-        $engine = new AggregateWriteEngine($adapter, new TableModelHydrator());
+        $engine = new AggregateWriteEngine($adapter, new ResourceModelHydrator());
         $registry = $this->buildRegistry();
 
-        $persisted = $engine->insert($this->validDomainModel(id: ''), ValidProductTableModel::class, $registry);
+        $persisted = $engine->insert($this->validDomainModel(id: ''), ValidProductResourceModel::class, $registry);
 
         $this->assertCount(3, $adapter->executed);
         $this->assertInstanceOf(PersistableProductDomainModel::class, $persisted);
@@ -66,10 +61,10 @@ final class AggregateWriteEngineTest extends TestCase
     public function update_rewrites_root_row_and_replaces_owned_children(): void
     {
         $adapter = new FakeDatabaseAdapter([]);
-        $engine = new AggregateWriteEngine($adapter, new TableModelHydrator());
+        $engine = new AggregateWriteEngine($adapter, new ResourceModelHydrator());
         $registry = $this->buildRegistry();
 
-        $engine->update($this->validDomainModel(), ValidProductTableModel::class, $registry);
+        $engine->update($this->validDomainModel(), ValidProductResourceModel::class, $registry);
 
         $this->assertCount(4, $adapter->executed);
         $this->assertSame(
@@ -88,10 +83,10 @@ final class AggregateWriteEngineTest extends TestCase
     public function delete_removes_owned_children_before_root_row(): void
     {
         $adapter = new FakeDatabaseAdapter([]);
-        $engine = new AggregateWriteEngine($adapter, new TableModelHydrator());
+        $engine = new AggregateWriteEngine($adapter, new ResourceModelHydrator());
         $registry = $this->buildRegistry();
 
-        $engine->delete($this->validDomainModel(), ValidProductTableModel::class, $registry);
+        $engine->delete($this->validDomainModel(), ValidProductResourceModel::class, $registry);
 
         $this->assertCount(2, $adapter->executed);
         $this->assertSame('DELETE FROM `reviews` WHERE `productId` = :__parent_fk', $adapter->executed[0]['sql']);
@@ -102,7 +97,7 @@ final class AggregateWriteEngineTest extends TestCase
     public function rejects_reference_only_relation_mismatches(): void
     {
         $adapter = new FakeDatabaseAdapter([]);
-        $engine = new AggregateWriteEngine($adapter, new TableModelHydrator());
+        $engine = new AggregateWriteEngine($adapter, new ResourceModelHydrator());
         $registry = $this->buildRegistry();
 
         $this->expectException(InvalidRelationWriteException::class);
@@ -119,7 +114,7 @@ final class AggregateWriteEngineTest extends TestCase
                 ),
                 reviews: [],
             ),
-            ValidProductTableModel::class,
+            ValidProductResourceModel::class,
             $registry,
         );
     }
@@ -128,7 +123,7 @@ final class AggregateWriteEngineTest extends TestCase
     public function sync_pivot_only_replaces_pivot_rows_on_insert_update_and_delete(): void
     {
         $adapter = new FakeDatabaseAdapter([]);
-        $engine = new AggregateWriteEngine($adapter, new TableModelHydrator());
+        $engine = new AggregateWriteEngine($adapter, new ResourceModelHydrator());
         $registry = new MapperRegistry();
         $registry->build(
             mapperClasses: [TaggedProductMapper::class],
@@ -141,9 +136,9 @@ final class AggregateWriteEngineTest extends TestCase
             tagIds: ['tag-1', 'tag-2'],
         );
 
-        $engine->insert($domainModel, ValidTaggedProductTableModel::class, $registry);
-        $engine->update($domainModel, ValidTaggedProductTableModel::class, $registry);
-        $engine->delete($domainModel, ValidTaggedProductTableModel::class, $registry);
+        $engine->insert($domainModel, ValidTaggedProductResourceModel::class, $registry);
+        $engine->update($domainModel, ValidTaggedProductResourceModel::class, $registry);
+        $engine->delete($domainModel, ValidTaggedProductResourceModel::class, $registry);
 
         $this->assertSame(
             [

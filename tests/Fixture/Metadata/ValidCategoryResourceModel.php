@@ -11,8 +11,8 @@ use Semitexa\Orm\Attribute\PrimaryKey;
 use Semitexa\Orm\Metadata\HasColumnReferences;
 use Semitexa\Orm\Metadata\HasRelationReferences;
 
-#[FromTable(name: 'reviews')]
-final readonly class ValidReviewTableModel
+#[FromTable(name: 'categories')]
+final readonly class ValidCategoryResourceModel
 {
     use HasColumnReferences;
     use HasRelationReferences;
@@ -22,10 +22,7 @@ final readonly class ValidReviewTableModel
         #[Column(type: MySqlType::Varchar, length: 36)]
         public string $id,
 
-        #[Column(type: MySqlType::Varchar, length: 36)]
-        public string $productId,
-
-        #[Column(type: MySqlType::Int)]
-        public int $rating,
+        #[Column(type: MySqlType::Varchar, length: 255)]
+        public string $name,
     ) {}
 }
