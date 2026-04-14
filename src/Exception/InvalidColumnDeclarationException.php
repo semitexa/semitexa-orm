@@ -4,6 +4,6 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Exception;
 
-class InvalidColumnDeclarationException extends InvalidTableModelException
+class InvalidColumnDeclarationException extends InvalidResourceModelException
 {
 }

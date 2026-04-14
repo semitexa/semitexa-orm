@@ -8,9 +8,9 @@ trait HasRelationReferences
 {
     public static function relation(string $propertyName): RelationRef
     {
-        /** @var class-string $tableModelClass */
-        $tableModelClass = static::class;
+        /** @var class-string $resourceModelClass */
+        $resourceModelClass = static::class;
 
-        return RelationRef::for($tableModelClass, $propertyName);
+        return RelationRef::for($resourceModelClass, $propertyName);
     }
 }

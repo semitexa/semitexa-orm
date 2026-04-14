@@ -5,13 +5,13 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Tests\Fixture\Mapping;
 
 use Semitexa\Orm\Attribute\AsMapper;
-use Semitexa\Orm\Contract\TableModelMapper;
-use Semitexa\Orm\Tests\Fixture\Metadata\ValidProductTableModel;
+use Semitexa\Orm\Contract\ResourceModelMapperInterface;
+use Semitexa\Orm\Tests\Fixture\Metadata\ValidProductResourceModel;
 
-#[AsMapper(resourceModel: ValidProductTableModel::class, domainModel: ValidProductDomainModel::class)]
-final class DuplicateValidProductMapper implements TableModelMapper
+#[AsMapper(resourceModel: ValidProductResourceModel::class, domainModel: ValidProductDomainModel::class)]
+final class DuplicateValidProductMapper implements ResourceModelMapperInterface
 {
-    public function toDomain(object $tableModel): object
+    public function toDomain(object $resourceModel): object
     {
         return new ValidProductDomainModel(
             id: 'duplicate',
@@ -21,9 +21,9 @@ final class DuplicateValidProductMapper implements TableModelMapper
         );
     }
 
-    public function toTableModel(object $domainModel): object
+    public function toSourceModel(object $domainModel): object
     {
-        return new ValidProductTableModel(
+        return new ValidProductResourceModel(
             id: 'duplicate',
             tenantId: 'duplicate',
             name: 'duplicate',

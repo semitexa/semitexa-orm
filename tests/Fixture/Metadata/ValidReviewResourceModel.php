@@ -5,16 +5,14 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Tests\Fixture\Metadata;
 
 use Semitexa\Orm\Adapter\MySqlType;
-use Semitexa\Orm\Attribute\BelongsTo;
 use Semitexa\Orm\Attribute\Column;
 use Semitexa\Orm\Attribute\FromTable;
 use Semitexa\Orm\Attribute\PrimaryKey;
 use Semitexa\Orm\Metadata\HasColumnReferences;
 use Semitexa\Orm\Metadata\HasRelationReferences;
-use Semitexa\Orm\Persistence\RelationWritePolicy;
 
-#[FromTable(name: 'invalid_sync_pivot_products')]
-final readonly class InvalidSyncPivotBelongsToTableModel
+#[FromTable(name: 'reviews')]
+final readonly class ValidReviewResourceModel
 {
     use HasColumnReferences;
     use HasRelationReferences;
@@ -25,13 +23,9 @@ final readonly class InvalidSyncPivotBelongsToTableModel
         public string $id,
 
         #[Column(type: MySqlType::Varchar, length: 36)]
-        public string $categoryId,
+        public string $productId,
 
-        #[BelongsTo(
-            target: ValidCategoryTableModel::class,
-            foreignKey: 'categoryId',
-            writePolicy: RelationWritePolicy::SyncPivotOnly,
-        )]
-        public ?ValidCategoryTableModel $category = null,
+        #[Column(type: MySqlType::Int)]
+        public int $rating,
     ) {}
 }

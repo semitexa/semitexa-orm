@@ -6,16 +6,16 @@ namespace Semitexa\Orm\Tests\Fixture\Mapping;
 
 use Semitexa\Orm\Attribute\AsMapper;
 use Semitexa\Orm\Contract\ResourceModelMapperInterface;
-use Semitexa\Orm\Tests\Fixture\Hydration\HydratableProductResourceModel;
+use Semitexa\Orm\Tests\Fixture\Metadata\ValidProductResourceModel;
 
-#[AsMapper(resourceModel: HydratableProductResourceModel::class, domainModel: HydratableProductDomainModel::class)]
-final class HydratableProductMapper implements ResourceModelMapperInterface
+#[AsMapper(resourceModel: ValidProductResourceModel::class, domainModel: ValidProductDomainModel::class)]
+final class ValidProductMapperInterface implements ResourceModelMapperInterface
 {
     public function toDomain(object $resourceModel): object
     {
-        $resourceModel instanceof HydratableProductResourceModel || throw new \InvalidArgumentException('Unexpected resource model.');
+        $resourceModel instanceof ValidProductResourceModel || throw new \InvalidArgumentException('Unexpected resource model.');
 
-        return new HydratableProductDomainModel(
+        return new ValidProductDomainModel(
             id: $resourceModel->id,
             tenantId: $resourceModel->tenantId,
             name: $resourceModel->name,
@@ -25,14 +25,13 @@ final class HydratableProductMapper implements ResourceModelMapperInterface
 
     public function toSourceModel(object $domainModel): object
     {
-        $domainModel instanceof HydratableProductDomainModel || throw new \InvalidArgumentException('Unexpected domain model.');
+        $domainModel instanceof ValidProductDomainModel || throw new \InvalidArgumentException('Unexpected domain model.');
 
-        return new HydratableProductResourceModel(
+        return new ValidProductResourceModel(
             id: $domainModel->id,
             tenantId: $domainModel->tenantId,
             name: $domainModel->name,
             categoryId: $domainModel->categoryId,
-            deletedAt: null,
         );
     }
 }

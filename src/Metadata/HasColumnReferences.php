@@ -8,9 +8,9 @@ trait HasColumnReferences
 {
     public static function column(string $propertyName): ColumnRef
     {
-        /** @var class-string $tableModelClass */
-        $tableModelClass = static::class;
+        /** @var class-string $resourceModelClass */
+        $resourceModelClass = static::class;
 
-        return ColumnRef::for($tableModelClass, $propertyName);
+        return ColumnRef::for($resourceModelClass, $propertyName);
     }
 }

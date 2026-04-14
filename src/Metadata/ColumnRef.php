@@ -7,21 +7,21 @@ namespace Semitexa\Orm\Metadata;
 final readonly class ColumnRef
 {
     public function __construct(
-        public string $tableModelClass,
+        public string $resourceModelClass,
         public string $propertyName,
         public string $columnName,
     ) {}
 
     /**
-     * @param class-string $tableModelClass
+     * @param class-string $resourceModelClass
      */
-    public static function for(string $tableModelClass, string $propertyName): self
+    public static function for(string $resourceModelClass, string $propertyName): self
     {
-        $metadata = TableModelMetadataRegistry::default()->for($tableModelClass);
+        $metadata = ResourceModelMetadataRegistry::default()->for($resourceModelClass);
         $column = $metadata->column($propertyName);
 
         return new self(
-            tableModelClass: $tableModelClass,
+            resourceModelClass: $resourceModelClass,
             propertyName: $column->propertyName,
             columnName: $column->columnName,
         );

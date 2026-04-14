@@ -6,7 +6,7 @@ namespace Semitexa\Orm\Mapping;
 
 use Semitexa\Core\Discovery\ClassDiscovery;
 use Semitexa\Orm\Attribute\AsMapper;
-use Semitexa\Orm\Contract\TableModelMapper;
+use Semitexa\Orm\Contract\ResourceModelMapperInterface;
 use Semitexa\Orm\Exception\DuplicateMapperException;
 use Semitexa\Orm\Exception\InvalidMapperDeclarationException;
 use Semitexa\Orm\Exception\MissingMapperException;
@@ -19,7 +19,7 @@ final class MapperRegistry
     /** @var array<class-string, MapperDefinition> */
     private array $definitionsByMapperClass = [];
 
-    /** @var array<class-string, TableModelMapper> */
+    /** @var array<class-string, ResourceModelMapperInterface> */
     private array $instancesByMapperClass = [];
 
     public function __construct(
@@ -44,7 +44,7 @@ final class MapperRegistry
             if (isset($definitionsByPair[$key])) {
                 throw new DuplicateMapperException(sprintf(
                     'Duplicate mapper declarations for %s <-> %s: %s and %s.',
-                    $definition->tableModelClass,
+                    $definition->resourceModelClass,
                     $definition->domainModelClass,
                     $definitionsByPair[$key]->mapperClass,
                     $definition->mapperClass,
@@ -60,13 +60,13 @@ final class MapperRegistry
         $this->instancesByMapperClass = [];
     }
 
-    public function definitionFor(string $tableModelClass, string $domainModelClass): MapperDefinition
+    public function definitionFor(string $resourceModelClass, string $domainModelClass): MapperDefinition
     {
-        $key = $tableModelClass . "\0" . $domainModelClass;
+        $key = $resourceModelClass . "\0" . $domainModelClass;
         if (!isset($this->definitionsByPair[$key])) {
             throw new MissingMapperException(sprintf(
                 'No mapper registered for %s and %s.',
-                $tableModelClass,
+                $resourceModelClass,
                 $domainModelClass,
             ));
         }
@@ -74,12 +74,12 @@ final class MapperRegistry
         return $this->definitionsByPair[$key];
     }
 
-    public function mapperFor(string $tableModelClass, string $domainModelClass): TableModelMapper
+    public function mapperFor(string $resourceModelClass, string $domainModelClass): ResourceModelMapperInterface
     {
-        $definition = $this->definitionFor($tableModelClass, $domainModelClass);
+        $definition = $this->definitionFor($resourceModelClass, $domainModelClass);
 
         if (!isset($this->instancesByMapperClass[$definition->mapperClass])) {
-            /** @var TableModelMapper $mapper */
+            /** @var ResourceModelMapperInterface $mapper */
             $mapper = new ($definition->mapperClass)();
             $this->instancesByMapperClass[$definition->mapperClass] = $mapper;
         }
@@ -87,16 +87,16 @@ final class MapperRegistry
         return $this->instancesByMapperClass[$definition->mapperClass];
     }
 
-    public function mapToDomain(object $tableModel, string $domainModelClass): object
+    public function mapToDomain(object $resourceModel, string $domainModelClass): object
     {
-        return $this->mapperFor($tableModel::class, $domainModelClass)->toDomain($tableModel);
+        return $this->mapperFor($resourceModel::class, $domainModelClass)->toDomain($resourceModel);
     }
 
-    public function mapToTableModel(object $domainModel, string $tableModelClass): object
+    public function mapToSourceModel(object $domainModel, string $resourceModelClass): object
     {
-        $definition = $this->definitionFor($tableModelClass, $domainModel::class);
+        $definition = $this->definitionFor($resourceModelClass, $domainModel::class);
 
-        return $this->mapperFor($definition->tableModelClass, $definition->domainModelClass)->toTableModel($domainModel);
+        return $this->mapperFor($definition->resourceModelClass, $definition->domainModelClass)->toSourceModel($domainModel);
     }
 
     /**
@@ -118,11 +118,11 @@ final class MapperRegistry
             ));
         }
 
-        if (!$ref->implementsInterface(TableModelMapper::class)) {
+        if (!$ref->implementsInterface(ResourceModelMapperInterface::class)) {
             throw new InvalidMapperDeclarationException(sprintf(
                 'Mapper class %s must implement %s.',
                 $mapperClass,
-                TableModelMapper::class,
+                ResourceModelMapperInterface::class,
             ));
         }
 
@@ -147,7 +147,7 @@ final class MapperRegistry
 
         return new MapperDefinition(
             mapperClass: $mapperClass,
-            tableModelClass: $asMapper->resourceModel,
+            resourceModelClass: $asMapper->resourceModel,
             domainModelClass: $asMapper->domainModel,
         );
     }

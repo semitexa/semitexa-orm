@@ -12,7 +12,7 @@ use Semitexa\Orm\Attribute\PrimaryKey;
 use Semitexa\Orm\Persistence\RelationWritePolicy;
 
 #[FromTable(name: 'invalid_relation_target_models')]
-final readonly class InvalidRelationTargetTableModel
+final readonly class InvalidRelationTargetResourceModel
 {
     public function __construct(
         #[PrimaryKey(strategy: 'uuid')]
@@ -23,7 +23,7 @@ final readonly class InvalidRelationTargetTableModel
         public string $missingId,
 
         #[BelongsTo(
-            target: 'Semitexa\\Orm\\Tests\\Fixture\\Metadata\\MissingTableModel',
+            target: 'Semitexa\\Orm\\Tests\\Fixture\\Metadata\\MissingResourceModel',
             foreignKey: 'missingId',
             writePolicy: RelationWritePolicy::ReferenceOnly,
         )]

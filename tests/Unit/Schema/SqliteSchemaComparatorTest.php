@@ -14,8 +14,6 @@ use Semitexa\Orm\Schema\SqliteSchemaComparator;
 use Semitexa\Orm\Schema\TableDefinition;
 use Semitexa\Orm\Tests\Fixture\Hydration\FakeDatabaseAdapter;
 
-require_once __DIR__ . '/../../Fixture/Hydration/FakeDatabaseAdapter.php';
-
 final class SqliteSchemaComparatorTest extends TestCase
 {
     #[Test]

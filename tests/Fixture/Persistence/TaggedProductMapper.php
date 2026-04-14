@@ -5,31 +5,31 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Tests\Fixture\Persistence;
 
 use Semitexa\Orm\Attribute\AsMapper;
-use Semitexa\Orm\Contract\TableModelMapper;
-use Semitexa\Orm\Tests\Fixture\Metadata\ValidTaggedProductTableModel;
+use Semitexa\Orm\Contract\ResourceModelMapperInterface;
+use Semitexa\Orm\Tests\Fixture\Metadata\ValidTaggedProductResourceModel;
 
-#[AsMapper(resourceModel: ValidTaggedProductTableModel::class, domainModel: TaggedProductDomainModel::class)]
-final class TaggedProductMapper implements TableModelMapper
+#[AsMapper(resourceModel: ValidTaggedProductResourceModel::class, domainModel: TaggedProductDomainModel::class)]
+final class TaggedProductMapper implements ResourceModelMapperInterface
 {
-    public function toDomain(object $tableModel): object
+    public function toDomain(object $resourceModel): object
     {
-        $tableModel instanceof ValidTaggedProductTableModel || throw new \InvalidArgumentException('Unexpected table model.');
+        $resourceModel instanceof ValidTaggedProductResourceModel || throw new \InvalidArgumentException('Unexpected resource model.');
 
         return new TaggedProductDomainModel(
-            id: $tableModel->id,
-            name: $tableModel->name,
+            id: $resourceModel->id,
+            name: $resourceModel->name,
             tagIds: array_map(
                 static fn (mixed $tag): string => is_string($tag) ? $tag : $tag->id,
-                $tableModel->tags,
+                $resourceModel->tags,
             ),
         );
     }
 
-    public function toTableModel(object $domainModel): object
+    public function toSourceModel(object $domainModel): object
     {
         $domainModel instanceof TaggedProductDomainModel || throw new \InvalidArgumentException('Unexpected domain model.');
 
-        return new ValidTaggedProductTableModel(
+        return new ValidTaggedProductResourceModel(
             id: $domainModel->id,
             name: $domainModel->name,
             tags: $domainModel->tagIds,

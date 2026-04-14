@@ -44,17 +44,17 @@ final class ConnectionRegistry
     }
 
     /**
-     * Resolve the DatabaseAdapter for a given table model class.
+     * Resolve the DatabaseAdapter for a given resource model class.
      *
      * Reads the #[Connection] attribute from the class to determine
      * which named connection to use.
      */
     /**
-     * @param class-string $tableModelClass
+     * @param class-string $resourceModelClass
      */
-    public function adapterFor(string $tableModelClass): DatabaseAdapterInterface
+    public function adapterFor(string $resourceModelClass): DatabaseAdapterInterface
     {
-        $connectionName = $this->resolveConnectionName($tableModelClass);
+        $connectionName = $this->resolveConnectionName($resourceModelClass);
 
         return $this->manager($connectionName)->getAdapter();
     }
@@ -69,39 +69,39 @@ final class ConnectionRegistry
 
     /**
      * Create a DomainRepository that automatically uses the correct connection
-     * based on the table model's #[Connection] attribute.
+     * based on the resource model's #[Connection] attribute.
      */
     /**
-     * @param class-string $tableModelClass
+     * @param class-string $resourceModelClass
      * @param class-string $domainModelClass
      */
-    public function repository(string $tableModelClass, string $domainModelClass): DomainRepository
+    public function repository(string $resourceModelClass, string $domainModelClass): DomainRepository
     {
-        $connectionName = $this->resolveConnectionName($tableModelClass);
+        $connectionName = $this->resolveConnectionName($resourceModelClass);
         $manager = $this->manager($connectionName);
 
-        return $manager->repository($tableModelClass, $domainModelClass);
+        return $manager->repository($resourceModelClass, $domainModelClass);
     }
 
     /**
-     * Resolve the connection name for a table model class.
+     * Resolve the connection name for a resource model class.
      *
      * Reads the #[Connection('name')] attribute. Returns 'default' if no attribute is present.
      *
-     * @param class-string $tableModelClass
+     * @param class-string $resourceModelClass
      */
-    public function resolveConnectionName(string $tableModelClass): string
+    public function resolveConnectionName(string $resourceModelClass): string
     {
-        if (isset($this->connectionNameCache[$tableModelClass])) {
-            return $this->connectionNameCache[$tableModelClass];
+        if (isset($this->connectionNameCache[$resourceModelClass])) {
+            return $this->connectionNameCache[$resourceModelClass];
         }
 
-        $ref = new \ReflectionClass($tableModelClass);
+        $ref = new \ReflectionClass($resourceModelClass);
         $attrs = $ref->getAttributes(Connection::class);
 
         $name = $attrs !== [] ? $attrs[0]->newInstance()->name : 'default';
 
-        return $this->connectionNameCache[$tableModelClass] = $name;
+        return $this->connectionNameCache[$resourceModelClass] = $name;
     }
 
     /**

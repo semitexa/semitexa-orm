@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Semitexa\Orm\Tests\Fixture\Hydration;
+namespace Semitexa\Orm\Tests\Fixture\Metadata;
 
 use DateTimeImmutable;
 use Semitexa\Orm\Adapter\MySqlType;
@@ -13,17 +13,14 @@ use Semitexa\Orm\Attribute\HasMany;
 use Semitexa\Orm\Attribute\PrimaryKey;
 use Semitexa\Orm\Attribute\SoftDelete;
 use Semitexa\Orm\Attribute\TenantScoped;
-use Semitexa\Orm\Hydration\RelationState;
 use Semitexa\Orm\Metadata\HasColumnReferences;
 use Semitexa\Orm\Metadata\HasRelationReferences;
 use Semitexa\Orm\Persistence\RelationWritePolicy;
-use Semitexa\Orm\Tests\Fixture\Metadata\ValidCategoryTableModel;
-use Semitexa\Orm\Tests\Fixture\Metadata\ValidReviewTableModel;
 
-#[FromTable(name: 'hydratable_products')]
+#[FromTable(name: 'products')]
 #[TenantScoped(strategy: 'column', column: 'tenantId')]
 #[SoftDelete(column: 'deletedAt')]
-final readonly class HydratableProductTableModel
+final readonly class ValidProductResourceModel
 {
     use HasColumnReferences;
     use HasRelationReferences;
@@ -43,20 +40,20 @@ final readonly class HydratableProductTableModel
         public string $categoryId,
 
         #[Column(type: MySqlType::Datetime, nullable: true)]
-        public ?DateTimeImmutable $deletedAt,
+        public ?DateTimeImmutable $deletedAt = null,
 
         #[BelongsTo(
-            target: ValidCategoryTableModel::class,
+            target: ValidCategoryResourceModel::class,
             foreignKey: 'categoryId',
             writePolicy: RelationWritePolicy::ReferenceOnly,
         )]
-        public ?RelationState $category = null,
+        public ?ValidCategoryResourceModel $category = null,
 
         #[HasMany(
-            target: ValidReviewTableModel::class,
+            target: ValidReviewResourceModel::class,
             foreignKey: 'productId',
             writePolicy: RelationWritePolicy::CascadeOwned,
         )]
-        public ?RelationState $reviews = null,
+        public array $reviews = [],
     ) {}
 }

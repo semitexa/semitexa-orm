@@ -7,28 +7,28 @@ namespace Semitexa\Orm\Hydration;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Metadata\RelationKind;
 use Semitexa\Orm\Metadata\RelationMetadata;
-use Semitexa\Orm\Metadata\TableModelMetadataRegistry;
+use Semitexa\Orm\Metadata\ResourceModelMetadataRegistry;
 
-final class TableModelRelationLoader
+final class ResourceModelRelationLoader
 {
     public function __construct(
-        private readonly DatabaseAdapterInterface $adapter,
-        private readonly TableModelHydrator $hydrator,
-        private readonly ?TableModelMetadataRegistry $metadataRegistry = null,
+        private readonly DatabaseAdapterInterface       $adapter,
+        private readonly ResourceModelHydrator          $hydrator,
+        private readonly ?ResourceModelMetadataRegistry $metadataRegistry = null,
     ) {}
 
     /**
-     * @param object[] $tableModels
-     * @param class-string $tableModelClass
+     * @param object[] $resourceModels
+     * @param class-string $resourceModelClass
      * @param string[]|null $onlyRelations
      */
-    public function loadRelations(array $tableModels, string $tableModelClass, ?array $onlyRelations = null): void
+    public function loadRelations(array $resourceModels, string $resourceModelClass, ?array $onlyRelations = null): void
     {
-        if ($tableModels === []) {
+        if ($resourceModels === []) {
             return;
         }
 
-        $metadata = ($this->metadataRegistry ?? TableModelMetadataRegistry::default())->for($tableModelClass);
+        $metadata = ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($resourceModelClass);
 
         foreach ($metadata->relations() as $relation) {
             if ($onlyRelations !== null && !in_array($relation->propertyName, $onlyRelations, true)) {
@@ -36,26 +36,26 @@ final class TableModelRelationLoader
             }
 
             match ($relation->kind) {
-                RelationKind::BelongsTo => $this->loadBelongsTo($tableModels, $relation),
-                RelationKind::HasMany => $this->loadHasMany($tableModels, $relation, $tableModelClass),
-                RelationKind::OneToOne => $this->loadOneToOne($tableModels, $relation, $tableModelClass),
-                RelationKind::ManyToMany => $this->loadManyToMany($tableModels, $relation, $tableModelClass),
+                RelationKind::BelongsTo => $this->loadBelongsTo($resourceModels, $relation),
+                RelationKind::HasMany => $this->loadHasMany($resourceModels, $relation, $resourceModelClass),
+                RelationKind::OneToOne => $this->loadOneToOne($resourceModels, $relation, $resourceModelClass),
+                RelationKind::ManyToMany => $this->loadManyToMany($resourceModels, $relation, $resourceModelClass),
             };
         }
     }
 
     /**
-     * @param object[] $tableModels
+     * @param object[] $resourceModels
      */
-    private function loadBelongsTo(array $tableModels, RelationMetadata $relation): void
+    private function loadBelongsTo(array $resourceModels, RelationMetadata $relation): void
     {
-        $fkValues = $this->collectPropertyValues($tableModels, $relation->foreignKey);
+        $fkValues = $this->collectPropertyValues($resourceModels, $relation->foreignKey);
         if ($fkValues === []) {
-            $this->markAllRelationsLoaded($tableModels, $relation->propertyName, null);
+            $this->markAllRelationsLoaded($resourceModels, $relation->propertyName, null);
             return;
         }
 
-        $targetMetadata = ($this->metadataRegistry ?? TableModelMetadataRegistry::default())->for($relation->targetClass);
+        $targetMetadata = ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($relation->targetClass);
         $targetPkProperty = $targetMetadata->primaryKeyProperty ?? 'id';
         $targetPkColumn = $targetMetadata->column($targetPkProperty)->columnName;
         $rows = $this->fetchRowsByColumn($targetMetadata->tableName, $targetPkColumn, array_values($fkValues));
@@ -67,27 +67,27 @@ final class TableModelRelationLoader
             $indexed[$pk] = $related;
         }
 
-        foreach ($tableModels as $tableModel) {
-            $fk = (new \ReflectionProperty($tableModel, $relation->foreignKey))->getValue($tableModel);
-            $this->relationState($tableModel, $relation->propertyName)->markLoaded($indexed[$fk] ?? null);
+        foreach ($resourceModels as $resourceModel) {
+            $fk = (new \ReflectionProperty($resourceModel, $relation->foreignKey))->getValue($resourceModel);
+            $this->relationState($resourceModel, $relation->propertyName)->markLoaded($indexed[$fk] ?? null);
         }
     }
 
     /**
-     * @param object[] $tableModels
-     * @param class-string $parentTableModelClass
+     * @param object[] $resourceModels
+     * @param class-string $parentResourceModelClass
      */
-    private function loadHasMany(array $tableModels, RelationMetadata $relation, string $parentTableModelClass): void
+    private function loadHasMany(array $resourceModels, RelationMetadata $relation, string $parentResourceModelClass): void
     {
-        $parentMetadata = ($this->metadataRegistry ?? TableModelMetadataRegistry::default())->for($parentTableModelClass);
+        $parentMetadata = ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($parentResourceModelClass);
         $parentPkProperty = $parentMetadata->primaryKeyProperty ?? 'id';
-        $parentIds = $this->collectPropertyValues($tableModels, $parentPkProperty);
+        $parentIds = $this->collectPropertyValues($resourceModels, $parentPkProperty);
         if ($parentIds === []) {
-            $this->markAllRelationsLoaded($tableModels, $relation->propertyName, []);
+            $this->markAllRelationsLoaded($resourceModels, $relation->propertyName, []);
             return;
         }
 
-        $targetMetadata = ($this->metadataRegistry ?? TableModelMetadataRegistry::default())->for($relation->targetClass);
+        $targetMetadata = ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($relation->targetClass);
         $fkColumn = $targetMetadata->column($relation->foreignKey)->columnName;
         $rows = $this->fetchRowsByColumn($targetMetadata->tableName, $fkColumn, array_values($parentIds));
 
@@ -98,27 +98,27 @@ final class TableModelRelationLoader
             $grouped[$fk][] = $related;
         }
 
-        foreach ($tableModels as $tableModel) {
-            $parentId = (new \ReflectionProperty($tableModel, $parentPkProperty))->getValue($tableModel);
-            $this->relationState($tableModel, $relation->propertyName)->markLoaded($grouped[$parentId] ?? []);
+        foreach ($resourceModels as $resourceModel) {
+            $parentId = (new \ReflectionProperty($resourceModel, $parentPkProperty))->getValue($resourceModel);
+            $this->relationState($resourceModel, $relation->propertyName)->markLoaded($grouped[$parentId] ?? []);
         }
     }
 
     /**
-     * @param object[] $tableModels
-     * @param class-string $parentTableModelClass
+     * @param object[] $resourceModels
+     * @param class-string $parentResourceModelClass
      */
-    private function loadOneToOne(array $tableModels, RelationMetadata $relation, string $parentTableModelClass): void
+    private function loadOneToOne(array $resourceModels, RelationMetadata $relation, string $parentResourceModelClass): void
     {
-        $parentMetadata = ($this->metadataRegistry ?? TableModelMetadataRegistry::default())->for($parentTableModelClass);
+        $parentMetadata = ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($parentResourceModelClass);
         $parentPkProperty = $parentMetadata->primaryKeyProperty ?? 'id';
-        $parentIds = $this->collectPropertyValues($tableModels, $parentPkProperty);
+        $parentIds = $this->collectPropertyValues($resourceModels, $parentPkProperty);
         if ($parentIds === []) {
-            $this->markAllRelationsLoaded($tableModels, $relation->propertyName, null);
+            $this->markAllRelationsLoaded($resourceModels, $relation->propertyName, null);
             return;
         }
 
-        $targetMetadata = ($this->metadataRegistry ?? TableModelMetadataRegistry::default())->for($relation->targetClass);
+        $targetMetadata = ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($relation->targetClass);
         $fkColumn = $targetMetadata->column($relation->foreignKey)->columnName;
         $rows = $this->fetchRowsByColumn($targetMetadata->tableName, $fkColumn, array_values($parentIds));
 
@@ -129,23 +129,23 @@ final class TableModelRelationLoader
             $indexed[$fk] = $related;
         }
 
-        foreach ($tableModels as $tableModel) {
-            $parentId = (new \ReflectionProperty($tableModel, $parentPkProperty))->getValue($tableModel);
-            $this->relationState($tableModel, $relation->propertyName)->markLoaded($indexed[$parentId] ?? null);
+        foreach ($resourceModels as $resourceModel) {
+            $parentId = (new \ReflectionProperty($resourceModel, $parentPkProperty))->getValue($resourceModel);
+            $this->relationState($resourceModel, $relation->propertyName)->markLoaded($indexed[$parentId] ?? null);
         }
     }
 
     /**
-     * @param object[] $tableModels
-     * @param class-string $parentTableModelClass
+     * @param object[] $resourceModels
+     * @param class-string $parentResourceModelClass
      */
-    private function loadManyToMany(array $tableModels, RelationMetadata $relation, string $parentTableModelClass): void
+    private function loadManyToMany(array $resourceModels, RelationMetadata $relation, string $parentResourceModelClass): void
     {
-        $parentMetadata = ($this->metadataRegistry ?? TableModelMetadataRegistry::default())->for($parentTableModelClass);
+        $parentMetadata = ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($parentResourceModelClass);
         $parentPkProperty = $parentMetadata->primaryKeyProperty ?? 'id';
-        $parentIds = $this->collectPropertyValues($tableModels, $parentPkProperty);
+        $parentIds = $this->collectPropertyValues($resourceModels, $parentPkProperty);
         if ($parentIds === []) {
-            $this->markAllRelationsLoaded($tableModels, $relation->propertyName, []);
+            $this->markAllRelationsLoaded($resourceModels, $relation->propertyName, []);
             return;
         }
 
@@ -161,11 +161,11 @@ final class TableModelRelationLoader
         $pivotRows = $this->adapter->execute($pivotSql, array_values($parentIds))->rows;
 
         if ($pivotRows === []) {
-            $this->markAllRelationsLoaded($tableModels, $relation->propertyName, []);
+            $this->markAllRelationsLoaded($resourceModels, $relation->propertyName, []);
             return;
         }
 
-        $targetMetadata = ($this->metadataRegistry ?? TableModelMetadataRegistry::default())->for($relation->targetClass);
+        $targetMetadata = ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($relation->targetClass);
         $targetPkProperty = $targetMetadata->primaryKeyProperty ?? 'id';
         $targetPkColumn = $targetMetadata->column($targetPkProperty)->columnName;
 
@@ -187,32 +187,32 @@ final class TableModelRelationLoader
             $indexed[$pk] = $related;
         }
 
-        foreach ($tableModels as $tableModel) {
-            $parentId = (new \ReflectionProperty($tableModel, $parentPkProperty))->getValue($tableModel);
+        foreach ($resourceModels as $resourceModel) {
+            $parentId = (new \ReflectionProperty($resourceModel, $parentPkProperty))->getValue($resourceModel);
             $items = [];
             foreach ($pivotMap[$parentId] ?? [] as $relatedId) {
                 if (isset($indexed[$relatedId])) {
                     $items[] = $indexed[$relatedId];
                 }
             }
-            $this->relationState($tableModel, $relation->propertyName)->markLoaded($items);
+            $this->relationState($resourceModel, $relation->propertyName)->markLoaded($items);
         }
     }
 
     /**
-     * @param object[] $tableModels
+     * @param object[] $resourceModels
      * @return array<int|string, mixed>
      */
-    private function collectPropertyValues(array $tableModels, string $propertyName): array
+    private function collectPropertyValues(array $resourceModels, string $propertyName): array
     {
         $values = [];
-        foreach ($tableModels as $tableModel) {
-            $property = new \ReflectionProperty($tableModel, $propertyName);
-            if (!$property->isInitialized($tableModel)) {
+        foreach ($resourceModels as $resourceModel) {
+            $property = new \ReflectionProperty($resourceModel, $propertyName);
+            if (!$property->isInitialized($resourceModel)) {
                 continue;
             }
 
-            $value = $property->getValue($tableModel);
+            $value = $property->getValue($resourceModel);
             if ($value !== null) {
                 $values[$value] = $value;
             }
@@ -239,24 +239,24 @@ final class TableModelRelationLoader
     }
 
     /**
-     * @param object[] $tableModels
+     * @param object[] $resourceModels
      */
-    private function markAllRelationsLoaded(array $tableModels, string $relationProperty, mixed $value): void
+    private function markAllRelationsLoaded(array $resourceModels, string $relationProperty, mixed $value): void
     {
-        foreach ($tableModels as $tableModel) {
-            $this->relationState($tableModel, $relationProperty)->markLoaded($value);
+        foreach ($resourceModels as $resourceModel) {
+            $this->relationState($resourceModel, $relationProperty)->markLoaded($value);
         }
     }
 
-    private function relationState(object $tableModel, string $relationProperty): RelationState
+    private function relationState(object $resourceModel, string $relationProperty): RelationState
     {
-        $property = new \ReflectionProperty($tableModel, $relationProperty);
-        $current = $property->getValue($tableModel);
+        $property = new \ReflectionProperty($resourceModel, $relationProperty);
+        $current = $property->getValue($resourceModel);
 
         if (!$current instanceof RelationState) {
             throw new \LogicException(sprintf(
                 'Relation property %s::$%s must be initialized as %s before eager loading.',
-                $tableModel::class,
+                $resourceModel::class,
                 $relationProperty,
                 RelationState::class,
             ));

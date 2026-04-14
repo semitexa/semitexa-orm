@@ -17,10 +17,10 @@ use Semitexa\Orm\Adapter\SqliteAdapter;
 use Semitexa\Orm\Schema\SqliteSchemaComparator;
 use Semitexa\Orm\Bootstrap\OrmBootstrapReport;
 use Semitexa\Orm\Bootstrap\OrmBootstrapValidator;
-use Semitexa\Orm\Hydration\TableModelHydrator;
-use Semitexa\Orm\Hydration\TableModelRelationLoader;
+use Semitexa\Orm\Hydration\ResourceModelHydrator;
+use Semitexa\Orm\Hydration\ResourceModelRelationLoader;
 use Semitexa\Orm\Mapping\MapperRegistry;
-use Semitexa\Orm\Metadata\TableModelMetadataRegistry;
+use Semitexa\Orm\Metadata\ResourceModelMetadataRegistry;
 use Semitexa\Orm\Persistence\AggregateWriteEngine;
 use Semitexa\Orm\Repository\DomainRepository;
 use Semitexa\Orm\Schema\SchemaCollector;
@@ -42,9 +42,9 @@ class OrmManager
     private ?TransactionManager $transactionManager = null;
     private ?SeedRunner $seedRunner = null;
     private ?MapperRegistry $mapperRegistry = null;
-    private ?TableModelMetadataRegistry $tableModelMetadataRegistry = null;
-    private ?TableModelHydrator $tableModelHydrator = null;
-    private ?TableModelRelationLoader $tableModelRelationLoader = null;
+    private ?ResourceModelMetadataRegistry $resourceModelMetadataRegistry = null;
+    private ?ResourceModelHydrator $resourceModelHydrator = null;
+    private ?ResourceModelRelationLoader $resourceModelRelationLoader = null;
     private ?AggregateWriteEngine $aggregateWriteEngine = null;
     private ?OrmBootstrapValidator $bootstrapValidator = null;
 
@@ -184,37 +184,37 @@ class OrmManager
         return $this->mapperRegistry;
     }
 
-    public function getTableModelMetadataRegistry(): TableModelMetadataRegistry
+    public function getResourceModelMetadataRegistry(): ResourceModelMetadataRegistry
     {
-        if ($this->tableModelMetadataRegistry === null) {
-            $this->tableModelMetadataRegistry = new TableModelMetadataRegistry();
+        if ($this->resourceModelMetadataRegistry === null) {
+            $this->resourceModelMetadataRegistry = new ResourceModelMetadataRegistry();
         }
 
-        return $this->tableModelMetadataRegistry;
+        return $this->resourceModelMetadataRegistry;
     }
 
-    public function getTableModelHydrator(): TableModelHydrator
+    public function getResourceModelHydrator(): ResourceModelHydrator
     {
-        if ($this->tableModelHydrator === null) {
-            $this->tableModelHydrator = new TableModelHydrator(
-                metadataRegistry: $this->getTableModelMetadataRegistry(),
+        if ($this->resourceModelHydrator === null) {
+            $this->resourceModelHydrator = new ResourceModelHydrator(
+                metadataRegistry: $this->getResourceModelMetadataRegistry(),
             );
         }
 
-        return $this->tableModelHydrator;
+        return $this->resourceModelHydrator;
     }
 
-    public function getTableModelRelationLoader(): TableModelRelationLoader
+    public function getResourceModelRelationLoader(): ResourceModelRelationLoader
     {
-        if ($this->tableModelRelationLoader === null) {
-            $this->tableModelRelationLoader = new TableModelRelationLoader(
+        if ($this->resourceModelRelationLoader === null) {
+            $this->resourceModelRelationLoader = new ResourceModelRelationLoader(
                 $this->getAdapter(),
-                $this->getTableModelHydrator(),
-                $this->getTableModelMetadataRegistry(),
+                $this->getResourceModelHydrator(),
+                $this->getResourceModelMetadataRegistry(),
             );
         }
 
-        return $this->tableModelRelationLoader;
+        return $this->resourceModelRelationLoader;
     }
 
     public function getAggregateWriteEngine(): AggregateWriteEngine
@@ -222,8 +222,8 @@ class OrmManager
         if ($this->aggregateWriteEngine === null) {
             $this->aggregateWriteEngine = new AggregateWriteEngine(
                 $this->getAdapter(),
-                $this->getTableModelHydrator(),
-                $this->getTableModelMetadataRegistry(),
+                $this->getResourceModelHydrator(),
+                $this->getResourceModelMetadataRegistry(),
             );
         }
 
@@ -235,7 +235,7 @@ class OrmManager
         if ($this->bootstrapValidator === null) {
             $this->bootstrapValidator = new OrmBootstrapValidator(
                 classDiscovery: $this->classDiscovery,
-                metadataRegistry: $this->getTableModelMetadataRegistry(),
+                metadataRegistry: $this->getResourceModelMetadataRegistry(),
                 mapperRegistry: $this->getMapperRegistry(),
             );
         }
@@ -248,16 +248,16 @@ class OrmManager
         return $this->getBootstrapValidator()->validate();
     }
 
-    public function repository(string $tableModelClass, string $domainModelClass): DomainRepository
+    public function repository(string $resourceModelClass, string $domainModelClass): DomainRepository
     {
         return new DomainRepository(
-            tableModelClass: $tableModelClass,
+            resourceModelClass: $resourceModelClass,
             domainModelClass: $domainModelClass,
             adapter: $this->getAdapter(),
             mapperRegistry: $this->getMapperRegistry(),
-            hydrator: $this->getTableModelHydrator(),
-            relationLoader: $this->getTableModelRelationLoader(),
-            metadataRegistry: $this->getTableModelMetadataRegistry(),
+            hydrator: $this->getResourceModelHydrator(),
+            relationLoader: $this->getResourceModelRelationLoader(),
+            metadataRegistry: $this->getResourceModelMetadataRegistry(),
             writeEngine: $this->getAggregateWriteEngine(),
         );
     }

@@ -5,17 +5,17 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Query;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
-use Semitexa\Orm\Hydration\TableModelHydrator;
-use Semitexa\Orm\Hydration\TableModelRelationLoader;
+use Semitexa\Orm\Hydration\ResourceModelHydrator;
+use Semitexa\Orm\Hydration\ResourceModelRelationLoader;
 use Semitexa\Orm\Hydration\TypeCaster;
 use Semitexa\Orm\Mapping\MapperRegistry;
 use Semitexa\Orm\Metadata\ColumnRef;
 use Semitexa\Orm\Metadata\ColumnMetadata;
 use Semitexa\Orm\Metadata\RelationRef;
-use Semitexa\Orm\Metadata\TableModelMetadataRegistry;
+use Semitexa\Orm\Metadata\ResourceModelMetadataRegistry;
 use Semitexa\Orm\Schema\ColumnDefinition;
 
-final class TableModelQuery
+final class ResourceModelQuery
 {
     /** @var array<int, array{type: 'comparison', column: ColumnRef, operator: Operator, value: mixed}|array{type: 'null', column: ColumnRef, negated: bool}> */
     private array $wheres = [];
@@ -34,17 +34,17 @@ final class TableModelQuery
     private bool $skipTenantScope = false;
 
     public function __construct(
-        private readonly string $tableModelClass,
-        private readonly DatabaseAdapterInterface $adapter,
-        private readonly TableModelHydrator $hydrator,
-        private readonly TableModelRelationLoader $relationLoader,
-        private readonly ?TableModelMetadataRegistry $metadataRegistry = null,
-        private readonly ?TypeCaster $typeCaster = null,
+        private readonly string                         $resourceModelClass,
+        private readonly DatabaseAdapterInterface       $adapter,
+        private readonly ResourceModelHydrator          $hydrator,
+        private readonly ResourceModelRelationLoader    $relationLoader,
+        private readonly ?ResourceModelMetadataRegistry $metadataRegistry = null,
+        private readonly ?TypeCaster                    $typeCaster = null,
     ) {}
 
     public function where(ColumnRef $column, Operator $operator, mixed $value): self
     {
-        $this->assertColumnBelongsToCurrentTableModel($column);
+        $this->assertColumnBelongsToCurrentResourceModel($column);
         $this->wheres[] = [
             'type' => 'comparison',
             'column' => $column,
@@ -57,7 +57,7 @@ final class TableModelQuery
 
     public function whereNull(ColumnRef $column): self
     {
-        $this->assertColumnBelongsToCurrentTableModel($column);
+        $this->assertColumnBelongsToCurrentResourceModel($column);
         $this->wheres[] = [
             'type' => 'null',
             'column' => $column,
@@ -69,7 +69,7 @@ final class TableModelQuery
 
     public function whereNotNull(ColumnRef $column): self
     {
-        $this->assertColumnBelongsToCurrentTableModel($column);
+        $this->assertColumnBelongsToCurrentResourceModel($column);
         $this->wheres[] = [
             'type' => 'null',
             'column' => $column,
@@ -81,7 +81,7 @@ final class TableModelQuery
 
     public function withRelation(RelationRef $relation): self
     {
-        $this->assertRelationBelongsToCurrentTableModel($relation);
+        $this->assertRelationBelongsToCurrentResourceModel($relation);
         $this->relations[] = $relation;
 
         return $this;
@@ -89,7 +89,7 @@ final class TableModelQuery
 
     public function orderBy(ColumnRef $column, Direction $direction): self
     {
-        $this->assertColumnBelongsToCurrentTableModel($column);
+        $this->assertColumnBelongsToCurrentResourceModel($column);
         $this->orderBys[] = [
             'column' => $column,
             'direction' => $direction,
@@ -147,14 +147,14 @@ final class TableModelQuery
     {
         $result = $this->adapter->execute($this->buildSql(), $this->buildParams());
         $items = array_map(
-            fn (array $row): object => $this->hydrator->hydrate($row, $this->tableModelClass),
+            fn (array $row): object => $this->hydrator->hydrate($row, $this->resourceModelClass),
             $result->rows,
         );
 
         if ($items !== [] && $this->relations !== []) {
             $this->relationLoader->loadRelations(
                 $items,
-                $this->tableModelClass,
+                $this->resourceModelClass,
                 array_map(static fn (RelationRef $relation): string => $relation->propertyName, $this->relations),
             );
         }
@@ -175,7 +175,7 @@ final class TableModelQuery
     public function fetchAllAs(string $domainModelClass, MapperRegistry $mapperRegistry): array
     {
         return array_map(
-            fn (object $tableModel): object => $mapperRegistry->mapToDomain($tableModel, $domainModelClass),
+            fn (object $resourceModel): object => $mapperRegistry->mapToDomain($resourceModel, $domainModelClass),
             $this->fetchAll(),
         );
     }
@@ -206,7 +206,7 @@ final class TableModelQuery
 
     private function buildSql(): string
     {
-        $metadata = ($this->metadataRegistry ?? TableModelMetadataRegistry::default())->for($this->tableModelClass);
+        $metadata = ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($this->resourceModelClass);
         $this->assertRequiredPoliciesAreSatisfied($metadata);
         $sql = sprintf('SELECT * FROM `%s`', $metadata->tableName);
         $conditions = [];
@@ -272,7 +272,7 @@ final class TableModelQuery
         return $sql;
     }
 
-    private function resolveTenantColumnName(\Semitexa\Orm\Metadata\TableModelMetadata $metadata): string
+    private function resolveTenantColumnName(\Semitexa\Orm\Metadata\ResourceModelMetadata $metadata): string
     {
         $tenantColumn = $metadata->tenantPolicy->column ?? 'tenantId';
 
@@ -290,7 +290,7 @@ final class TableModelQuery
     {
         $params = [];
 
-        $metadata = ($this->metadataRegistry ?? TableModelMetadataRegistry::default())->for($this->tableModelClass);
+        $metadata = ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($this->resourceModelClass);
         if ($metadata->tenantPolicy !== null && !$this->skipTenantScope) {
             $params['tenant_scope'] = $this->tenantValue;
         }
@@ -306,41 +306,41 @@ final class TableModelQuery
         return $params;
     }
 
-    private function assertColumnBelongsToCurrentTableModel(ColumnRef $column): void
+    private function assertColumnBelongsToCurrentResourceModel(ColumnRef $column): void
     {
-        if ($column->tableModelClass !== $this->tableModelClass) {
+        if ($column->resourceModelClass !== $this->resourceModelClass) {
             throw new \InvalidArgumentException(sprintf(
                 'ColumnRef for %s cannot be used in query for %s.',
-                $column->tableModelClass,
-                $this->tableModelClass,
+                $column->resourceModelClass,
+                $this->resourceModelClass,
             ));
         }
     }
 
-    private function assertRelationBelongsToCurrentTableModel(RelationRef $relation): void
+    private function assertRelationBelongsToCurrentResourceModel(RelationRef $relation): void
     {
-        if ($relation->tableModelClass !== $this->tableModelClass) {
+        if ($relation->resourceModelClass !== $this->resourceModelClass) {
             throw new \InvalidArgumentException(sprintf(
                 'RelationRef for %s cannot be used in query for %s.',
-                $relation->tableModelClass,
-                $this->tableModelClass,
+                $relation->resourceModelClass,
+                $this->resourceModelClass,
             ));
         }
     }
 
-    private function assertRequiredPoliciesAreSatisfied(\Semitexa\Orm\Metadata\TableModelMetadata $metadata): void
+    private function assertRequiredPoliciesAreSatisfied(\Semitexa\Orm\Metadata\ResourceModelMetadata $metadata): void
     {
         if ($metadata->tenantPolicy !== null && !$this->skipTenantScope && $this->tenantValue === null) {
             throw new \LogicException(sprintf(
-                'Query for tenant-scoped table model %s requires tenant context. Call forTenant() or withoutTenantScope().',
-                $this->tableModelClass,
+                'Query for tenant-scoped resource model %s requires tenant context. Call forTenant() or withoutTenantScope().',
+                $this->resourceModelClass,
             ));
         }
     }
 
     private function normalizeComparisonValue(ColumnRef $column, mixed $value): mixed
     {
-        $metadata = ($this->metadataRegistry ?? TableModelMetadataRegistry::default())->for($this->tableModelClass);
+        $metadata = ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($this->resourceModelClass);
         $columnMetadata = $metadata->column($column->propertyName);
         $typeCaster = $this->typeCaster ?? new TypeCaster();
 

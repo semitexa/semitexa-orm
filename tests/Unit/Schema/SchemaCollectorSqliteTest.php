@@ -16,7 +16,7 @@ use Semitexa\Orm\Attribute\PrimaryKey;
 use Semitexa\Orm\Schema\SchemaCollector;
 
 #[FromTable(name: 'sqlite_documents')]
-final readonly class SqliteValidTypesTableModel
+final readonly class SqliteValidTypesResourceModel
 {
     public function __construct(
         #[PrimaryKey(strategy: 'uuid')]
@@ -36,7 +36,7 @@ final readonly class SqliteValidTypesTableModel
 
 #[FromTable(name: 'sqlite_invalid_index')]
 #[Index(columns: ['slug', ''])]
-final readonly class SqliteInvalidIndexTableModel
+final readonly class SqliteInvalidIndexResourceModel
 {
     public function __construct(
         #[PrimaryKey(strategy: 'uuid')]
@@ -57,7 +57,7 @@ final class SchemaCollectorSqliteTest extends TestCase
         $classDiscovery
             ->expects($this->once())
             ->method('findClassesWithAttribute')
-            ->willReturn([SqliteValidTypesTableModel::class]);
+            ->willReturn([SqliteValidTypesResourceModel::class]);
 
         $collector = new SchemaCollector(
             classDiscovery: $classDiscovery,
@@ -77,7 +77,7 @@ final class SchemaCollectorSqliteTest extends TestCase
         $classDiscovery
             ->expects($this->once())
             ->method('findClassesWithAttribute')
-            ->willReturn([SqliteInvalidIndexTableModel::class]);
+            ->willReturn([SqliteInvalidIndexResourceModel::class]);
 
         $collector = new SchemaCollector(
             classDiscovery: $classDiscovery,

@@ -5,39 +5,39 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Repository;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
-use Semitexa\Orm\Hydration\TableModelHydrator;
-use Semitexa\Orm\Hydration\TableModelRelationLoader;
+use Semitexa\Orm\Hydration\ResourceModelHydrator;
+use Semitexa\Orm\Hydration\ResourceModelRelationLoader;
 use Semitexa\Orm\Mapping\MapperRegistry;
 use Semitexa\Orm\Metadata\ColumnRef;
 use Semitexa\Orm\Metadata\RelationRef;
-use Semitexa\Orm\Metadata\TableModelMetadataRegistry;
+use Semitexa\Orm\Metadata\ResourceModelMetadataRegistry;
 use Semitexa\Orm\Persistence\AggregateWriteEngine;
 use Semitexa\Orm\Query\Direction;
 use Semitexa\Orm\Query\Operator;
 use Semitexa\Orm\Query\SystemScopeToken;
-use Semitexa\Orm\Query\TableModelQuery;
+use Semitexa\Orm\Query\ResourceModelQuery;
 
 final class DomainRepository
 {
-    private readonly TableModelHydrator $hydrator;
-    private readonly TableModelRelationLoader $relationLoader;
+    private readonly ResourceModelHydrator $hydrator;
+    private readonly ResourceModelRelationLoader $relationLoader;
     private readonly AggregateWriteEngine $writeEngine;
 
     private mixed $tenantValue = null;
     private ?SystemScopeToken $systemScopeToken = null;
 
     public function __construct(
-        private readonly string $tableModelClass,
-        private readonly string $domainModelClass,
-        private readonly DatabaseAdapterInterface $adapter,
-        private readonly MapperRegistry $mapperRegistry,
-        ?TableModelHydrator $hydrator = null,
-        ?TableModelRelationLoader $relationLoader = null,
-        private readonly ?TableModelMetadataRegistry $metadataRegistry = null,
-        ?AggregateWriteEngine $writeEngine = null,
+        private readonly string                         $resourceModelClass,
+        private readonly string                         $domainModelClass,
+        private readonly DatabaseAdapterInterface       $adapter,
+        private readonly MapperRegistry                 $mapperRegistry,
+        ?ResourceModelHydrator                          $hydrator = null,
+        ?ResourceModelRelationLoader                    $relationLoader = null,
+        private readonly ?ResourceModelMetadataRegistry $metadataRegistry = null,
+        ?AggregateWriteEngine                           $writeEngine = null,
     ) {
-        $this->hydrator = $hydrator ?? new TableModelHydrator(metadataRegistry: $metadataRegistry);
-        $this->relationLoader = $relationLoader ?? new TableModelRelationLoader(
+        $this->hydrator = $hydrator ?? new ResourceModelHydrator(metadataRegistry: $metadataRegistry);
+        $this->relationLoader = $relationLoader ?? new ResourceModelRelationLoader(
             $adapter,
             $this->hydrator,
             $metadataRegistry,
@@ -67,10 +67,10 @@ final class DomainRepository
         return $clone;
     }
 
-    public function query(): TableModelQuery
+    public function query(): ResourceModelQuery
     {
-        $query = new TableModelQuery(
-            $this->tableModelClass,
+        $query = new ResourceModelQuery(
+            $this->resourceModelClass,
             $this->adapter,
             $this->hydrator,
             $this->relationLoader,
@@ -88,12 +88,12 @@ final class DomainRepository
 
     public function findById(int|string $id): ?object
     {
-        $metadata = ($this->metadataRegistry ?? TableModelMetadataRegistry::default())->for($this->tableModelClass);
+        $metadata = ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($this->resourceModelClass);
         $primaryKey = $metadata->primaryKeyProperty
-            ?? throw new \LogicException(sprintf('Table model %s has no primary key metadata.', $this->tableModelClass));
+            ?? throw new \LogicException(sprintf('Resource model %s has no primary key metadata.', $this->resourceModelClass));
 
         return $this->query()
-            ->where(ColumnRef::for($this->tableModelClass, $primaryKey), Operator::Equals, $id)
+            ->where(ColumnRef::for($this->resourceModelClass, $primaryKey), Operator::Equals, $id)
             ->fetchOneAs($this->domainModelClass, $this->mapperRegistry);
     }
 
@@ -133,20 +133,20 @@ final class DomainRepository
 
     public function insert(object $domainModel): object
     {
-        return $this->writeEngine->insert($domainModel, $this->tableModelClass, $this->mapperRegistry);
+        return $this->writeEngine->insert($domainModel, $this->resourceModelClass, $this->mapperRegistry);
     }
 
     public function update(object $domainModel): object
     {
-        return $this->writeEngine->update($domainModel, $this->tableModelClass, $this->mapperRegistry);
+        return $this->writeEngine->update($domainModel, $this->resourceModelClass, $this->mapperRegistry);
     }
 
     public function delete(object $domainModel): void
     {
-        $this->writeEngine->delete($domainModel, $this->tableModelClass, $this->mapperRegistry);
+        $this->writeEngine->delete($domainModel, $this->resourceModelClass, $this->mapperRegistry);
     }
 
-    public function orderBy(TableModelQuery $query, ColumnRef $column, Direction $direction): TableModelQuery
+    public function orderBy(ResourceModelQuery $query, ColumnRef $column, Direction $direction): ResourceModelQuery
     {
         return $query->orderBy($column, $direction);
     }
@@ -155,10 +155,10 @@ final class DomainRepository
      * @param array<string, mixed> $criteria
      * @param list<RelationRef> $relations
      */
-    private function applyCriteria(TableModelQuery $query, array $criteria, array $relations = []): TableModelQuery
+    private function applyCriteria(ResourceModelQuery $query, array $criteria, array $relations = []): ResourceModelQuery
     {
         foreach ($criteria as $propertyName => $value) {
-            $column = ColumnRef::for($this->tableModelClass, $propertyName);
+            $column = ColumnRef::for($this->resourceModelClass, $propertyName);
             if ($value === null) {
                 $query->whereNull($column);
                 continue;

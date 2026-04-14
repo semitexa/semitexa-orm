@@ -7,11 +7,9 @@ namespace Semitexa\Orm\Tests\Unit\Connection;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Semitexa\Orm\Connection\ConnectionRegistry;
-use Semitexa\Orm\Tests\Fixture\Metadata\AnalyticsEventTableModel;
-use Semitexa\Orm\Tests\Fixture\Metadata\ValidProductTableModel;
+use Semitexa\Orm\Tests\Fixture\Metadata\AnalyticsEventResourceModel;
 
-require_once __DIR__ . '/../../Fixture/Metadata/ValidProductTableModel.php';
-require_once __DIR__ . '/../../Fixture/Metadata/AnalyticsEventTableModel.php';
+use Semitexa\Orm\Tests\Fixture\Metadata\ValidProductResourceModel;
 
 final class ConnectionRegistryTest extends TestCase
 {
@@ -20,7 +18,7 @@ final class ConnectionRegistryTest extends TestCase
     {
         $registry = new ConnectionRegistry();
 
-        $this->assertSame('default', $registry->resolveConnectionName(ValidProductTableModel::class));
+        $this->assertSame('default', $registry->resolveConnectionName(ValidProductResourceModel::class));
     }
 
     #[Test]
@@ -28,7 +26,7 @@ final class ConnectionRegistryTest extends TestCase
     {
         $registry = new ConnectionRegistry();
 
-        $this->assertSame('analytics', $registry->resolveConnectionName(AnalyticsEventTableModel::class));
+        $this->assertSame('analytics', $registry->resolveConnectionName(AnalyticsEventResourceModel::class));
     }
 
     #[Test]
@@ -36,8 +34,8 @@ final class ConnectionRegistryTest extends TestCase
     {
         $registry = new ConnectionRegistry();
 
-        $first = $registry->resolveConnectionName(AnalyticsEventTableModel::class);
-        $second = $registry->resolveConnectionName(AnalyticsEventTableModel::class);
+        $first = $registry->resolveConnectionName(AnalyticsEventResourceModel::class);
+        $second = $registry->resolveConnectionName(AnalyticsEventResourceModel::class);
 
         $this->assertSame('analytics', $first);
         $this->assertSame($first, $second);
