@@ -198,9 +198,10 @@ trait WhereTrait
         }
 
         // Support qualified column (e.g. alias.column) for relation filters
+        // Security: escape backticks within column parts to prevent SQL injection (VULN-004)
         $col = str_contains($where['column'], '.')
-            ? implode('.', array_map(fn(string $part) => '`' . $part . '`', explode('.', $where['column'], 2)))
-            : "`{$where['column']}`";
+            ? implode('.', array_map(fn(string $part) => '`' . str_replace('`', '``', $part) . '`', explode('.', $where['column'], 2)))
+            : '`' . str_replace('`', '``', $where['column']) . '`';
 
         if ($type === 'null') {
             return "{$col} {$where['operator']}";

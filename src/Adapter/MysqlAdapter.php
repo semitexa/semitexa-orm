@@ -63,6 +63,14 @@ class MysqlAdapter implements DatabaseAdapterInterface
         }
     }
 
+    /**
+     * Execute a raw SQL query without prepared statements.
+     *
+     * @deprecated Security: this method does not support parameterized queries.
+     *   Use execute($sql, $params) instead to prevent SQL injection.
+     *   This method is kept only for internal bootstrapping (version detection)
+     *   and will be removed in a future release.
+     */
     public function query(string $sql): QueryResult
     {
         $connection = $this->pool->pop();
