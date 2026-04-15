@@ -70,7 +70,13 @@ final class ResourceModelRelationLoader
         }
 
         foreach ($resourceModels as $resourceModel) {
-            $fk = $this->arrayKeyFrom((new \ReflectionProperty($resourceModel, $relation->foreignKey))->getValue($resourceModel));
+            $fkValue = (new \ReflectionProperty($resourceModel, $relation->foreignKey))->getValue($resourceModel);
+            if ($fkValue === null) {
+                $this->relationState($resourceModel, $relation->propertyName)->markLoaded(null);
+                continue;
+            }
+
+            $fk = $this->arrayKeyFrom($fkValue);
             $this->relationState($resourceModel, $relation->propertyName)->markLoaded($indexed[$fk] ?? null);
         }
     }
