@@ -6,6 +6,11 @@ namespace Semitexa\Orm\Mapping;
 
 final readonly class MapperDefinition
 {
+    /**
+     * @param class-string $mapperClass
+     * @param class-string $resourceModelClass
+     * @param class-string $domainModelClass
+     */
     public function __construct(
         public string $mapperClass,
         public string $resourceModelClass,

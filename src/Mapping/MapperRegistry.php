@@ -33,6 +33,7 @@ final class MapperRegistry
     public function build(?array $mapperClasses = null, ?array $domainModelClasses = null): void
     {
         $mapperClasses ??= $this->classDiscovery()->findClassesWithAttribute(AsMapper::class);
+        /** @var list<class-string> $mapperClasses */
 
         $definitionsByPair = [];
         $definitionsByMapperClass = [];
@@ -57,7 +58,9 @@ final class MapperRegistry
 
         $this->definitionsByPair = $definitionsByPair;
         $this->definitionsByMapperClass = $definitionsByMapperClass;
-        $this->instancesByMapperClass = [];
+        /** @var array<class-string, ResourceModelMapperInterface> $instancesByMapperClass */
+        $instancesByMapperClass = [];
+        $this->instancesByMapperClass = $instancesByMapperClass;
     }
 
     public function definitionFor(string $resourceModelClass, string $domainModelClass): MapperDefinition
@@ -107,6 +110,9 @@ final class MapperRegistry
         return $this->definitionsByPair;
     }
 
+    /**
+     * @param class-string $mapperClass
+     */
     private function extractMapperDefinition(string $mapperClass): MapperDefinition
     {
         $ref = new \ReflectionClass($mapperClass);
@@ -128,27 +134,31 @@ final class MapperRegistry
 
         /** @var AsMapper $asMapper */
         $asMapper = $attrs[0]->newInstance();
+        /** @var class-string $resourceModelClass */
+        $resourceModelClass = $asMapper->resourceModel;
+        /** @var class-string $domainModelClass */
+        $domainModelClass = $asMapper->domainModel;
 
-        if (!class_exists($asMapper->resourceModel)) {
+        if (!class_exists($resourceModelClass)) {
             throw new InvalidMapperDeclarationException(sprintf(
                 'Mapper %s declares missing resource model %s.',
                 $mapperClass,
-                $asMapper->resourceModel,
+                $resourceModelClass,
             ));
         }
 
-        if (!class_exists($asMapper->domainModel)) {
+        if (!class_exists($domainModelClass)) {
             throw new InvalidMapperDeclarationException(sprintf(
                 'Mapper %s declares missing domain model %s.',
                 $mapperClass,
-                $asMapper->domainModel,
+                $domainModelClass,
             ));
         }
 
         return new MapperDefinition(
             mapperClass: $mapperClass,
-            resourceModelClass: $asMapper->resourceModel,
-            domainModelClass: $asMapper->domainModel,
+            resourceModelClass: $resourceModelClass,
+            domainModelClass: $domainModelClass,
         );
     }
 

@@ -6,6 +6,9 @@ namespace Semitexa\Orm\Metadata;
 
 final readonly class ColumnRef
 {
+    /**
+     * @param class-string $resourceModelClass
+     */
     public function __construct(
         public string $resourceModelClass,
         public string $propertyName,

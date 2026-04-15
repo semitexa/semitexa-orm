@@ -33,6 +33,9 @@ final class ResourceModelQuery
     private bool $onlySoftDeleted = false;
     private bool $skipTenantScope = false;
 
+    /**
+     * @param class-string $resourceModelClass
+     */
     public function __construct(
         private readonly string                         $resourceModelClass,
         private readonly DatabaseAdapterInterface       $adapter,
@@ -159,7 +162,7 @@ final class ResourceModelQuery
             );
         }
 
-        return $items;
+        return array_values($items);
     }
 
     public function fetchOne(): ?object

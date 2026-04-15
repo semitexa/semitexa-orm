@@ -31,6 +31,8 @@ final class OrmBootstrapValidator
     ): OrmBootstrapReport {
         $resourceModelClasses ??= $this->classDiscovery()->findClassesWithAttribute(FromTable::class);
         $mapperClasses ??= $this->classDiscovery()->findClassesWithAttribute(AsMapper::class);
+        /** @var list<class-string> $resourceModelClasses */
+        /** @var list<class-string> $mapperClasses */
 
         $metadataRegistry = $this->metadataRegistry ?? ResourceModelMetadataRegistry::default();
         /** @var array<class-string, ResourceModelMetadata> $metadataByClass */
@@ -63,18 +65,19 @@ final class OrmBootstrapValidator
 
         $mapperRegistry = $this->mapperRegistry ?? new MapperRegistry($this->classDiscovery);
         $mapperRegistry->build(
-            mapperClasses: array_values($mapperClasses),
+            mapperClasses: $mapperClasses,
         );
 
         $domainModelClasses ??= array_values(array_unique(array_map(
             static fn ($definition) => $definition->domainModelClass,
             $mapperRegistry->all(),
         )));
+        /** @var list<class-string> $domainModelClasses */
 
         return new OrmBootstrapReport(
-            resourceModelClasses: array_values($resourceModelClasses),
-            mapperClasses: array_values($mapperClasses),
-            domainModelClasses: array_values($domainModelClasses),
+            resourceModelClasses: $resourceModelClasses,
+            mapperClasses: $mapperClasses,
+            domainModelClasses: $domainModelClasses,
             crossConnectionWarnings: $crossConnectionWarnings,
         );
     }

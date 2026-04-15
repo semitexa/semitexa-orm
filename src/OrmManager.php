@@ -248,6 +248,10 @@ class OrmManager
         return $this->getBootstrapValidator()->validate();
     }
 
+    /**
+     * @param class-string $resourceModelClass
+     * @param class-string $domainModelClass
+     */
     public function repository(string $resourceModelClass, string $domainModelClass): DomainRepository
     {
         return new DomainRepository(

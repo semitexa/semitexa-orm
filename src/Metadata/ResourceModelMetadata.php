@@ -7,6 +7,7 @@ namespace Semitexa\Orm\Metadata;
 final readonly class ResourceModelMetadata
 {
     /**
+     * @param class-string $className
      * @param array<string, ColumnMetadata> $columnsByProperty
      * @param array<string, RelationMetadata> $relationsByProperty
      */

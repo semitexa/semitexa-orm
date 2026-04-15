@@ -26,6 +26,10 @@ final class DomainRepository
     private mixed $tenantValue = null;
     private ?SystemScopeToken $systemScopeToken = null;
 
+    /**
+     * @param class-string $resourceModelClass
+     * @param class-string $domainModelClass
+     */
     public function __construct(
         private readonly string                         $resourceModelClass,
         private readonly string                         $domainModelClass,
