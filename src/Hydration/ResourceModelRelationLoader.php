@@ -58,17 +58,19 @@ final class ResourceModelRelationLoader
         $targetMetadata = ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($relation->targetClass);
         $targetPkProperty = $targetMetadata->primaryKeyProperty ?? 'id';
         $targetPkColumn = $targetMetadata->column($targetPkProperty)->columnName;
-        $rows = $this->fetchRowsByColumn($targetMetadata->tableName, $targetPkColumn, array_values($fkValues));
+        /** @var list<int|string> $fkValuesList */
+        $fkValuesList = array_keys($fkValues);
+        $rows = $this->fetchRowsByColumn($targetMetadata->tableName, $targetPkColumn, $fkValuesList);
 
         $indexed = [];
         foreach ($rows as $row) {
             $related = $this->hydrator->hydrate($row, $relation->targetClass);
-            $pk = (new \ReflectionProperty($related, $targetPkProperty))->getValue($related);
+            $pk = $this->arrayKeyFrom((new \ReflectionProperty($related, $targetPkProperty))->getValue($related));
             $indexed[$pk] = $related;
         }
 
         foreach ($resourceModels as $resourceModel) {
-            $fk = (new \ReflectionProperty($resourceModel, $relation->foreignKey))->getValue($resourceModel);
+            $fk = $this->arrayKeyFrom((new \ReflectionProperty($resourceModel, $relation->foreignKey))->getValue($resourceModel));
             $this->relationState($resourceModel, $relation->propertyName)->markLoaded($indexed[$fk] ?? null);
         }
     }
@@ -89,17 +91,19 @@ final class ResourceModelRelationLoader
 
         $targetMetadata = ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($relation->targetClass);
         $fkColumn = $targetMetadata->column($relation->foreignKey)->columnName;
-        $rows = $this->fetchRowsByColumn($targetMetadata->tableName, $fkColumn, array_values($parentIds));
+        /** @var list<int|string> $parentIdsList */
+        $parentIdsList = array_keys($parentIds);
+        $rows = $this->fetchRowsByColumn($targetMetadata->tableName, $fkColumn, $parentIdsList);
 
         $grouped = [];
         foreach ($rows as $row) {
             $related = $this->hydrator->hydrate($row, $relation->targetClass);
-            $fk = (new \ReflectionProperty($related, $relation->foreignKey))->getValue($related);
+            $fk = $this->arrayKeyFrom((new \ReflectionProperty($related, $relation->foreignKey))->getValue($related));
             $grouped[$fk][] = $related;
         }
 
         foreach ($resourceModels as $resourceModel) {
-            $parentId = (new \ReflectionProperty($resourceModel, $parentPkProperty))->getValue($resourceModel);
+            $parentId = $this->arrayKeyFrom((new \ReflectionProperty($resourceModel, $parentPkProperty))->getValue($resourceModel));
             $this->relationState($resourceModel, $relation->propertyName)->markLoaded($grouped[$parentId] ?? []);
         }
     }
@@ -120,17 +124,19 @@ final class ResourceModelRelationLoader
 
         $targetMetadata = ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($relation->targetClass);
         $fkColumn = $targetMetadata->column($relation->foreignKey)->columnName;
-        $rows = $this->fetchRowsByColumn($targetMetadata->tableName, $fkColumn, array_values($parentIds));
+        /** @var list<int|string> $parentIdsList */
+        $parentIdsList = array_keys($parentIds);
+        $rows = $this->fetchRowsByColumn($targetMetadata->tableName, $fkColumn, $parentIdsList);
 
         $indexed = [];
         foreach ($rows as $row) {
             $related = $this->hydrator->hydrate($row, $relation->targetClass);
-            $fk = (new \ReflectionProperty($related, $relation->foreignKey))->getValue($related);
+            $fk = $this->arrayKeyFrom((new \ReflectionProperty($related, $relation->foreignKey))->getValue($related));
             $indexed[$fk] = $related;
         }
 
         foreach ($resourceModels as $resourceModel) {
-            $parentId = (new \ReflectionProperty($resourceModel, $parentPkProperty))->getValue($resourceModel);
+            $parentId = $this->arrayKeyFrom((new \ReflectionProperty($resourceModel, $parentPkProperty))->getValue($resourceModel));
             $this->relationState($resourceModel, $relation->propertyName)->markLoaded($indexed[$parentId] ?? null);
         }
     }
@@ -149,16 +155,18 @@ final class ResourceModelRelationLoader
             return;
         }
 
-        $placeholders = $this->buildInPlaceholders($parentIds);
+        /** @var list<int|string> $parentIdsList */
+        $parentIdsList = array_keys($parentIds);
+        $parentIdParams = $this->buildInParams($parentIdsList);
         $pivotSql = sprintf(
             'SELECT `%s`, `%s` FROM `%s` WHERE `%s` IN (%s)',
             $relation->foreignKey,
             $relation->relatedKey,
             $relation->pivotTable,
             $relation->foreignKey,
-            $placeholders,
+            $this->placeholdersForParams($parentIdParams),
         );
-        $pivotRows = $this->adapter->execute($pivotSql, array_values($parentIds))->rows;
+        $pivotRows = $this->adapter->execute($pivotSql, $parentIdParams)->rows;
 
         if ($pivotRows === []) {
             $this->markAllRelationsLoaded($resourceModels, $relation->propertyName, []);
@@ -172,23 +180,25 @@ final class ResourceModelRelationLoader
         $relatedIds = [];
         $pivotMap = [];
         foreach ($pivotRows as $row) {
-            $parentId = $row[$relation->foreignKey];
-            $relatedId = $row[$relation->relatedKey];
+            $parentId = $this->arrayKeyFrom($row[$relation->foreignKey]);
+            $relatedId = $this->arrayKeyFrom($row[$relation->relatedKey]);
             $relatedIds[$relatedId] = $relatedId;
             $pivotMap[$parentId][] = $relatedId;
         }
 
-        $rows = $this->fetchRowsByColumn($targetMetadata->tableName, $targetPkColumn, array_values($relatedIds));
+        /** @var list<int|string> $relatedIdsList */
+        $relatedIdsList = array_keys($relatedIds);
+        $rows = $this->fetchRowsByColumn($targetMetadata->tableName, $targetPkColumn, $relatedIdsList);
 
         $indexed = [];
         foreach ($rows as $row) {
             $related = $this->hydrator->hydrate($row, $relation->targetClass);
-            $pk = (new \ReflectionProperty($related, $targetPkProperty))->getValue($related);
+            $pk = $this->arrayKeyFrom((new \ReflectionProperty($related, $targetPkProperty))->getValue($related));
             $indexed[$pk] = $related;
         }
 
         foreach ($resourceModels as $resourceModel) {
-            $parentId = (new \ReflectionProperty($resourceModel, $parentPkProperty))->getValue($resourceModel);
+            $parentId = $this->arrayKeyFrom((new \ReflectionProperty($resourceModel, $parentPkProperty))->getValue($resourceModel));
             $items = [];
             foreach ($pivotMap[$parentId] ?? [] as $relatedId) {
                 if (isset($indexed[$relatedId])) {
@@ -214,7 +224,8 @@ final class ResourceModelRelationLoader
 
             $value = $property->getValue($resourceModel);
             if ($value !== null) {
-                $values[$value] = $value;
+                $key = $this->arrayKeyFrom($value);
+                $values[$key] = $key;
             }
         }
 
@@ -222,20 +233,20 @@ final class ResourceModelRelationLoader
     }
 
     /**
-     * @param list<mixed> $values
+     * @param list<int|string> $values
      * @return array<int, array<string, mixed>>
      */
     private function fetchRowsByColumn(string $tableName, string $columnName, array $values): array
     {
-        $placeholders = $this->buildInPlaceholders($values);
+        $params = $this->buildInParams($values);
         $sql = sprintf(
             'SELECT * FROM `%s` WHERE `%s` IN (%s)',
             $tableName,
             $columnName,
-            $placeholders,
+            $this->placeholdersForParams($params),
         );
 
-        return $this->adapter->execute($sql, array_values($values))->rows;
+        return $this->adapter->execute($sql, $params)->rows;
     }
 
     /**
@@ -266,10 +277,40 @@ final class ResourceModelRelationLoader
     }
 
     /**
-     * @param array<int|string, mixed>|list<mixed> $values
+     * @param list<int|string> $values
+     * @return array<string, int|string>
      */
-    private function buildInPlaceholders(array $values): string
+    private function buildInParams(array $values): array
     {
-        return implode(', ', array_fill(0, count($values), '?'));
+        $params = [];
+
+        foreach ($values as $index => $value) {
+            $params['in_' . $index] = $value;
+        }
+
+        return $params;
+    }
+
+    /**
+     * @param array<string, int|string> $params
+     */
+    private function placeholdersForParams(array $params): string
+    {
+        return implode(', ', array_map(
+            static fn (string $key): string => ':' . $key,
+            array_keys($params),
+        ));
+    }
+
+    private function arrayKeyFrom(mixed $value): int|string
+    {
+        if (is_int($value) || is_string($value)) {
+            return $value;
+        }
+
+        throw new \LogicException(sprintf(
+            'Expected int|string relation key, got %s.',
+            get_debug_type($value),
+        ));
     }
 }

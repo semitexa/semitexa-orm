@@ -14,7 +14,9 @@ final class ResourceModelMetadataValidator
 {
     public function validate(ResourceModelMetadata $metadata): void
     {
-        $ref = new \ReflectionClass($metadata->className);
+        /** @var class-string $resourceModelClass */
+        $resourceModelClass = $metadata->className;
+        $ref = new \ReflectionClass($resourceModelClass);
 
         if (!$ref->isFinal()) {
             throw new InvalidResourceModelException(sprintf(

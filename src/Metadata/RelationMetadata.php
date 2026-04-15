@@ -9,6 +9,9 @@ use Semitexa\Orm\Schema\ForeignKeyAction;
 
 final readonly class RelationMetadata
 {
+    /**
+     * @param class-string $targetClass
+     */
     public function __construct(
         public string $propertyName,
         public RelationKind $kind,

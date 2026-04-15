@@ -151,7 +151,7 @@ trait WhereTrait
     {
         foreach ($bindings as $val) {
             $key                = $this->nextParam('raw');
-            $sql                = preg_replace('/\?/', ":{$key}", $sql, 1);
+            $sql = (string) preg_replace('/\?/', ":{$key}", $sql, 1);
             $this->params[$key] = $val;
         }
         $this->wheres[] = [
@@ -199,9 +199,13 @@ trait WhereTrait
 
         // Support qualified column (e.g. alias.column) for relation filters
         // Security: escape backticks within column parts to prevent SQL injection (VULN-004)
-        $col = str_contains($where['column'], '.')
-            ? implode('.', array_map(fn(string $part) => '`' . str_replace('`', '``', $part) . '`', explode('.', $where['column'], 2)))
-            : '`' . str_replace('`', '``', $where['column']) . '`';
+        $column = $where['column'];
+        if (!is_string($column)) {
+            throw new \LogicException('WHERE condition column must be a string.');
+        }
+        $col = str_contains($column, '.')
+            ? implode('.', array_map(fn(string $part) => '`' . str_replace('`', '``', $part) . '`', explode('.', $column, 2)))
+            : '`' . str_replace('`', '``', $column) . '`';
 
         if ($type === 'null') {
             return "{$col} {$where['operator']}";

@@ -23,6 +23,9 @@ final class AggregateWriteEngine
         private readonly ?ResourceModelMetadataRegistry $metadataRegistry = null,
     ) {}
 
+    /**
+     * @param class-string $resourceModelClass
+     */
     public function insert(object $domainModel, string $resourceModelClass, MapperRegistry $mapperRegistry): object
     {
         $rootResourceModel = $mapperRegistry->mapToSourceModel($domainModel, $resourceModelClass);
@@ -31,6 +34,9 @@ final class AggregateWriteEngine
         return $mapperRegistry->mapToDomain($rootResourceModel, $domainModel::class);
     }
 
+    /**
+     * @param class-string $resourceModelClass
+     */
     public function update(object $domainModel, string $resourceModelClass, MapperRegistry $mapperRegistry): object
     {
         $rootResourceModel = $mapperRegistry->mapToSourceModel($domainModel, $resourceModelClass);
@@ -39,6 +45,9 @@ final class AggregateWriteEngine
         return $domainModel;
     }
 
+    /**
+     * @param class-string $resourceModelClass
+     */
     public function delete(object $domainModel, string $resourceModelClass, MapperRegistry $mapperRegistry): void
     {
         $rootResourceModel = $mapperRegistry->mapToSourceModel($domainModel, $resourceModelClass);
@@ -350,6 +359,9 @@ final class AggregateWriteEngine
             ?? throw new \LogicException(sprintf('Resource model %s has no primary key metadata.', $metadata->className));
     }
 
+    /**
+     * @param class-string $resourceModelClass
+     */
     private function metadata(string $resourceModelClass): ResourceModelMetadata
     {
         return ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($resourceModelClass);

@@ -100,10 +100,12 @@ final class ResourceModelMetadataExtractor
         foreach ($property->getAttributes(BelongsTo::class) as $attr) {
             /** @var BelongsTo $relation */
             $relation = $attr->newInstance();
+            /** @var class-string $targetClass */
+            $targetClass = $relation->target;
             return new RelationMetadata(
                 propertyName: $property->getName(),
                 kind: RelationKind::BelongsTo,
-                targetClass: $relation->target,
+                targetClass: $targetClass,
                 foreignKey: $relation->foreignKey,
                 onDelete: $relation->onDelete,
                 onUpdate: $relation->onUpdate,
@@ -114,10 +116,12 @@ final class ResourceModelMetadataExtractor
         foreach ($property->getAttributes(HasMany::class) as $attr) {
             /** @var HasMany $relation */
             $relation = $attr->newInstance();
+            /** @var class-string $targetClass */
+            $targetClass = $relation->target;
             return new RelationMetadata(
                 propertyName: $property->getName(),
                 kind: RelationKind::HasMany,
-                targetClass: $relation->target,
+                targetClass: $targetClass,
                 foreignKey: $relation->foreignKey,
                 onDelete: $relation->onDelete,
                 onUpdate: $relation->onUpdate,
@@ -128,10 +132,12 @@ final class ResourceModelMetadataExtractor
         foreach ($property->getAttributes(OneToOne::class) as $attr) {
             /** @var OneToOne $relation */
             $relation = $attr->newInstance();
+            /** @var class-string $targetClass */
+            $targetClass = $relation->target;
             return new RelationMetadata(
                 propertyName: $property->getName(),
                 kind: RelationKind::OneToOne,
-                targetClass: $relation->target,
+                targetClass: $targetClass,
                 foreignKey: $relation->foreignKey,
                 onDelete: $relation->onDelete,
                 onUpdate: $relation->onUpdate,
@@ -142,10 +148,12 @@ final class ResourceModelMetadataExtractor
         foreach ($property->getAttributes(ManyToMany::class) as $attr) {
             /** @var ManyToMany $relation */
             $relation = $attr->newInstance();
+            /** @var class-string $targetClass */
+            $targetClass = $relation->target;
             return new RelationMetadata(
                 propertyName: $property->getName(),
                 kind: RelationKind::ManyToMany,
-                targetClass: $relation->target,
+                targetClass: $targetClass,
                 foreignKey: $relation->foreignKey,
                 pivotTable: $relation->pivotTable,
                 relatedKey: $relation->relatedKey,
@@ -159,6 +167,10 @@ final class ResourceModelMetadataExtractor
     }
 
     /**
+     * @param array<string, ColumnMetadata> $columnsByProperty
+     */
+    /**
+     * @param \ReflectionClass<object> $ref
      * @param array<string, ColumnMetadata> $columnsByProperty
      */
     private function extractSoftDelete(\ReflectionClass $ref, array $columnsByProperty): ?SoftDeleteMetadata
@@ -185,6 +197,9 @@ final class ResourceModelMetadataExtractor
         );
     }
 
+    /**
+     * @param \ReflectionClass<object> $ref
+     */
     private function extractTenantPolicy(\ReflectionClass $ref): ?TenantPolicyMetadata
     {
         $attrs = $ref->getAttributes(TenantScoped::class);
