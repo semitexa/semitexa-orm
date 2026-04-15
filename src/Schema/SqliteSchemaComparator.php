@@ -295,6 +295,10 @@ class SqliteSchemaComparator implements SchemaComparatorInterface
         }
         $normalized = $this->stringValue($default);
 
+        if (strcasecmp($normalized, 'NULL') === 0) {
+            return null;
+        }
+
         if (strlen($normalized) >= 2) {
             $quote = $normalized[0];
             $last = substr($normalized, -1);
