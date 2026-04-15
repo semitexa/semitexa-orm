@@ -235,8 +235,12 @@ class SqliteSchemaComparator implements SchemaComparatorInterface
         }
 
         // Compare default value
+        // $db->defaultValue is the raw dflt_value from PRAGMA table_info, which includes
+        // surrounding quotes for string literals (e.g. '{}' is stored as "'{}'").
+        // Normalize both sides so the comparison is quote-agnostic.
         $codeDefault = $this->normalizeDefault($code->default);
-        if ($codeDefault !== $db->defaultValue) {
+        $dbDefault   = $this->normalizeDefault($db->defaultValue);
+        if ($codeDefault !== $dbDefault) {
             $fromStr = $db->defaultValue === null ? 'none' : "'{$db->defaultValue}'";
             $toStr   = $codeDefault      === null ? 'none' : "'{$codeDefault}'";
             $changes[] = "default: {$fromStr} → {$toStr}";
@@ -290,6 +294,10 @@ class SqliteSchemaComparator implements SchemaComparatorInterface
             return $default ? '1' : '0';
         }
         $normalized = $this->stringValue($default);
+
+        if (strcasecmp($normalized, 'NULL') === 0) {
+            return null;
+        }
 
         if (strlen($normalized) >= 2) {
             $quote = $normalized[0];
