@@ -66,10 +66,12 @@ class MysqlAdapter implements DatabaseAdapterInterface
     /**
      * Execute a raw SQL query without prepared statements.
      *
-     * @deprecated Security: this method does not support parameterized queries.
-     *   Use execute($sql, $params) instead to prevent SQL injection.
-     *   This method is kept only for internal bootstrapping (version detection)
-     *   and will be removed in a future release.
+     * This method does not support parameter binding and should not be used
+     * with user-supplied input. Prefer execute($sql, $params) for queries
+     * that need parameters or input sanitization.
+     *
+     * Intended primarily for trusted raw SQL and internal adapter operations
+     * such as bootstrapping/version detection.
      */
     public function query(string $sql): QueryResult
     {
