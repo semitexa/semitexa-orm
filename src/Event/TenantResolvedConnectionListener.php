@@ -16,7 +16,8 @@ use Semitexa\Tenancy\Event\TenantResolved;
 
 /**
  * Listens to TenantResolved and opportunistically switches the connection pool
- * to the resolved tenant when the pool advertises tenant-switch support.
+ * to the resolved tenant when the pool supports it, preserving legacy pools
+ * that only expose switchTo() without the optional capability contract.
  * Integration via event keeps ORM decoupled from tenancy resolution logic.
  */
 #[AsEventListener(event: TenantResolved::class, execution: EventExecution::Sync)]
@@ -36,11 +37,11 @@ final class TenantResolvedConnectionListener
         }
 
         // Website tenants can resolve by host without requiring separate-db wiring.
-        // Skip silently when the pool has no tenant-switch capability; explicit
-        // separate_db usage still fails loudly via ConnectionSwitchStrategy.
+        // Capability-aware pools can opt out silently; legacy pools still receive
+        // switchTo() so mixed-version integrations keep their previous behavior.
         if (
-            !$this->connectionPool instanceof TenantSwitchingConnectionPoolInterface
-            || !$this->connectionPool->supportsTenantSwitch()
+            $this->connectionPool instanceof TenantSwitchingConnectionPoolInterface
+            && !$this->connectionPool->supportsTenantSwitch()
         ) {
             return;
         }

@@ -105,6 +105,48 @@ final class TenantResolvedConnectionListenerTest extends TestCase
         $this->assertSame('platform', $pool->switchedTenant);
     }
 
+    #[Test]
+    public function it_keeps_switching_legacy_pools_without_capability_interface(): void
+    {
+        $listener = new TenantResolvedConnectionListener();
+        $pool = new class implements ConnectionPoolInterface {
+            public ?string $switchedTenant = null;
+
+            public function pop(float $timeout = -1): \PDO
+            {
+                throw new \BadMethodCallException('Not used in this test.');
+            }
+
+            public function push(\PDO $connection): void
+            {
+            }
+
+            public function close(): void
+            {
+            }
+
+            public function getSize(): int
+            {
+                return 1;
+            }
+
+            public function getAvailable(): int
+            {
+                return 0;
+            }
+
+            public function switchTo(string $tenantId): void
+            {
+                $this->switchedTenant = $tenantId;
+            }
+        };
+        $this->injectPool($listener, $pool);
+
+        $listener->handle(new TenantResolved(TenantContext::fromResolution('legacy', 'domain', 'legacy.semitexa.test')));
+
+        $this->assertSame('legacy', $pool->switchedTenant);
+    }
+
     private function injectPool(TenantResolvedConnectionListener $listener, ConnectionPoolInterface $pool): void
     {
         $reflection = new \ReflectionProperty($listener, 'connectionPool');
