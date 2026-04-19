@@ -47,6 +47,11 @@ final class TenantResolvedConnectionListenerTest extends TestCase
             {
                 throw new \LogicException('Tenant database switching is not configured.');
             }
+
+            public function supportsTenantSwitch(): bool
+            {
+                return false;
+            }
         });
 
         $listener->handle(new TenantResolved(TenantContext::fromResolution('os', 'domain', 'os.semitexa.test')));
@@ -85,6 +90,11 @@ final class TenantResolvedConnectionListenerTest extends TestCase
             public function switchTo(string $tenantId): void
             {
                 $this->switchedTenant = $tenantId;
+            }
+
+            public function supportsTenantSwitch(): bool
+            {
+                return true;
             }
         };
         $this->injectPool($listener, $pool);

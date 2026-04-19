@@ -53,4 +53,9 @@ final class SingleConnectionPool implements ConnectionPoolInterface
             $tenantId,
         ));
     }
+
+    public function supportsTenantSwitch(): bool
+    {
+        return false;
+    }
 }

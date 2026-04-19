@@ -33,11 +33,16 @@ final class TenantResolvedConnectionListener
             return;
         }
 
+        // Website tenants can resolve by host without requiring separate-db wiring.
+        // Skip silently when the pool has no tenant-switch capability; explicit
+        // separate_db usage still fails loudly via ConnectionSwitchStrategy.
+        if (!$this->connectionPool->supportsTenantSwitch()) {
+            return;
+        }
+
         try {
             $this->connectionPool->switchTo($org->rawValue());
         } catch (\LogicException $e) {
-            // Website tenants can resolve by host without requiring separate-db wiring.
-            // Explicit separate_db usage still fails later via ConnectionSwitchStrategy.
             $context = [
                 'tenant' => $org->rawValue(),
                 'exception' => $e::class,

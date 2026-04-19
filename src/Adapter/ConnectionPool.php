@@ -139,6 +139,11 @@ class ConnectionPool implements ConnectionPoolInterface
         ));
     }
 
+    public function supportsTenantSwitch(): bool
+    {
+        return false;
+    }
+
     /**
      * Verify that a pooled connection is still alive and reconnect if not.
      *

@@ -153,6 +153,7 @@ class OrmManager
                     public function getSize(): int { return 0; }
                     public function getAvailable(): int { return 0; }
                     public function switchTo(string $tenantId): void {}
+                    public function supportsTenantSwitch(): bool { return false; }
                 }
                 : $this->getPool();
 
