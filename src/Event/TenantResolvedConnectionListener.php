@@ -11,10 +11,13 @@ use Semitexa\Core\Log\FallbackErrorLogger;
 use Semitexa\Core\Log\LoggerInterface;
 use Semitexa\Core\Tenant\Layer\OrganizationLayer;
 use Semitexa\Orm\Adapter\ConnectionPoolInterface;
+use Semitexa\Orm\Adapter\TenantSwitchingConnectionPoolInterface;
 use Semitexa\Tenancy\Event\TenantResolved;
 
 /**
- * Listens to TenantResolved and switches the connection pool to the resolved tenant.
+ * Listens to TenantResolved and opportunistically switches the connection pool
+ * to the resolved tenant when the pool supports it, preserving legacy pools
+ * that only expose switchTo() without the optional capability contract.
  * Integration via event keeps ORM decoupled from tenancy resolution logic.
  */
 #[AsEventListener(event: TenantResolved::class, execution: EventExecution::Sync)]
@@ -33,11 +36,19 @@ final class TenantResolvedConnectionListener
             return;
         }
 
+        // Website tenants can resolve by host without requiring separate-db wiring.
+        // Capability-aware pools can opt out silently; legacy pools still receive
+        // switchTo() so mixed-version integrations keep their previous behavior.
+        if (
+            $this->connectionPool instanceof TenantSwitchingConnectionPoolInterface
+            && !$this->connectionPool->supportsTenantSwitch()
+        ) {
+            return;
+        }
+
         try {
             $this->connectionPool->switchTo($org->rawValue());
         } catch (\LogicException $e) {
-            // Website tenants can resolve by host without requiring separate-db wiring.
-            // Explicit separate_db usage still fails later via ConnectionSwitchStrategy.
             $context = [
                 'tenant' => $org->rawValue(),
                 'exception' => $e::class,

@@ -8,7 +8,7 @@ namespace Semitexa\Orm\Adapter;
  * Single PDO connection — used when Swoole is not available (e.g. CLI).
  * pop() returns the same connection; push() stores it for reuse. No coroutines.
  */
-final class SingleConnectionPool implements ConnectionPoolInterface
+final class SingleConnectionPool implements TenantSwitchingConnectionPoolInterface
 {
     private ?\PDO $connection = null;
 
@@ -52,5 +52,10 @@ final class SingleConnectionPool implements ConnectionPoolInterface
             self::class,
             $tenantId,
         ));
+    }
+
+    public function supportsTenantSwitch(): bool
+    {
+        return false;
     }
 }

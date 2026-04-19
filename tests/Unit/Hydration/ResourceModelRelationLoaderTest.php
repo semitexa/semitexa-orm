@@ -22,11 +22,11 @@ final class ResourceModelRelationLoaderTest extends TestCase
     public function eager_loads_belongs_to_and_has_many_relations_in_batches(): void
     {
         $adapter = new FakeDatabaseAdapter([
-            'SELECT * FROM `categories` WHERE `id` IN (?, ?)' => [
+            'SELECT * FROM `categories` WHERE `id` IN (:in_0, :in_1)' => [
                 ['id' => 'category-1', 'name' => 'Category 1'],
                 ['id' => 'category-2', 'name' => 'Category 2'],
             ],
-            'SELECT * FROM `reviews` WHERE `productId` IN (?, ?)' => [
+            'SELECT * FROM `reviews` WHERE `productId` IN (:in_0, :in_1)' => [
                 ['id' => 'review-1', 'productId' => 'product-1', 'rating' => 5],
                 ['id' => 'review-2', 'productId' => 'product-1', 'rating' => 4],
                 ['id' => 'review-3', 'productId' => 'product-2', 'rating' => 3],
@@ -76,7 +76,7 @@ final class ResourceModelRelationLoaderTest extends TestCase
     public function only_requested_relations_are_loaded(): void
     {
         $adapter = new FakeDatabaseAdapter([
-            'SELECT * FROM `categories` WHERE `id` IN (?)' => [
+            'SELECT * FROM `categories` WHERE `id` IN (:in_0)' => [
                 ['id' => 'category-1', 'name' => 'Category 1'],
             ],
         ]);

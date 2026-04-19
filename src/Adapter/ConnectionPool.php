@@ -7,7 +7,7 @@ namespace Semitexa\Orm\Adapter;
 use Swoole\Atomic;
 use Swoole\Coroutine\Channel;
 
-class ConnectionPool implements ConnectionPoolInterface
+class ConnectionPool implements TenantSwitchingConnectionPoolInterface
 {
     private ?Channel $pool;
 
@@ -137,6 +137,11 @@ class ConnectionPool implements ConnectionPoolInterface
             self::class,
             $tenantId,
         ));
+    }
+
+    public function supportsTenantSwitch(): bool
+    {
+        return false;
     }
 
     /**

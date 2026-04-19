@@ -81,11 +81,11 @@ final class ResourceModelQueryTest extends TestCase
                     'deletedAt' => null,
                 ],
             ],
-            'SELECT * FROM `categories` WHERE `id` IN (?, ?)' => [
+            'SELECT * FROM `categories` WHERE `id` IN (:in_0, :in_1)' => [
                 ['id' => 'category-1', 'name' => 'Category 1'],
                 ['id' => 'category-2', 'name' => 'Category 2'],
             ],
-            'SELECT * FROM `reviews` WHERE `productId` IN (?, ?)' => [
+            'SELECT * FROM `reviews` WHERE `productId` IN (:in_0, :in_1)' => [
                 ['id' => 'review-1', 'productId' => 'product-1', 'rating' => 5],
                 ['id' => 'review-2', 'productId' => 'product-2', 'rating' => 4],
             ],
