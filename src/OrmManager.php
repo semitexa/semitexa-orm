@@ -9,6 +9,7 @@ use Semitexa\Core\Environment;
 use Semitexa\Core\Support\ProjectRoot;
 use Semitexa\Orm\Adapter\ConnectionPool;
 use Semitexa\Orm\Adapter\ConnectionPoolInterface;
+use Semitexa\Orm\Adapter\TenantSwitchingConnectionPoolInterface;
 use Semitexa\Orm\Connection\ConnectionConfig;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Adapter\MysqlAdapter;
@@ -146,13 +147,13 @@ class OrmManager
             // For SQLite, we pass a dummy pool since TransactionManager
             // handles SQLite separately and won't actually use the pool
             $pool = $driver === 'sqlite'
-                ? new class implements ConnectionPoolInterface {
+                ? new class implements TenantSwitchingConnectionPoolInterface {
                     public function pop(float $timeout = -1): \PDO { throw new \LogicException('Not used for SQLite'); }
                     public function push(\PDO $connection): void {}
                     public function close(): void {}
                     public function getSize(): int { return 0; }
                     public function getAvailable(): int { return 0; }
-                    public function switchTo(string $tenantId): void {}
+                    public function switchTo(string $tenantId): void { throw new \LogicException('Tenant switching is not supported for SQLite'); }
                     public function supportsTenantSwitch(): bool { return false; }
                 }
                 : $this->getPool();

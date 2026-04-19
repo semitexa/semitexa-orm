@@ -76,7 +76,7 @@ final class ResourceModelRelationLoaderTest extends TestCase
     public function only_requested_relations_are_loaded(): void
     {
         $adapter = new FakeDatabaseAdapter([
-            'SELECT * FROM `categories` WHERE `id` IN (?)' => [
+            'SELECT * FROM `categories` WHERE `id` IN (:in_0)' => [
                 ['id' => 'category-1', 'name' => 'Category 1'],
             ],
         ]);

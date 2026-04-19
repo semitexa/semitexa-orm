@@ -7,6 +7,7 @@ namespace Semitexa\Orm\Tests\Unit\Event;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Semitexa\Orm\Adapter\ConnectionPoolInterface;
+use Semitexa\Orm\Adapter\TenantSwitchingConnectionPoolInterface;
 use Semitexa\Orm\Event\TenantResolvedConnectionListener;
 use Semitexa\Tenancy\Context\TenantContext;
 use Semitexa\Tenancy\Event\TenantResolved;
@@ -19,7 +20,7 @@ final class TenantResolvedConnectionListenerTest extends TestCase
         $this->expectNotToPerformAssertions();
 
         $listener = new TenantResolvedConnectionListener();
-        $this->injectPool($listener, new class implements ConnectionPoolInterface {
+        $this->injectPool($listener, new class implements TenantSwitchingConnectionPoolInterface {
             public function pop(float $timeout = -1): \PDO
             {
                 throw new \BadMethodCallException('Not used in this test.');
@@ -61,7 +62,7 @@ final class TenantResolvedConnectionListenerTest extends TestCase
     public function it_switches_when_pool_supports_tenant_connection_switching(): void
     {
         $listener = new TenantResolvedConnectionListener();
-        $pool = new class implements ConnectionPoolInterface {
+        $pool = new class implements TenantSwitchingConnectionPoolInterface {
             public ?string $switchedTenant = null;
 
             public function pop(float $timeout = -1): \PDO

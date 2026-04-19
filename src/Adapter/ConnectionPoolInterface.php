@@ -27,11 +27,4 @@ interface ConnectionPoolInterface
      * fail loudly instead of silently keeping the default database selected.
      */
     public function switchTo(string $tenantId): void;
-
-    /**
-     * Whether this pool can honor {@see switchTo()}. Callers may check this
-     * before attempting an opportunistic switch to avoid noisy failures on
-     * deployments that do not use per-tenant databases.
-     */
-    public function supportsTenantSwitch(): bool;
 }
