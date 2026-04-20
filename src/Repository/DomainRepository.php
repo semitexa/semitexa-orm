@@ -5,11 +5,13 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Repository;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
+use Semitexa\Orm\Exception\InvalidResourceModelException;
 use Semitexa\Orm\Hydration\ResourceModelHydrator;
 use Semitexa\Orm\Hydration\ResourceModelRelationLoader;
 use Semitexa\Orm\Mapping\MapperRegistry;
 use Semitexa\Orm\Metadata\ColumnRef;
 use Semitexa\Orm\Metadata\RelationRef;
+use Semitexa\Orm\Metadata\ResourceModelMetadata;
 use Semitexa\Orm\Metadata\ResourceModelMetadataRegistry;
 use Semitexa\Orm\Persistence\AggregateWriteEngine;
 use Semitexa\Orm\Query\Direction;
@@ -17,6 +19,14 @@ use Semitexa\Orm\Query\Operator;
 use Semitexa\Orm\Query\SystemScopeToken;
 use Semitexa\Orm\Query\ResourceModelQuery;
 
+/**
+ * Domain-facing repository: crosses the ResourceModel ↔ DomainModel boundary.
+ *
+ * Build queries with {@see query()} (typed, fluent) or use the convenience
+ * {@see findById}, {@see findBy}, {@see count}, {@see paginate} helpers.
+ * All read methods respect the tenant scope set by {@see forTenant} /
+ * {@see withoutTenantScope}.
+ */
 final class DomainRepository
 {
     private readonly ResourceModelHydrator $hydrator;
@@ -92,27 +102,47 @@ final class DomainRepository
 
     public function findById(int|string $id): ?object
     {
-        $metadata = ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($this->resourceModelClass);
-        $primaryKey = $metadata->primaryKeyProperty
-            ?? throw new \LogicException(sprintf('Resource model %s has no primary key metadata.', $this->resourceModelClass));
-
         return $this->query()
-            ->where(ColumnRef::for($this->resourceModelClass, $primaryKey), Operator::Equals, $id)
+            ->where(ColumnRef::for($this->resourceModelClass, $this->requirePrimaryKey()), Operator::Equals, $id)
             ->fetchOneAs($this->domainModelClass, $this->mapperRegistry);
     }
 
     /**
-     * @return list<object>
+     * @throws \RuntimeException when the id is not found
      */
-    public function findAll(int $limit = 1000): array
+    public function findByIdOrFail(int|string $id): object
     {
-        return $this->query()
-            ->limit($limit)
-            ->fetchAllAs($this->domainModelClass, $this->mapperRegistry);
+        $entity = $this->findById($id);
+        if ($entity === null) {
+            throw new \RuntimeException(sprintf(
+                'No %s found with id "%s".',
+                $this->domainModelClass,
+                (string) $id,
+            ));
+        }
+
+        return $entity;
     }
 
     /**
-     * @param array<string, mixed> $criteria
+     * Fetch every row (subject to $limit). Pass null for unbounded fetches
+     * — use with care on large tables.
+     *
+     * @return list<object>
+     */
+    public function findAll(?int $limit = 1000): array
+    {
+        $query = $this->query();
+        if ($limit !== null) {
+            $query->limit($limit);
+        }
+
+        return $query->fetchAllAs($this->domainModelClass, $this->mapperRegistry);
+    }
+
+    /**
+     * @param array<string, mixed> $criteria property name → value (null → IS NULL)
+     * @param list<RelationRef> $relations
      * @return list<object>
      */
     public function findBy(array $criteria, array $relations = [], ?int $limit = null): array
@@ -128,11 +158,41 @@ final class DomainRepository
 
     /**
      * @param array<string, mixed> $criteria
+     * @param list<RelationRef> $relations
      */
     public function findOneBy(array $criteria, array $relations = []): ?object
     {
         return $this->applyCriteria($this->query(), $criteria, $relations)
             ->fetchOneAs($this->domainModelClass, $this->mapperRegistry);
+    }
+
+    /**
+     * @param array<string, mixed> $criteria
+     */
+    public function count(array $criteria = []): int
+    {
+        return $this->applyCriteria($this->query(), $criteria)->count();
+    }
+
+    /**
+     * @param array<string, mixed> $criteria
+     */
+    public function exists(array $criteria = []): bool
+    {
+        return $this->applyCriteria($this->query(), $criteria)->exists();
+    }
+
+    /**
+     * Paginate and return domain models.
+     *
+     * @param array<string, mixed> $criteria
+     * @param list<RelationRef> $relations
+     */
+    public function paginate(int $page, int $perPage, array $criteria = [], array $relations = []): PaginatedResult
+    {
+        $query = $this->applyCriteria($this->query(), $criteria, $relations);
+
+        return $query->paginateAs($page, $perPage, $this->domainModelClass, $this->mapperRegistry);
     }
 
     public function insert(object $domainModel): object
@@ -150,6 +210,9 @@ final class DomainRepository
         $this->writeEngine->delete($domainModel, $this->resourceModelClass, $this->mapperRegistry);
     }
 
+    /**
+     * @deprecated Use $repository->query()->orderBy($column, $direction) directly — clearer fluent chain.
+     */
     public function orderBy(ResourceModelQuery $query, ColumnRef $column, Direction $direction): ResourceModelQuery
     {
         return $query->orderBy($column, $direction);
@@ -167,6 +230,11 @@ final class DomainRepository
                 $query->whereNull($column);
                 continue;
             }
+            if (is_array($value) && array_is_list($value)) {
+                /** @var list<mixed> $value */
+                $query->whereIn($column, $value);
+                continue;
+            }
 
             $query->where($column, Operator::Equals, $value);
         }
@@ -176,5 +244,23 @@ final class DomainRepository
         }
 
         return $query;
+    }
+
+    private function metadata(): ResourceModelMetadata
+    {
+        return ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($this->resourceModelClass);
+    }
+
+    private function requirePrimaryKey(): string
+    {
+        $primaryKey = $this->metadata()->primaryKeyProperty;
+        if ($primaryKey === null) {
+            throw new InvalidResourceModelException(sprintf(
+                'Resource model %s has no primary key metadata.',
+                $this->resourceModelClass,
+            ));
+        }
+
+        return $primaryKey;
     }
 }

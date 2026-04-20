@@ -9,6 +9,7 @@ use Semitexa\Core\Server\Lifecycle\ServerLifecycleContext;
 use Semitexa\Core\Server\Lifecycle\ServerLifecycleListenerInterface;
 use Semitexa\Core\Server\Lifecycle\ServerLifecyclePhase;
 use Semitexa\Orm\Metadata\ResourceModelMetadataRegistry;
+use Semitexa\Orm\Schema\ResourceMetadata;
 
 #[AsServerLifecycleListener(
     phase: ServerLifecyclePhase::WorkerStartBeforeContainer->value,
@@ -20,5 +21,6 @@ final class ResetMetadataCacheListener implements ServerLifecycleListenerInterfa
     public function handle(ServerLifecycleContext $context): void
     {
         ResourceModelMetadataRegistry::reset();
+        ResourceMetadata::reset();
     }
 }

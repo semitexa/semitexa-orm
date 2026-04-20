@@ -9,10 +9,10 @@ use Semitexa\Core\Environment;
 use Semitexa\Core\Support\ProjectRoot;
 use Semitexa\Orm\Adapter\ConnectionPool;
 use Semitexa\Orm\Adapter\ConnectionPoolInterface;
-use Semitexa\Orm\Adapter\TenantSwitchingConnectionPoolInterface;
 use Semitexa\Orm\Connection\ConnectionConfig;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Adapter\MysqlAdapter;
+use Semitexa\Orm\Adapter\NullConnectionPool;
 use Semitexa\Orm\Adapter\SingleConnectionPool;
 use Semitexa\Orm\Adapter\SqliteAdapter;
 use Semitexa\Orm\Schema\SqliteSchemaComparator;
@@ -144,18 +144,11 @@ class OrmManager
         if ($this->transactionManager === null) {
             $driver = $this->resolveDriver();
 
-            // For SQLite, we pass a dummy pool since TransactionManager
-            // handles SQLite separately and won't actually use the pool
+            // SQLite: TransactionManager takes a dedicated SQLite code path
+            // and does not actually consult the pool — supply a named
+            // NullConnectionPool so any accidental pop() throws loudly.
             $pool = $driver === 'sqlite'
-                ? new class implements TenantSwitchingConnectionPoolInterface {
-                    public function pop(float $timeout = -1): \PDO { throw new \LogicException('Not used for SQLite'); }
-                    public function push(\PDO $connection): void {}
-                    public function close(): void {}
-                    public function getSize(): int { return 0; }
-                    public function getAvailable(): int { return 0; }
-                    public function switchTo(string $tenantId): void { throw new \LogicException('Tenant switching is not supported for SQLite'); }
-                    public function supportsTenantSwitch(): bool { return false; }
-                }
+                ? new NullConnectionPool()
                 : $this->getPool();
 
             $this->transactionManager = new TransactionManager(

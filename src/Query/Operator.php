@@ -13,4 +13,5 @@ enum Operator: string
     case LessThan = '<';
     case LessThanOrEquals = '<=';
     case Like = 'LIKE';
+    case NotLike = 'NOT LIKE';
 }

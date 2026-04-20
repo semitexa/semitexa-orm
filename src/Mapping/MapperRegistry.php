@@ -16,9 +16,6 @@ final class MapperRegistry
     /** @var array<string, MapperDefinition> */
     private array $definitionsByPair = [];
 
-    /** @var array<class-string, MapperDefinition> */
-    private array $definitionsByMapperClass = [];
-
     /** @var array<class-string, ResourceModelMapperInterface> */
     private array $instancesByMapperClass = [];
 
@@ -36,7 +33,6 @@ final class MapperRegistry
         /** @var list<class-string> $mapperClasses */
 
         $definitionsByPair = [];
-        $definitionsByMapperClass = [];
 
         foreach ($mapperClasses as $mapperClass) {
             $definition = $this->extractMapperDefinition($mapperClass);
@@ -53,11 +49,9 @@ final class MapperRegistry
             }
 
             $definitionsByPair[$key] = $definition;
-            $definitionsByMapperClass[$definition->mapperClass] = $definition;
         }
 
         $this->definitionsByPair = $definitionsByPair;
-        $this->definitionsByMapperClass = $definitionsByMapperClass;
         /** @var array<class-string, ResourceModelMapperInterface> $instancesByMapperClass */
         $instancesByMapperClass = [];
         $this->instancesByMapperClass = $instancesByMapperClass;
