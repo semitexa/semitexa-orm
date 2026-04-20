@@ -12,18 +12,35 @@ use Semitexa\Orm\Mapping\MapperRegistry;
 use Semitexa\Orm\Metadata\ColumnRef;
 use Semitexa\Orm\Metadata\ColumnMetadata;
 use Semitexa\Orm\Metadata\RelationRef;
+use Semitexa\Orm\Metadata\ResourceModelMetadata;
 use Semitexa\Orm\Metadata\ResourceModelMetadataRegistry;
+use Semitexa\Orm\Repository\PaginatedResult;
 use Semitexa\Orm\Schema\ColumnDefinition;
 
+/**
+ * Typed, composable query builder for a ResourceModel.
+ *
+ * Uses {@see ColumnRef} / {@see RelationRef} for compile-time-ish safety:
+ * columns/relations from a different ResourceModel are rejected, and all
+ * values are type-cast through {@see TypeCaster} before binding.
+ *
+ * All where*() methods return $this (fluent chain) and AND-join conditions
+ * with the implicit tenant-scope / soft-delete gates. Use {@see orWhere},
+ * {@see whereAny}, {@see whereGroup} to build OR branches.
+ *
+ * The builder is designed to be cheap to clone — callers that need to
+ * branch (e.g. paginate) call {@see withLimit}/{@see withOffset} which
+ * return a fresh instance.
+ */
 final class ResourceModelQuery
 {
-    /** @var array<int, array{type: 'comparison', column: ColumnRef, operator: Operator, value: mixed}|array{type: 'null', column: ColumnRef, negated: bool}> */
+    /** @var list<array<string, mixed>> */
     private array $wheres = [];
 
     /** @var list<RelationRef> */
     private array $relations = [];
 
-    /** @var array<int, array{column: ColumnRef, direction: Direction}> */
+    /** @var list<array{column: ColumnRef, direction: Direction}> */
     private array $orderBys = [];
 
     private ?int $limitValue = null;
@@ -32,6 +49,7 @@ final class ResourceModelQuery
     private bool $includeSoftDeleted = false;
     private bool $onlySoftDeleted = false;
     private bool $skipTenantScope = false;
+    private int $paramCounter = 0;
 
     /**
      * @param class-string $resourceModelClass
@@ -45,13 +63,36 @@ final class ResourceModelQuery
         private readonly ?TypeCaster                    $typeCaster = null,
     ) {}
 
+    // ------------------------------------------------------------------
+    // WHERE predicates
+    // ------------------------------------------------------------------
+
     public function where(ColumnRef $column, Operator $operator, mixed $value): self
     {
         $this->assertColumnBelongsToCurrentResourceModel($column);
+        $param = $this->nextParam();
         $this->wheres[] = [
-            'type' => 'comparison',
+            'kind' => 'comparison',
+            'connector' => 'AND',
             'column' => $column,
             'operator' => $operator,
+            'param' => $param,
+            'value' => $this->normalizeComparisonValue($column, $value),
+        ];
+
+        return $this;
+    }
+
+    public function orWhere(ColumnRef $column, Operator $operator, mixed $value): self
+    {
+        $this->assertColumnBelongsToCurrentResourceModel($column);
+        $param = $this->nextParam();
+        $this->wheres[] = [
+            'kind' => 'comparison',
+            'connector' => 'OR',
+            'column' => $column,
+            'operator' => $operator,
+            'param' => $param,
             'value' => $this->normalizeComparisonValue($column, $value),
         ];
 
@@ -60,27 +101,97 @@ final class ResourceModelQuery
 
     public function whereNull(ColumnRef $column): self
     {
-        $this->assertColumnBelongsToCurrentResourceModel($column);
-        $this->wheres[] = [
-            'type' => 'null',
-            'column' => $column,
-            'negated' => false,
-        ];
-
-        return $this;
+        return $this->addNull($column, negated: false, connector: 'AND');
     }
 
     public function whereNotNull(ColumnRef $column): self
     {
+        return $this->addNull($column, negated: true, connector: 'AND');
+    }
+
+    public function orWhereNull(ColumnRef $column): self
+    {
+        return $this->addNull($column, negated: false, connector: 'OR');
+    }
+
+    public function orWhereNotNull(ColumnRef $column): self
+    {
+        return $this->addNull($column, negated: true, connector: 'OR');
+    }
+
+    /**
+     * @param list<mixed> $values
+     */
+    public function whereIn(ColumnRef $column, array $values): self
+    {
+        return $this->addIn($column, $values, negated: false, connector: 'AND');
+    }
+
+    /**
+     * @param list<mixed> $values
+     */
+    public function whereNotIn(ColumnRef $column, array $values): self
+    {
+        return $this->addIn($column, $values, negated: true, connector: 'AND');
+    }
+
+    public function whereBetween(ColumnRef $column, mixed $from, mixed $to): self
+    {
         $this->assertColumnBelongsToCurrentResourceModel($column);
+        $fromParam = $this->nextParam();
+        $toParam = $this->nextParam();
         $this->wheres[] = [
-            'type' => 'null',
+            'kind' => 'between',
+            'connector' => 'AND',
             'column' => $column,
-            'negated' => true,
+            'fromParam' => $fromParam,
+            'toParam' => $toParam,
+            'from' => $this->normalizeComparisonValue($column, $from),
+            'to' => $this->normalizeComparisonValue($column, $to),
         ];
 
         return $this;
     }
+
+    public function whereLike(ColumnRef $column, string $pattern): self
+    {
+        return $this->where($column, Operator::Like, $pattern);
+    }
+
+    public function whereNotLike(ColumnRef $column, string $pattern): self
+    {
+        return $this->where($column, Operator::NotLike, $pattern);
+    }
+
+    /**
+     * Append a raw SQL fragment to the WHERE clause.
+     *
+     * Values are bound as named parameters. Use `?` for each binding.
+     * Intended as an escape hatch — prefer the typed helpers.
+     *
+     * @param list<mixed> $bindings
+     */
+    public function whereRaw(string $sql, array $bindings = []): self
+    {
+        $params = [];
+        foreach ($bindings as $value) {
+            $name = $this->nextParam('raw');
+            $sql = (string) preg_replace('/\?/', ':' . $name, $sql, 1);
+            $params[$name] = $value instanceof \BackedEnum ? $value->value : $value;
+        }
+        $this->wheres[] = [
+            'kind' => 'raw',
+            'connector' => 'AND',
+            'sql' => $sql,
+            'params' => $params,
+        ];
+
+        return $this;
+    }
+
+    // ------------------------------------------------------------------
+    // Relation eager-loading
+    // ------------------------------------------------------------------
 
     public function withRelation(RelationRef $relation): self
     {
@@ -103,12 +214,18 @@ final class ResourceModelQuery
 
     public function limit(int $limit): self
     {
+        if ($limit < 0) {
+            throw new \InvalidArgumentException('limit() expects a non-negative integer.');
+        }
         $this->limitValue = $limit;
         return $this;
     }
 
     public function offset(int $offset): self
     {
+        if ($offset < 0) {
+            throw new \InvalidArgumentException('offset() expects a non-negative integer.');
+        }
         $this->offsetValue = $offset;
         return $this;
     }
@@ -138,10 +255,16 @@ final class ResourceModelQuery
 
     public function withoutTenantScope(SystemScopeToken $token): self
     {
+        // Token presence itself is the assertion — callers must explicitly issue one.
+        unset($token);
         $this->skipTenantScope = true;
 
         return $this;
     }
+
+    // ------------------------------------------------------------------
+    // Execution
+    // ------------------------------------------------------------------
 
     /**
      * @return list<object>
@@ -165,9 +288,19 @@ final class ResourceModelQuery
         return array_values($items);
     }
 
+    /**
+     * Fetch the first matching row or null.
+     *
+     * Unlike the previous implementation this does not mutate the builder —
+     * a shallow clone with LIMIT 1 is used so the caller can re-run the
+     * query afterwards without surprise.
+     */
     public function fetchOne(): ?object
     {
-        $items = $this->limit(1)->fetchAll();
+        $clone = clone $this;
+        $clone->limitValue = 1;
+        $clone->offsetValue = $this->offsetValue;
+        $items = $clone->fetchAll();
 
         return $items[0] ?? null;
     }
@@ -194,6 +327,82 @@ final class ResourceModelQuery
         return $mapperRegistry->mapToDomain($item, $domainModelClass);
     }
 
+    /**
+     * Total matching rows, ignoring LIMIT/OFFSET/ORDER BY.
+     *
+     * Uses the current WHERE / tenant / soft-delete state so the result
+     * reflects what fetchAll() would return if LIMIT were removed.
+     */
+    public function count(): int
+    {
+        [$whereSql, $params] = $this->buildWhereAndParams();
+        $metadata = $this->metadata();
+        $sql = sprintf('SELECT COUNT(*) AS __c FROM `%s`%s', $metadata->tableName, $whereSql);
+        $result = $this->adapter->execute($sql, $params);
+        $column = $result->fetchColumn();
+
+        return is_numeric($column) ? (int) $column : 0;
+    }
+
+    /**
+     * Whether at least one row matches — implemented as a cheap `LIMIT 1` probe.
+     */
+    public function exists(): bool
+    {
+        [$whereSql, $params] = $this->buildWhereAndParams();
+        $metadata = $this->metadata();
+        $sql = sprintf('SELECT 1 FROM `%s`%s LIMIT 1', $metadata->tableName, $whereSql);
+        $result = $this->adapter->execute($sql, $params);
+
+        return $result->rows !== [];
+    }
+
+    /**
+     * Paginate the query (1-indexed pages).
+     *
+     * Executes one COUNT(*) query and one SELECT with LIMIT/OFFSET applied.
+     * The returned `items` are resource-model instances; map them to
+     * domain models via {@see PaginatedResult::map()} if needed.
+     */
+    public function paginate(int $page, int $perPage): PaginatedResult
+    {
+        if ($page < 1) {
+            throw new \InvalidArgumentException('paginate() expects page >= 1.');
+        }
+        if ($perPage < 1) {
+            throw new \InvalidArgumentException('paginate() expects perPage >= 1.');
+        }
+
+        $total = $this->count();
+
+        $pageClone = clone $this;
+        $pageClone->limitValue = $perPage;
+        $pageClone->offsetValue = ($page - 1) * $perPage;
+
+        return new PaginatedResult(
+            items: $pageClone->fetchAll(),
+            total: $total,
+            page: $page,
+            perPage: $perPage,
+        );
+    }
+
+    /**
+     * Paginate and map to a domain model.
+     */
+    public function paginateAs(int $page, int $perPage, string $domainModelClass, MapperRegistry $mapperRegistry): PaginatedResult
+    {
+        $raw = $this->paginate($page, $perPage);
+
+        return $raw->map(
+            static fn (object $rm): object => $mapperRegistry->mapToDomain($rm, $domainModelClass),
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Introspection / debug
+    // ------------------------------------------------------------------
+
     public function toSql(): string
     {
         return $this->buildSql();
@@ -207,50 +416,36 @@ final class ResourceModelQuery
         return $this->buildParams();
     }
 
+    /**
+     * Produce a SQL string with parameter values interpolated — for logs
+     * and debug output only. Not safe for execution.
+     */
+    public function toDebugSql(): string
+    {
+        $sql = $this->buildSql();
+        $params = $this->buildParams();
+
+        // Longest names first so :tenant_scope is replaced before :tenant.
+        uksort($params, static fn (string $a, string $b): int => strlen($b) <=> strlen($a));
+
+        foreach ($params as $name => $value) {
+            $sql = str_replace(':' . $name, $this->formatDebugValue($value), $sql);
+        }
+
+        return $sql;
+    }
+
+    // ------------------------------------------------------------------
+    // SQL assembly
+    // ------------------------------------------------------------------
+
     private function buildSql(): string
     {
-        $metadata = ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($this->resourceModelClass);
+        $metadata = $this->metadata();
         $this->assertRequiredPoliciesAreSatisfied($metadata);
-        $sql = sprintf('SELECT * FROM `%s`', $metadata->tableName);
-        $conditions = [];
 
-        if ($metadata->tenantPolicy !== null && !$this->skipTenantScope) {
-            $tenantColumn = $this->resolveTenantColumnName($metadata);
-            $conditions[] = sprintf('`%s` = :tenant_scope', $tenantColumn);
-        }
-
-        if ($metadata->softDelete !== null) {
-            if ($this->onlySoftDeleted) {
-                $conditions[] = sprintf('`%s` IS NOT NULL', $metadata->softDelete->columnName);
-            } elseif (!$this->includeSoftDeleted) {
-                $conditions[] = sprintf('`%s` IS NULL', $metadata->softDelete->columnName);
-            }
-        }
-
-        if ($this->wheres !== []) {
-            foreach ($this->wheres as $index => $where) {
-                if ($where['type'] === 'null') {
-                    $conditions[] = sprintf(
-                        '`%s` IS %sNULL',
-                        $where['column']->columnName,
-                        $where['negated'] ? 'NOT ' : '',
-                    );
-                    continue;
-                }
-
-                $param = sprintf(':w%d', $index);
-                $conditions[] = sprintf(
-                    '`%s` %s %s',
-                    $where['column']->columnName,
-                    $where['operator']->value,
-                    $param,
-                );
-            }
-        }
-
-        if ($conditions !== []) {
-            $sql .= ' WHERE ' . implode(' AND ', $conditions);
-        }
+        [$whereSql, ] = $this->buildWhereAndParams();
+        $sql = sprintf('SELECT * FROM `%s`%s', $metadata->tableName, $whereSql);
 
         if ($this->orderBys !== []) {
             $parts = [];
@@ -264,18 +459,213 @@ final class ResourceModelQuery
             $sql .= ' ORDER BY ' . implode(', ', $parts);
         }
 
+        // MySQL rejects OFFSET without LIMIT. Emit a sentinel LIMIT that
+        // covers any realistic result set when OFFSET is used without an
+        // explicit LIMIT, preserving caller intent.
         if ($this->limitValue !== null) {
             $sql .= sprintf(' LIMIT %d', $this->limitValue);
-        }
-
-        if ($this->offsetValue !== null) {
-            $sql .= sprintf(' OFFSET %d', $this->offsetValue);
+            if ($this->offsetValue !== null) {
+                $sql .= sprintf(' OFFSET %d', $this->offsetValue);
+            }
+        } elseif ($this->offsetValue !== null) {
+            $sql .= sprintf(' LIMIT %d OFFSET %d', PHP_INT_MAX, $this->offsetValue);
         }
 
         return $sql;
     }
 
-    private function resolveTenantColumnName(\Semitexa\Orm\Metadata\ResourceModelMetadata $metadata): string
+    /**
+     * @return array<string, mixed>
+     */
+    private function buildParams(): array
+    {
+        [, $params] = $this->buildWhereAndParams();
+
+        return $params;
+    }
+
+    /**
+     * @return array{0: string, 1: array<string, mixed>}
+     */
+    private function buildWhereAndParams(): array
+    {
+        $metadata = $this->metadata();
+        $this->assertRequiredPoliciesAreSatisfied($metadata);
+
+        $conditions = [];
+        $params = [];
+
+        if ($metadata->tenantPolicy !== null && !$this->skipTenantScope) {
+            $tenantColumn = $this->resolveTenantColumnName($metadata);
+            $conditions[] = [
+                'connector' => 'AND',
+                'sql' => sprintf('`%s` = :tenant_scope', $tenantColumn),
+            ];
+            $params['tenant_scope'] = $this->tenantValue;
+        }
+
+        if ($metadata->softDelete !== null) {
+            if ($this->onlySoftDeleted) {
+                $conditions[] = [
+                    'connector' => 'AND',
+                    'sql' => sprintf('`%s` IS NOT NULL', $metadata->softDelete->columnName),
+                ];
+            } elseif (!$this->includeSoftDeleted) {
+                $conditions[] = [
+                    'connector' => 'AND',
+                    'sql' => sprintf('`%s` IS NULL', $metadata->softDelete->columnName),
+                ];
+            }
+        }
+
+        foreach ($this->wheres as $where) {
+            [$fragment, $wParams] = $this->renderWhere($where);
+            $conditions[] = [
+                'connector' => $where['connector'],
+                'sql' => $fragment,
+            ];
+            foreach ($wParams as $key => $value) {
+                $params[$key] = $value;
+            }
+        }
+
+        if ($conditions === []) {
+            return ['', $params];
+        }
+
+        $sql = ' WHERE ';
+        foreach ($conditions as $index => $condition) {
+            if ($index === 0) {
+                $sql .= $condition['sql'];
+                continue;
+            }
+            $sql .= ' ' . $condition['connector'] . ' ' . $condition['sql'];
+        }
+
+        return [$sql, $params];
+    }
+
+    /**
+     * @param array<string, mixed> $where
+     * @return array{0: string, 1: array<string, mixed>}
+     */
+    private function renderWhere(array $where): array
+    {
+        return match ($where['kind']) {
+            'comparison' => [
+                sprintf(
+                    '`%s` %s :%s',
+                    $where['column']->columnName,
+                    $where['operator']->value,
+                    $where['param'],
+                ),
+                [$where['param'] => $where['value']],
+            ],
+            'null' => [
+                sprintf(
+                    '`%s` IS %sNULL',
+                    $where['column']->columnName,
+                    $where['negated'] ? 'NOT ' : '',
+                ),
+                [],
+            ],
+            'in' => [
+                sprintf(
+                    '`%s` %s (%s)',
+                    $where['column']->columnName,
+                    $where['negated'] ? 'NOT IN' : 'IN',
+                    implode(', ', array_map(static fn (string $name): string => ':' . $name, $where['params'])),
+                ),
+                array_combine($where['params'], $where['values']),
+            ],
+            'between' => [
+                sprintf(
+                    '`%s` BETWEEN :%s AND :%s',
+                    $where['column']->columnName,
+                    $where['fromParam'],
+                    $where['toParam'],
+                ),
+                [
+                    $where['fromParam'] => $where['from'],
+                    $where['toParam'] => $where['to'],
+                ],
+            ],
+            'raw' => [
+                '(' . $where['sql'] . ')',
+                $where['params'],
+            ],
+            default => throw new \LogicException('Unknown where kind: ' . (string) $where['kind']),
+        };
+    }
+
+    // ------------------------------------------------------------------
+    // Helpers
+    // ------------------------------------------------------------------
+
+    private function addNull(ColumnRef $column, bool $negated, string $connector): self
+    {
+        $this->assertColumnBelongsToCurrentResourceModel($column);
+        $this->wheres[] = [
+            'kind' => 'null',
+            'connector' => $connector,
+            'column' => $column,
+            'negated' => $negated,
+        ];
+
+        return $this;
+    }
+
+    /**
+     * @param list<mixed> $values
+     */
+    private function addIn(ColumnRef $column, array $values, bool $negated, string $connector): self
+    {
+        $this->assertColumnBelongsToCurrentResourceModel($column);
+
+        if ($values === []) {
+            // `x IN ()` is invalid SQL; use a guaranteed-false/true predicate
+            // so the overall boolean result is stable.
+            $this->wheres[] = [
+                'kind' => 'raw',
+                'connector' => $connector,
+                'sql' => $negated ? '1 = 1' : '1 = 0',
+                'params' => [],
+            ];
+
+            return $this;
+        }
+
+        $params = [];
+        $casted = [];
+        foreach ($values as $value) {
+            $name = $this->nextParam('in');
+            $params[] = $name;
+            $casted[] = $this->normalizeComparisonValue($column, $value);
+        }
+
+        $this->wheres[] = [
+            'kind' => 'in',
+            'connector' => $connector,
+            'column' => $column,
+            'negated' => $negated,
+            'params' => $params,
+            'values' => $casted,
+        ];
+
+        return $this;
+    }
+
+    private function nextParam(string $hint = 'w'): string
+    {
+        return sprintf('%s%d', $hint, $this->paramCounter++);
+    }
+
+    private function metadata(): ResourceModelMetadata
+    {
+        return ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($this->resourceModelClass);
+    }
+
+    private function resolveTenantColumnName(ResourceModelMetadata $metadata): string
     {
         $tenantColumn = $metadata->tenantPolicy->column ?? 'tenantId';
 
@@ -284,29 +674,6 @@ final class ResourceModelQuery
         }
 
         return $tenantColumn;
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    private function buildParams(): array
-    {
-        $params = [];
-
-        $metadata = ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($this->resourceModelClass);
-        if ($metadata->tenantPolicy !== null && !$this->skipTenantScope) {
-            $params['tenant_scope'] = $this->tenantValue;
-        }
-
-        foreach ($this->wheres as $index => $where) {
-            if ($where['type'] !== 'comparison') {
-                continue;
-            }
-
-            $params[sprintf('w%d', $index)] = $where['value'];
-        }
-
-        return $params;
     }
 
     private function assertColumnBelongsToCurrentResourceModel(ColumnRef $column): void
@@ -331,7 +698,7 @@ final class ResourceModelQuery
         }
     }
 
-    private function assertRequiredPoliciesAreSatisfied(\Semitexa\Orm\Metadata\ResourceModelMetadata $metadata): void
+    private function assertRequiredPoliciesAreSatisfied(ResourceModelMetadata $metadata): void
     {
         if ($metadata->tenantPolicy !== null && !$this->skipTenantScope && $this->tenantValue === null) {
             throw new \LogicException(sprintf(
@@ -343,7 +710,7 @@ final class ResourceModelQuery
 
     private function normalizeComparisonValue(ColumnRef $column, mixed $value): mixed
     {
-        $metadata = ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($this->resourceModelClass);
+        $metadata = $this->metadata();
         $columnMetadata = $metadata->column($column->propertyName);
         $typeCaster = $this->typeCaster ?? new TypeCaster();
 
@@ -368,5 +735,23 @@ final class ResourceModelQuery
             pkStrategy: $column->primaryKeyStrategy ?? 'auto',
             propertyName: $column->propertyName,
         );
+    }
+
+    private function formatDebugValue(mixed $value): string
+    {
+        if ($value === null) {
+            return 'NULL';
+        }
+        if (is_bool($value)) {
+            return $value ? '1' : '0';
+        }
+        if (is_int($value) || is_float($value)) {
+            return (string) $value;
+        }
+        if ($value instanceof \DateTimeInterface) {
+            $value = $value->format('Y-m-d H:i:s');
+        }
+
+        return "'" . str_replace("'", "''", (string) $value) . "'";
     }
 }

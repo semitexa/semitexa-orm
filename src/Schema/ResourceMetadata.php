@@ -175,6 +175,15 @@ final class ResourceMetadata
         return self::$cache[$resourceClass];
     }
 
+    /**
+     * Clear the static per-class cache. Used by Swoole worker reloads and
+     * by tests that rebuild fixtures between cases.
+     */
+    public static function reset(): void
+    {
+        self::$cache = [];
+    }
+
     public function getTableName(): string
     {
         return $this->tableName;
