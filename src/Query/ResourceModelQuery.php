@@ -555,18 +555,22 @@ final class ResourceModelQuery
         $conditions = $policyConditions;
         if ($userConditions !== []) {
             $userSql = '';
+            $hasOrConnector = false;
             foreach ($userConditions as $index => $condition) {
                 if ($index === 0) {
                     $userSql .= $condition['sql'];
                     continue;
                 }
 
+                if ($condition['connector'] === 'OR') {
+                    $hasOrConnector = true;
+                }
                 $userSql .= ' ' . $condition['connector'] . ' ' . $condition['sql'];
             }
 
             $conditions[] = [
                 'connector' => 'AND',
-                'sql' => count($userConditions) === 1 ? $userSql : '(' . $userSql . ')',
+                'sql' => $hasOrConnector ? '(' . $userSql . ')' : $userSql,
             ];
         }
 

@@ -230,9 +230,9 @@ final class DomainRepository
                 $query->whereNull($column);
                 continue;
             }
-            if (is_array($value)) {
+            if (is_array($value) && array_is_list($value)) {
                 /** @var list<mixed> $value */
-                $query->whereIn($column, array_values($value));
+                $query->whereIn($column, $value);
                 continue;
             }
 
