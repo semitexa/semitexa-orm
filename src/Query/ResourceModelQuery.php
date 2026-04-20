@@ -24,17 +24,24 @@ use Semitexa\Orm\Schema\ColumnDefinition;
  * columns/relations from a different ResourceModel are rejected, and all
  * values are type-cast through {@see TypeCaster} before binding.
  *
- * All where*() methods return $this (fluent chain) and AND-join conditions
- * with the implicit tenant-scope / soft-delete gates. Use {@see orWhere},
- * {@see whereAny}, {@see whereGroup} to build OR branches.
+ * All where*() methods return $this (fluent chain) and join conditions
+ * with the implicit tenant-scope / soft-delete gates. Use {@see orWhere}
+ * to build OR branches.
  *
  * The builder is designed to be cheap to clone — callers that need to
- * branch (e.g. paginate) call {@see withLimit}/{@see withOffset} which
- * return a fresh instance.
+ * branch can clone ResourceModelQuery and adjust limit/offset on the clone.
+ *
+ * @phpstan-type SqlCondition array{connector: 'AND'|'OR', sql: string}
+ * @phpstan-type WhereComparison array{kind: 'comparison', connector: 'AND'|'OR', column: ColumnRef, operator: Operator, param: string, value: mixed}
+ * @phpstan-type WhereNull array{kind: 'null', connector: 'AND'|'OR', column: ColumnRef, negated: bool}
+ * @phpstan-type WhereIn array{kind: 'in', connector: 'AND'|'OR', column: ColumnRef, negated: bool, params: list<string>, values: list<mixed>}
+ * @phpstan-type WhereBetween array{kind: 'between', connector: 'AND'|'OR', column: ColumnRef, fromParam: string, toParam: string, from: mixed, to: mixed}
+ * @phpstan-type WhereRaw array{kind: 'raw', connector: 'AND'|'OR', sql: string, params: array<string, mixed>}
+ * @phpstan-type WhereClause WhereComparison|WhereNull|WhereIn|WhereBetween|WhereRaw
  */
 final class ResourceModelQuery
 {
-    /** @var list<array<string, mixed>> */
+    /** @var list<WhereClause> */
     private array $wheres = [];
 
     /** @var list<RelationRef> */
@@ -173,6 +180,15 @@ final class ResourceModelQuery
      */
     public function whereRaw(string $sql, array $bindings = []): self
     {
+        $placeholderCount = substr_count($sql, '?');
+        if ($placeholderCount !== count($bindings)) {
+            throw new \InvalidArgumentException(sprintf(
+                'whereRaw() expects exactly %d binding(s), got %d.',
+                $placeholderCount,
+                count($bindings),
+            ));
+        }
+
         $params = [];
         foreach ($bindings as $value) {
             $name = $this->nextParam('raw');
@@ -363,6 +379,8 @@ final class ResourceModelQuery
      * Executes one COUNT(*) query and one SELECT with LIMIT/OFFSET applied.
      * The returned `items` are resource-model instances; map them to
      * domain models via {@see PaginatedResult::map()} if needed.
+     *
+     * @return PaginatedResult<object>
      */
     public function paginate(int $page, int $perPage): PaginatedResult
     {
@@ -389,6 +407,8 @@ final class ResourceModelQuery
 
     /**
      * Paginate and map to a domain model.
+     *
+     * @return PaginatedResult<object>
      */
     public function paginateAs(int $page, int $perPage, string $domainModelClass, MapperRegistry $mapperRegistry): PaginatedResult
     {
@@ -492,12 +512,15 @@ final class ResourceModelQuery
         $metadata = $this->metadata();
         $this->assertRequiredPoliciesAreSatisfied($metadata);
 
-        $conditions = [];
+        /** @var list<SqlCondition> $policyConditions */
+        $policyConditions = [];
+        /** @var list<SqlCondition> $userConditions */
+        $userConditions = [];
         $params = [];
 
         if ($metadata->tenantPolicy !== null && !$this->skipTenantScope) {
             $tenantColumn = $this->resolveTenantColumnName($metadata);
-            $conditions[] = [
+            $policyConditions[] = [
                 'connector' => 'AND',
                 'sql' => sprintf('`%s` = :tenant_scope', $tenantColumn),
             ];
@@ -506,12 +529,12 @@ final class ResourceModelQuery
 
         if ($metadata->softDelete !== null) {
             if ($this->onlySoftDeleted) {
-                $conditions[] = [
+                $policyConditions[] = [
                     'connector' => 'AND',
                     'sql' => sprintf('`%s` IS NOT NULL', $metadata->softDelete->columnName),
                 ];
             } elseif (!$this->includeSoftDeleted) {
-                $conditions[] = [
+                $policyConditions[] = [
                     'connector' => 'AND',
                     'sql' => sprintf('`%s` IS NULL', $metadata->softDelete->columnName),
                 ];
@@ -520,13 +543,31 @@ final class ResourceModelQuery
 
         foreach ($this->wheres as $where) {
             [$fragment, $wParams] = $this->renderWhere($where);
-            $conditions[] = [
+            $userConditions[] = [
                 'connector' => $where['connector'],
                 'sql' => $fragment,
             ];
             foreach ($wParams as $key => $value) {
                 $params[$key] = $value;
             }
+        }
+
+        $conditions = $policyConditions;
+        if ($userConditions !== []) {
+            $userSql = '';
+            foreach ($userConditions as $index => $condition) {
+                if ($index === 0) {
+                    $userSql .= $condition['sql'];
+                    continue;
+                }
+
+                $userSql .= ' ' . $condition['connector'] . ' ' . $condition['sql'];
+            }
+
+            $conditions[] = [
+                'connector' => 'AND',
+                'sql' => count($userConditions) === 1 ? $userSql : '(' . $userSql . ')',
+            ];
         }
 
         if ($conditions === []) {
@@ -546,7 +587,7 @@ final class ResourceModelQuery
     }
 
     /**
-     * @param array<string, mixed> $where
+     * @param WhereClause $where
      * @return array{0: string, 1: array<string, mixed>}
      */
     private function renderWhere(array $where): array
@@ -594,7 +635,6 @@ final class ResourceModelQuery
                 '(' . $where['sql'] . ')',
                 $where['params'],
             ],
-            default => throw new \LogicException('Unknown where kind: ' . (string) $where['kind']),
         };
     }
 
@@ -602,6 +642,9 @@ final class ResourceModelQuery
     // Helpers
     // ------------------------------------------------------------------
 
+    /**
+     * @param 'AND'|'OR' $connector
+     */
     private function addNull(ColumnRef $column, bool $negated, string $connector): self
     {
         $this->assertColumnBelongsToCurrentResourceModel($column);
@@ -617,6 +660,7 @@ final class ResourceModelQuery
 
     /**
      * @param list<mixed> $values
+     * @param 'AND'|'OR' $connector
      */
     private function addIn(ColumnRef $column, array $values, bool $negated, string $connector): self
     {
@@ -751,7 +795,19 @@ final class ResourceModelQuery
         if ($value instanceof \DateTimeInterface) {
             $value = $value->format('Y-m-d H:i:s');
         }
+        if ($value instanceof \Stringable) {
+            $value = (string) $value;
+        }
+        if (is_string($value)) {
+            return "'" . str_replace("'", "''", $value) . "'";
+        }
+        if (is_scalar($value)) {
+            return "'" . str_replace("'", "''", (string) $value) . "'";
+        }
+        if ($value instanceof \BackedEnum) {
+            return "'" . str_replace("'", "''", (string) $value->value) . "'";
+        }
 
-        return "'" . str_replace("'", "''", (string) $value) . "'";
+        return "'" . str_replace("'", "''", json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: get_debug_type($value)) . "'";
     }
 }

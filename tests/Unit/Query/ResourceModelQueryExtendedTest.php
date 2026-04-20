@@ -116,7 +116,7 @@ final class ResourceModelQueryExtendedTest extends TestCase
             ->orWhere(HydratableProductResourceModel::column('name'), Operator::Equals, 'B');
 
         $sql = $query->toSql();
-        $this->assertStringContainsString('AND `name` = :w0 OR `name` = :w1', $sql);
+        $this->assertStringContainsString('AND (`name` = :w0 OR `name` = :w1)', $sql);
     }
 
     #[Test]
@@ -136,6 +136,17 @@ final class ResourceModelQueryExtendedTest extends TestCase
         $params = $query->toParams();
         $this->assertContains('$.type', $params);
         $this->assertContains('pro', $params);
+    }
+
+    #[Test]
+    public function where_raw_rejects_placeholder_count_mismatches(): void
+    {
+        $query = $this->query();
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('whereRaw() expects exactly 2 binding(s), got 1.');
+
+        $query->whereRaw('JSON_EXTRACT(`name`, ?) = ?', ['$.type']);
     }
 
     #[Test]
@@ -180,7 +191,7 @@ final class ResourceModelQueryExtendedTest extends TestCase
     {
         $adapter = new FakeDatabaseAdapter([
             'SELECT 1 FROM `hydratable_products` WHERE `tenantId` = :tenant_scope AND `deletedAt` IS NULL LIMIT 1' => [
-                ['1' => 1],
+                ['__exists' => 1],
             ],
         ]);
         $query = $this->query($adapter);
