@@ -180,21 +180,30 @@ final class ResourceModelQuery
      */
     public function whereRaw(string $sql, array $bindings = []): self
     {
-        $placeholderCount = substr_count($sql, '?');
-        if ($placeholderCount !== count($bindings)) {
+        $offsets = $this->findRawPlaceholderOffsets($sql);
+        $bindings = array_values($bindings);
+        if (count($offsets) !== count($bindings)) {
             throw new \InvalidArgumentException(sprintf(
                 'whereRaw() expects exactly %d binding(s), got %d.',
-                $placeholderCount,
+                count($offsets),
                 count($bindings),
             ));
         }
 
         $params = [];
+        $names = [];
         foreach ($bindings as $value) {
             $name = $this->nextParam('raw');
-            $sql = (string) preg_replace('/\?/', ':' . $name, $sql, 1);
+            $names[] = $name;
             $params[$name] = $value instanceof \BackedEnum ? $value->value : $value;
         }
+
+        // Replace right-to-left so earlier offsets remain valid as the
+        // string grows.
+        for ($i = count($offsets) - 1; $i >= 0; $i--) {
+            $sql = substr_replace($sql, ':' . $names[$i], $offsets[$i], 1);
+        }
+
         $this->wheres[] = [
             'kind' => 'raw',
             'connector' => 'AND',
@@ -445,14 +454,17 @@ final class ResourceModelQuery
         $sql = $this->buildSql();
         $params = $this->buildParams();
 
-        // Longest names first so :tenant_scope is replaced before :tenant.
-        uksort($params, static fn (string $a, string $b): int => strlen($b) <=> strlen($a));
-
-        foreach ($params as $name => $value) {
-            $sql = str_replace(':' . $name, $this->formatDebugValue($value), $sql);
-        }
-
-        return $sql;
+        // Single-pass replace so an interpolated value that happens to
+        // contain ':paramN' text cannot be rewritten by a later iteration.
+        return (string) preg_replace_callback(
+            '/:(\w+)/',
+            function (array $matches) use ($params): string {
+                return array_key_exists($matches[1], $params)
+                    ? $this->formatDebugValue($params[$matches[1]])
+                    : $matches[0];
+            },
+            $sql,
+        );
     }
 
     // ------------------------------------------------------------------
@@ -706,6 +718,53 @@ final class ResourceModelQuery
     private function nextParam(string $hint = 'w'): string
     {
         return sprintf('%s%d', $hint, $this->paramCounter++);
+    }
+
+    /**
+     * Byte offsets of '?' placeholders that sit outside single-quoted
+     * string literals, double-quoted regions, and backtick identifiers.
+     *
+     * @return list<int>
+     */
+    private function findRawPlaceholderOffsets(string $sql): array
+    {
+        $offsets = [];
+        $length = strlen($sql);
+        $i = 0;
+
+        while ($i < $length) {
+            $ch = $sql[$i];
+
+            if ($ch === "'" || $ch === '"' || $ch === '`') {
+                $quote = $ch;
+                $i++;
+                while ($i < $length) {
+                    if ($sql[$i] === '\\' && $quote !== '`' && $i + 1 < $length) {
+                        // Backslash escape (MySQL default for string literals).
+                        $i += 2;
+                        continue;
+                    }
+                    if ($sql[$i] === $quote) {
+                        if ($i + 1 < $length && $sql[$i + 1] === $quote) {
+                            // Doubled quote — SQL-standard escape.
+                            $i += 2;
+                            continue;
+                        }
+                        $i++;
+                        break;
+                    }
+                    $i++;
+                }
+                continue;
+            }
+
+            if ($ch === '?') {
+                $offsets[] = $i;
+            }
+            $i++;
+        }
+
+        return $offsets;
     }
 
     private function metadata(): ResourceModelMetadata

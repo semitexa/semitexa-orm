@@ -150,6 +150,20 @@ final class ResourceModelQueryExtendedTest extends TestCase
     }
 
     #[Test]
+    public function where_raw_ignores_question_marks_inside_string_literals(): void
+    {
+        $query = $this->query();
+
+        $query
+            ->forTenant('tenant-1')
+            ->whereRaw("JSON_EXTRACT(`name`, '$.?') = ?", ['pro']);
+
+        $sql = $query->toSql();
+        $this->assertStringContainsString("JSON_EXTRACT(`name`, '$.?') = :raw0", $sql);
+        $this->assertSame('pro', $query->toParams()['raw0']);
+    }
+
+    #[Test]
     public function fetch_one_does_not_mutate_original_limit(): void
     {
         $adapter = new FakeDatabaseAdapter([]);
@@ -271,6 +285,19 @@ final class ResourceModelQueryExtendedTest extends TestCase
         $this->assertStringContainsString("'tenant-1'", $debug);
         $this->assertStringContainsString("'O''Neil'", $debug);
         $this->assertStringNotContainsString(':tenant_scope', $debug);
+    }
+
+    #[Test]
+    public function to_debug_sql_does_not_rewrite_parameter_like_text_inside_values(): void
+    {
+        $query = $this->query();
+        $query
+            ->forTenant('tenant-1')
+            ->where(HydratableProductResourceModel::column('name'), Operator::Equals, 'literal :tenant_scope marker');
+
+        $debug = $query->toDebugSql();
+        $this->assertStringContainsString("'literal :tenant_scope marker'", $debug);
+        $this->assertStringNotContainsString("'literal 'tenant-1' marker'", $debug);
     }
 
     #[Test]
