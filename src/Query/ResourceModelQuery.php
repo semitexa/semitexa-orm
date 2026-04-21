@@ -176,12 +176,14 @@ final class ResourceModelQuery
      * Values are bound as named parameters. Use `?` for each binding.
      * Intended as an escape hatch — prefer the typed helpers.
      *
-     * @param list<mixed> $bindings
+     * @param array<int, mixed> $bindings
      */
     public function whereRaw(string $sql, array $bindings = []): self
     {
         $offsets = $this->findRawPlaceholderOffsets($sql);
-        $bindings = array_values($bindings);
+        if (!array_is_list($bindings)) {
+            $bindings = array_values($bindings);
+        }
         if (count($offsets) !== count($bindings)) {
             throw new \InvalidArgumentException(sprintf(
                 'whereRaw() expects exactly %d binding(s), got %d.',
@@ -453,18 +455,40 @@ final class ResourceModelQuery
     {
         $sql = $this->buildSql();
         $params = $this->buildParams();
+        $debugSql = '';
+        $length = strlen($sql);
+        $i = 0;
 
-        // Single-pass replace so an interpolated value that happens to
-        // contain ':paramN' text cannot be rewritten by a later iteration.
-        return (string) preg_replace_callback(
-            '/:(\w+)/',
-            function (array $matches) use ($params): string {
-                return array_key_exists($matches[1], $params)
-                    ? $this->formatDebugValue($params[$matches[1]])
-                    : $matches[0];
-            },
-            $sql,
-        );
+        // Single-pass replace so interpolated values cannot be rewritten by a
+        // later iteration, while quoted/comment regions stay untouched.
+        while ($i < $length) {
+            $segmentStart = $i;
+            if ($this->advancePastQuotedOrCommentRegion($sql, $i, $length)) {
+                $debugSql .= substr($sql, $segmentStart, $i - $segmentStart);
+                continue;
+            }
+
+            if ($sql[$i] === ':') {
+                $nameEnd = $i + 1;
+                while ($nameEnd < $length && $this->isSqlPlaceholderNameChar($sql[$nameEnd])) {
+                    $nameEnd++;
+                }
+
+                if ($nameEnd > $i + 1) {
+                    $name = substr($sql, $i + 1, $nameEnd - $i - 1);
+                    $debugSql .= array_key_exists($name, $params)
+                        ? $this->formatDebugValue($params[$name])
+                        : substr($sql, $i, $nameEnd - $i);
+                    $i = $nameEnd;
+                    continue;
+                }
+            }
+
+            $debugSql .= $sql[$i];
+            $i++;
+        }
+
+        return $debugSql;
     }
 
     // ------------------------------------------------------------------
@@ -721,8 +745,8 @@ final class ResourceModelQuery
     }
 
     /**
-     * Byte offsets of '?' placeholders that sit outside single-quoted
-     * string literals, double-quoted regions, and backtick identifiers.
+     * Byte offsets of '?' placeholders that sit outside quoted regions and
+     * SQL comments.
      *
      * @return list<int>
      */
@@ -733,38 +757,77 @@ final class ResourceModelQuery
         $i = 0;
 
         while ($i < $length) {
-            $ch = $sql[$i];
-
-            if ($ch === "'" || $ch === '"' || $ch === '`') {
-                $quote = $ch;
-                $i++;
-                while ($i < $length) {
-                    if ($sql[$i] === '\\' && $quote !== '`' && $i + 1 < $length) {
-                        // Backslash escape (MySQL default for string literals).
-                        $i += 2;
-                        continue;
-                    }
-                    if ($sql[$i] === $quote) {
-                        if ($i + 1 < $length && $sql[$i + 1] === $quote) {
-                            // Doubled quote — SQL-standard escape.
-                            $i += 2;
-                            continue;
-                        }
-                        $i++;
-                        break;
-                    }
-                    $i++;
-                }
+            if ($this->advancePastQuotedOrCommentRegion($sql, $i, $length)) {
                 continue;
             }
 
-            if ($ch === '?') {
+            if ($sql[$i] === '?') {
                 $offsets[] = $i;
             }
             $i++;
         }
 
         return $offsets;
+    }
+
+    private function advancePastQuotedOrCommentRegion(string $sql, int &$offset, int $length): bool
+    {
+        $ch = $sql[$offset];
+
+        if ($ch === "'" || $ch === '"' || $ch === '`') {
+            $quote = $ch;
+            $offset++;
+            while ($offset < $length) {
+                if ($sql[$offset] === '\\' && $quote !== '`' && $offset + 1 < $length) {
+                    // Backslash escape (MySQL default for string literals).
+                    $offset += 2;
+                    continue;
+                }
+                if ($sql[$offset] === $quote) {
+                    if ($offset + 1 < $length && $sql[$offset + 1] === $quote) {
+                        // Doubled quote — SQL-standard escape.
+                        $offset += 2;
+                        continue;
+                    }
+                    $offset++;
+                    break;
+                }
+                $offset++;
+            }
+            return true;
+        }
+
+        if ($ch === '-' && $offset + 1 < $length && $sql[$offset + 1] === '-') {
+            $offset += 2;
+            while ($offset < $length && $sql[$offset] !== "\n" && $sql[$offset] !== "\r") {
+                $offset++;
+            }
+            return true;
+        }
+
+        if ($ch === '#') {
+            $offset++;
+            while ($offset < $length && $sql[$offset] !== "\n" && $sql[$offset] !== "\r") {
+                $offset++;
+            }
+            return true;
+        }
+
+        if ($ch === '/' && $offset + 1 < $length && $sql[$offset + 1] === '*') {
+            $commentEnd = strpos($sql, '*/', $offset + 2);
+            $offset = $commentEnd === false ? $length : $commentEnd + 2;
+            return true;
+        }
+
+        return false;
+    }
+
+    private function isSqlPlaceholderNameChar(string $ch): bool
+    {
+        return ($ch >= 'a' && $ch <= 'z')
+            || ($ch >= 'A' && $ch <= 'Z')
+            || ($ch >= '0' && $ch <= '9')
+            || $ch === '_';
     }
 
     private function metadata(): ResourceModelMetadata
