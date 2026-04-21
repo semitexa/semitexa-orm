@@ -67,7 +67,7 @@ readonly class PaginatedResult
         $items = $this->items;
 
         /** @var list<TOut> $mapped */
-        $mapped = array_values(array_map($mapper, $items));
+        $mapped = array_map($mapper, $items);
 
         return new self(
             items: $mapped,
