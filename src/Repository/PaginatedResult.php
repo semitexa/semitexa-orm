@@ -11,20 +11,24 @@ namespace Semitexa\Orm\Repository;
  */
 readonly class PaginatedResult
 {
+    /** @var list<TItem> */
+    public array $items;
     public int $lastPage;
 
     /**
-     * @param list<TItem> $items
+     * @param array<array-key, TItem> $items
      * @param int $total Total matching records across all pages
      * @param int $page Current page (1-based)
      * @param int $perPage Items per page
      */
     public function __construct(
-        public array $items,
+        array $items,
         public int $total,
         public int $page,
         public int $perPage,
     ) {
+        $this->items = array_values($items);
+
         // lastPage is always >= 1 so UIs and templates can render a page
         // number even when the result set is empty.
         if ($perPage <= 0) {
@@ -63,11 +67,8 @@ readonly class PaginatedResult
      */
     public function map(callable $mapper): self
     {
-        /** @var list<TItem> $items */
-        $items = $this->items;
-
         /** @var list<TOut> $mapped */
-        $mapped = array_values(array_map($mapper, $items));
+        $mapped = array_map($mapper, $this->items);
 
         return new self(
             items: $mapped,

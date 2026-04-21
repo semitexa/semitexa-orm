@@ -187,6 +187,7 @@ final class DomainRepository
      *
      * @param array<string, mixed> $criteria
      * @param list<RelationRef> $relations
+     * @return PaginatedResult<object>
      */
     public function paginate(int $page, int $perPage, array $criteria = [], array $relations = []): PaginatedResult
     {
