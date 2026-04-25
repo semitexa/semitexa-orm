@@ -27,7 +27,7 @@ final class TenantResolvedConnectionListener
     protected ConnectionPoolInterface $connectionPool;
 
     #[InjectAsReadonly]
-    protected ?LoggerInterface $logger = null;
+    protected LoggerInterface $logger;
 
     public function handle(TenantResolved $event): void
     {
@@ -55,7 +55,7 @@ final class TenantResolvedConnectionListener
                 'message' => $e->getMessage(),
             ];
 
-            if ($this->logger !== null) {
+            if (isset($this->logger)) {
                 $this->logger->warning('Failed to switch connection pool to tenant', $context);
                 return;
             }
