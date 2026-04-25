@@ -2,7 +2,7 @@
 
 Attribute-driven ORM with schema definition, connection pooling, and MySQL 8.0+ support.
 
-> **Schema migrations are owned by this package.** `orm:diff` (preview) and `orm:sync` (apply) are the only entry points that change database structure. Other Semitexa packages — including [`semitexa/update`](../semitexa-update/README.md) — must not issue schema DDL; they call ORM through a public seam and the ORM remains the source of truth for what the schema should look like. Post-schema *data* patches (backfills, normalizations) belong to `semitexa/update`.
+> **Schema migrations are owned by this package.** `orm:diff` (preview) and `orm:sync` (apply) are the only entry points that change database structure. Other Semitexa packages — including [`semitexa/update`](https://github.com/semitexa/semitexa-update/blob/master/README.md) — must not issue schema DDL; they call ORM through a public seam and the ORM remains the source of truth for what the schema should look like. Post-schema *data* patches (backfills, normalizations) belong to `semitexa/update`.
 
 ## Purpose
 
