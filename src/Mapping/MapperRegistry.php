@@ -6,7 +6,7 @@ namespace Semitexa\Orm\Mapping;
 
 use Semitexa\Core\Discovery\ClassDiscovery;
 use Semitexa\Orm\Attribute\AsMapper;
-use Semitexa\Orm\Contract\ResourceModelMapperInterface;
+use Semitexa\Orm\Domain\Contract\ResourceModelMapperInterface;
 use Semitexa\Orm\Exception\DuplicateMapperException;
 use Semitexa\Orm\Exception\InvalidMapperDeclarationException;
 use Semitexa\Orm\Exception\MissingMapperException;

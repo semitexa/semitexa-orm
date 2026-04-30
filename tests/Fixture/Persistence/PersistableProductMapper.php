@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Tests\Fixture\Persistence;
 
 use Semitexa\Orm\Attribute\AsMapper;
-use Semitexa\Orm\Contract\ResourceModelMapperInterface;
+use Semitexa\Orm\Domain\Contract\ResourceModelMapperInterface;
 use Semitexa\Orm\Tests\Fixture\Metadata\ValidCategoryResourceModel;
 use Semitexa\Orm\Tests\Fixture\Metadata\ValidProductResourceModel;
 use Semitexa\Orm\Tests\Fixture\Metadata\ValidReviewResourceModel;

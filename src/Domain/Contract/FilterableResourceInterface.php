@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Semitexa\Orm\Contract;
+namespace Semitexa\Orm\Domain\Contract;
 
 /**
  * Resource that can supply filter criteria for Repository::find().
