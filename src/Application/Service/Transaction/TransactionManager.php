@@ -1,0 +1,198 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Semitexa\Orm\Application\Service\Transaction;
+
+use Semitexa\Core\Event\EventDispatcherInterface;
+use Semitexa\Orm\Adapter\ConnectionPoolInterface;
+use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
+use Semitexa\Orm\Adapter\SqliteAdapter;
+
+class TransactionManager
+{
+    /** Active PDO connection for the current (outermost) transaction, null when idle. */
+    private ?\PDO $activeConnection = null;
+
+    /** Nesting depth: 0 = no transaction, 1 = outer BEGIN, 2+ = savepoints. */
+    private int $depth = 0;
+
+    /** @var object[] Buffered events to dispatch after successful outer commit. */
+    private array $pendingEvents = [];
+
+    public function __construct(
+        private readonly ConnectionPoolInterface $pool,
+        private readonly DatabaseAdapterInterface $adapter,
+        private ?EventDispatcherInterface $eventDispatcher = null,
+    ) {}
+
+    public function setEventDispatcher(EventDispatcherInterface $eventDispatcher): void
+    {
+        $this->eventDispatcher = $eventDispatcher;
+    }
+
+    public function bufferEvent(object $event): void
+    {
+        $this->pendingEvents[] = $event;
+    }
+
+    public function isActive(): bool
+    {
+        return $this->depth > 0;
+    }
+
+    /** @return object[] */
+    public function getPendingEvents(): array
+    {
+        return $this->pendingEvents;
+    }
+
+    public function clearPendingEvents(): void
+    {
+        $this->pendingEvents = [];
+    }
+
+    /**
+     * Execute a callable within a database transaction.
+     *
+     * Outer call: pops a connection from the pool, issues BEGIN.
+     * Nested call: reuses the same connection and creates a SAVEPOINT instead.
+     *
+     * On success (outer): COMMIT, return connection to pool.
+     * On success (nested): RELEASE SAVEPOINT.
+     * On exception (outer): ROLLBACK, return connection to pool, re-throw.
+     * On exception (nested): ROLLBACK TO SAVEPOINT, re-throw.
+     *
+     * @template T
+     * @param callable(DatabaseAdapterInterface): T $callback
+     * @return T
+     */
+    public function run(callable $callback): mixed
+    {
+        if ($this->depth === 0) {
+            return $this->runOuter($callback);
+        }
+
+        return $this->runNested($callback);
+    }
+
+    /**
+     * @template T
+     * @param callable(DatabaseAdapterInterface): T $callback
+     * @return T
+     */
+    private function runOuter(callable $callback): mixed
+    {
+        if ($this->adapter instanceof SqliteAdapter) {
+            return $this->runOuterSqlite($callback);
+        }
+
+        $pdo = $this->pool->pop();
+        $this->activeConnection = $pdo;
+        $this->depth = 1;
+
+        $connAdapter = new SingleConnectionAdapter($pdo, $this->adapter->getServerVersion());
+        $pdo->beginTransaction();
+
+        try {
+            $result = $callback($connAdapter);
+            $pdo->commit();
+
+            $this->flushPendingEvents();
+
+            return $result;
+        } catch (\Throwable $e) {
+            $this->pendingEvents = [];
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        } finally {
+            $this->pool->push($pdo);
+            $this->activeConnection = null;
+            $this->depth = 0;
+        }
+    }
+
+    /**
+     * Handle outer transaction for SQLite adapter.
+     *
+     * @template T
+     * @param callable(DatabaseAdapterInterface): T $callback
+     * @return T
+     */
+    private function runOuterSqlite(callable $callback): mixed
+    {
+        if (!$this->adapter instanceof SqliteAdapter) {
+            throw new \LogicException('SQLite transactions require the SQLite adapter.');
+        }
+
+        $pdo = $this->adapter->getPdo();
+        $this->activeConnection = $pdo;
+        $this->depth = 1;
+
+        $connAdapter = new SingleConnectionAdapter($pdo, $this->adapter->getServerVersion());
+        $pdo->beginTransaction();
+
+        try {
+            $result = $callback($connAdapter);
+            $pdo->commit();
+
+            $this->flushPendingEvents();
+
+            return $result;
+        } catch (\Throwable $e) {
+            $this->pendingEvents = [];
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        } finally {
+            $this->activeConnection = null;
+            $this->depth = 0;
+        }
+    }
+
+    /**
+     * @template T
+     * @param callable(DatabaseAdapterInterface): T $callback
+     * @return T
+     */
+    private function runNested(callable $callback): mixed
+    {
+        $pdo = $this->activeConnection;
+        if (!$pdo instanceof \PDO) {
+            throw new \LogicException('Nested transaction requested without an active PDO connection.');
+        }
+
+        $this->depth++;
+        $savepointName = 'sp_' . $this->depth;
+
+        $connAdapter = new SingleConnectionAdapter($pdo, $this->adapter->getServerVersion());
+        $pdo->exec("SAVEPOINT {$savepointName}");
+
+        try {
+            $result = $callback($connAdapter);
+            $pdo->exec("RELEASE SAVEPOINT {$savepointName}");
+            return $result;
+        } catch (\Throwable $e) {
+            $pdo->exec("ROLLBACK TO SAVEPOINT {$savepointName}");
+            throw $e;
+        } finally {
+            $this->depth--;
+        }
+    }
+
+    private function flushPendingEvents(): void
+    {
+        if ($this->eventDispatcher !== null) {
+            $events = $this->pendingEvents;
+            $this->pendingEvents = [];
+            foreach ($events as $event) {
+                $this->eventDispatcher->dispatch($event);
+            }
+        } else {
+            $this->pendingEvents = [];
+        }
+    }
+}

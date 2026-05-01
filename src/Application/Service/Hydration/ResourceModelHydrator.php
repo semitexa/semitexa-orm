@@ -1,0 +1,168 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Semitexa\Orm\Application\Service\Hydration;
+
+use Semitexa\Orm\Domain\Model\RelationState;
+
+use Semitexa\Orm\Metadata\ColumnMetadata;
+use Semitexa\Orm\Metadata\ResourceModelMetadataRegistry;
+use Semitexa\Orm\Domain\Model\ColumnDefinition;
+
+final class ResourceModelHydrator
+{
+    public function __construct(
+        private readonly ?TypeCaster                    $typeCaster = null,
+        private readonly ?ResourceModelMetadataRegistry $metadataRegistry = null,
+    ) {}
+
+    /**
+     * @template T of object
+     * @param array<string, mixed> $row
+     * @param class-string<T> $resourceModelClass
+     * @return T
+     */
+    public function hydrate(array $row, string $resourceModelClass): object
+    {
+        $metadata = ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($resourceModelClass);
+        $typeCaster = $this->typeCaster ?? new TypeCaster();
+        $ref = new \ReflectionClass($resourceModelClass);
+        $constructor = $ref->getConstructor();
+
+        if ($constructor === null) {
+            return new $resourceModelClass();
+        }
+
+        $arguments = [];
+        foreach ($constructor->getParameters() as $parameter) {
+            $parameterName = $parameter->getName();
+
+            if ($metadata->hasColumn($parameterName)) {
+                $column = $metadata->column($parameterName);
+                $arguments[] = $this->hydrateColumnValue($row, $column, $parameter, $typeCaster);
+                continue;
+            }
+
+            if ($metadata->hasRelation($parameterName)) {
+                $arguments[] = $this->defaultRelationValue($parameter);
+                continue;
+            }
+
+            if ($parameter->isDefaultValueAvailable()) {
+                $arguments[] = $parameter->getDefaultValue();
+                continue;
+            }
+
+            if ($parameter->allowsNull()) {
+                $arguments[] = null;
+                continue;
+            }
+
+            throw new \InvalidArgumentException(sprintf(
+                'Cannot hydrate constructor parameter "%s" on %s.',
+                $parameterName,
+                $resourceModelClass,
+            ));
+        }
+
+        return $ref->newInstanceArgs($arguments);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function dehydrate(object $resourceModel): array
+    {
+        $metadata = ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($resourceModel::class);
+        $typeCaster = $this->typeCaster ?? new TypeCaster();
+
+        $data = [];
+        foreach ($metadata->columns() as $column) {
+            $property = new \ReflectionProperty($resourceModel, $column->propertyName);
+            if (!$property->isInitialized($resourceModel)) {
+                continue;
+            }
+
+            $data[$column->columnName] = $typeCaster->castToDb(
+                $property->getValue($resourceModel),
+                $this->toColumnDefinition($column),
+            );
+        }
+
+        return $data;
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     */
+    private function hydrateColumnValue(
+        array $row,
+        ColumnMetadata $column,
+        \ReflectionParameter $parameter,
+        TypeCaster $typeCaster,
+    ): mixed {
+        if (!array_key_exists($column->columnName, $row)) {
+            if ($parameter->isDefaultValueAvailable()) {
+                return $parameter->getDefaultValue();
+            }
+
+            if ($column->nullable || $parameter->allowsNull()) {
+                return null;
+            }
+
+            throw new \InvalidArgumentException(sprintf(
+                'Missing required DB column "%s" for constructor parameter "%s".',
+                $column->columnName,
+                $parameter->getName(),
+            ));
+        }
+
+        $value = $typeCaster->castFromDb($row[$column->columnName], $this->toColumnDefinition($column));
+
+        return $typeCaster->castToPropertyType(
+            $value,
+            $column->phpType,
+            $column->nullable || $parameter->allowsNull(),
+        );
+    }
+
+    private function defaultRelationValue(\ReflectionParameter $parameter): mixed
+    {
+        $type = $parameter->getType();
+        if ($type instanceof \ReflectionNamedType && $type->getName() === RelationState::class) {
+            return RelationState::notLoaded();
+        }
+
+        if ($parameter->isDefaultValueAvailable()) {
+            return $parameter->getDefaultValue();
+        }
+
+        if ($parameter->allowsNull()) {
+            return null;
+        }
+
+        throw new \InvalidArgumentException(sprintf(
+            'Relation parameter "%s" must either allow null, define a default, or use %s.',
+            $parameter->getName(),
+            RelationState::class,
+        ));
+    }
+
+    private function toColumnDefinition(ColumnMetadata $column): ColumnDefinition
+    {
+        return new ColumnDefinition(
+            name: $column->columnName,
+            type: $column->type,
+            phpType: $column->phpType,
+            nullable: $column->nullable,
+            length: $column->length,
+            precision: $column->precision,
+            scale: $column->scale,
+            default: $column->default,
+            isPrimaryKey: $column->isPrimaryKey,
+            pkStrategy: $column->primaryKeyStrategy ?? 'auto',
+            propertyName: $column->propertyName,
+        );
+    }
+}

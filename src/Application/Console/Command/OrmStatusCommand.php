@@ -7,7 +7,7 @@ namespace Semitexa\Orm\Application\Console\Command;
 use Semitexa\Core\Attribute\AsCommand;
 use Semitexa\Core\Console\BaseCommand;
 use Semitexa\Orm\Adapter\ServerCapability;
-use Semitexa\Orm\Connection\ConnectionRegistry;
+use Semitexa\Orm\Application\Service\Connection\ConnectionRegistry;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;

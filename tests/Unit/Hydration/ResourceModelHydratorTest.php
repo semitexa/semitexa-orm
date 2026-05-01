@@ -6,8 +6,8 @@ namespace Semitexa\Orm\Tests\Unit\Hydration;
 
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
-use Semitexa\Orm\Hydration\RelationState;
-use Semitexa\Orm\Hydration\ResourceModelHydrator;
+use Semitexa\Orm\Domain\Model\RelationState;
+use Semitexa\Orm\Application\Service\Hydration\ResourceModelHydrator;
 use Semitexa\Orm\Tests\Fixture\Hydration\HydratableProductResourceModel;
 
 final class ResourceModelHydratorTest extends TestCase

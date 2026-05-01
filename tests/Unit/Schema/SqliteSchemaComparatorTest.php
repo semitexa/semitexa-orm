@@ -7,11 +7,11 @@ namespace Semitexa\Orm\Tests\Unit\Schema;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Semitexa\Orm\Adapter\SqliteType;
-use Semitexa\Orm\Schema\ColumnDefinition;
-use Semitexa\Orm\Schema\ForeignKeyAction;
-use Semitexa\Orm\Schema\ForeignKeyDefinition;
-use Semitexa\Orm\Schema\SqliteSchemaComparator;
-use Semitexa\Orm\Schema\TableDefinition;
+use Semitexa\Orm\Domain\Model\ColumnDefinition;
+use Semitexa\Orm\Domain\Enum\ForeignKeyAction;
+use Semitexa\Orm\Domain\Model\ForeignKeyDefinition;
+use Semitexa\Orm\Application\Service\Schema\SqliteSchemaComparator;
+use Semitexa\Orm\Domain\Model\TableDefinition;
 use Semitexa\Orm\Tests\Fixture\Hydration\FakeDatabaseAdapter;
 
 final class SqliteSchemaComparatorTest extends TestCase

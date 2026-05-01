@@ -5,17 +5,17 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Query;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
-use Semitexa\Orm\Hydration\ResourceModelHydrator;
-use Semitexa\Orm\Hydration\ResourceModelRelationLoader;
-use Semitexa\Orm\Hydration\TypeCaster;
-use Semitexa\Orm\Mapping\MapperRegistry;
+use Semitexa\Orm\Application\Service\Hydration\ResourceModelHydrator;
+use Semitexa\Orm\Application\Service\Hydration\ResourceModelRelationLoader;
+use Semitexa\Orm\Application\Service\Hydration\TypeCaster;
+use Semitexa\Orm\Application\Service\Mapping\MapperRegistry;
 use Semitexa\Orm\Metadata\ColumnRef;
 use Semitexa\Orm\Metadata\ColumnMetadata;
 use Semitexa\Orm\Metadata\RelationRef;
 use Semitexa\Orm\Metadata\ResourceModelMetadata;
 use Semitexa\Orm\Metadata\ResourceModelMetadataRegistry;
 use Semitexa\Orm\Repository\PaginatedResult;
-use Semitexa\Orm\Schema\ColumnDefinition;
+use Semitexa\Orm\Domain\Model\ColumnDefinition;
 
 /**
  * Typed, composable query builder for a ResourceModel.

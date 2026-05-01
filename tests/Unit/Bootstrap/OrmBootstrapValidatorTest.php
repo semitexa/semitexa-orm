@@ -6,8 +6,8 @@ namespace Semitexa\Orm\Tests\Unit\Bootstrap;
 
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
-use Semitexa\Orm\Bootstrap\OrmBootstrapValidator;
-use Semitexa\Orm\Mapping\MapperRegistry;
+use Semitexa\Orm\Application\Service\OrmBootstrapValidator;
+use Semitexa\Orm\Application\Service\Mapping\MapperRegistry;
 use Semitexa\Orm\Metadata\ResourceModelMetadataRegistry;
 use Semitexa\Orm\Tests\Fixture\Hydration\HydratableProductResourceModel;
 use Semitexa\Orm\Tests\Fixture\Mapping\HydratableProductDomainModel;

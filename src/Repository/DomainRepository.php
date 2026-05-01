@@ -6,14 +6,14 @@ namespace Semitexa\Orm\Repository;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Exception\InvalidResourceModelException;
-use Semitexa\Orm\Hydration\ResourceModelHydrator;
-use Semitexa\Orm\Hydration\ResourceModelRelationLoader;
-use Semitexa\Orm\Mapping\MapperRegistry;
+use Semitexa\Orm\Application\Service\Hydration\ResourceModelHydrator;
+use Semitexa\Orm\Application\Service\Hydration\ResourceModelRelationLoader;
+use Semitexa\Orm\Application\Service\Mapping\MapperRegistry;
 use Semitexa\Orm\Metadata\ColumnRef;
 use Semitexa\Orm\Metadata\RelationRef;
 use Semitexa\Orm\Metadata\ResourceModelMetadata;
 use Semitexa\Orm\Metadata\ResourceModelMetadataRegistry;
-use Semitexa\Orm\Persistence\AggregateWriteEngine;
+use Semitexa\Orm\Application\Service\Persistence\AggregateWriteEngine;
 use Semitexa\Orm\Query\Direction;
 use Semitexa\Orm\Query\Operator;
 use Semitexa\Orm\Query\SystemScopeToken;

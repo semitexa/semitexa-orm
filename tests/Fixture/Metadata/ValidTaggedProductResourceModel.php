@@ -11,7 +11,7 @@ use Semitexa\Orm\Attribute\ManyToMany;
 use Semitexa\Orm\Attribute\PrimaryKey;
 use Semitexa\Orm\Metadata\HasColumnReferences;
 use Semitexa\Orm\Metadata\HasRelationReferences;
-use Semitexa\Orm\Persistence\RelationWritePolicy;
+use Semitexa\Orm\Domain\Enum\RelationWritePolicy;
 
 #[FromTable(name: 'tagged_products')]
 final readonly class ValidTaggedProductResourceModel

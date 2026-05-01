@@ -9,9 +9,9 @@ use PHPUnit\Framework\TestCase;
 use Semitexa\Core\Log\LoggerInterface;
 use Semitexa\Orm\Adapter\ConnectionPoolInterface;
 use Semitexa\Orm\Adapter\TenantSwitchingConnectionPoolInterface;
-use Semitexa\Orm\Event\TenantResolvedConnectionListener;
+use Semitexa\Orm\Application\Handler\DomainListener\TenantResolvedConnectionListener;
 use Semitexa\Tenancy\Context\TenantContext;
-use Semitexa\Tenancy\Event\TenantResolved;
+use Semitexa\Tenancy\Domain\Event\TenantResolved;
 
 final class TenantResolvedConnectionListenerTest extends TestCase
 {

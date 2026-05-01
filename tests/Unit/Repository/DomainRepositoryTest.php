@@ -6,9 +6,9 @@ namespace Semitexa\Orm\Tests\Unit\Repository;
 
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
-use Semitexa\Orm\Hydration\ResourceModelHydrator;
-use Semitexa\Orm\Hydration\ResourceModelRelationLoader;
-use Semitexa\Orm\Mapping\MapperRegistry;
+use Semitexa\Orm\Application\Service\Hydration\ResourceModelHydrator;
+use Semitexa\Orm\Application\Service\Hydration\ResourceModelRelationLoader;
+use Semitexa\Orm\Application\Service\Mapping\MapperRegistry;
 use Semitexa\Orm\Query\Direction;
 use Semitexa\Orm\Query\SystemScopeToken;
 use Semitexa\Orm\Repository\DomainRepository;

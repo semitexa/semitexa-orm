@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Trait;
 
 use Semitexa\Orm\Attribute\Filterable;
-use Semitexa\Orm\Schema\ResourceMetadata;
+use Semitexa\Orm\Domain\Model\ResourceMetadata;
 
 /**
  * Provides filterByX($value) for main-table properties with #[Filterable],

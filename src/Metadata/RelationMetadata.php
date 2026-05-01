@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Metadata;
 
-use Semitexa\Orm\Persistence\RelationWritePolicy;
-use Semitexa\Orm\Schema\ForeignKeyAction;
+use Semitexa\Orm\Domain\Enum\RelationWritePolicy;
+use Semitexa\Orm\Domain\Enum\ForeignKeyAction;
 
 final readonly class RelationMetadata
 {

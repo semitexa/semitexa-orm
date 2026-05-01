@@ -6,7 +6,7 @@ namespace Semitexa\Orm\Tests\Unit\Connection;
 
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
-use Semitexa\Orm\Connection\ConnectionConfig;
+use Semitexa\Orm\Domain\Model\ConnectionConfig;
 
 final class ConnectionConfigTest extends TestCase
 {

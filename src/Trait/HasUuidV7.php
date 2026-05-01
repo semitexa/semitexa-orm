@@ -7,7 +7,7 @@ namespace Semitexa\Orm\Trait;
 use Semitexa\Orm\Adapter\MySqlType;
 use Semitexa\Orm\Attribute\Column;
 use Semitexa\Orm\Attribute\PrimaryKey;
-use Semitexa\Orm\Uuid\Uuid7;
+use Semitexa\Orm\Application\Service\Uuid7;
 
 trait HasUuidV7
 {
