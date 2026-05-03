@@ -6,7 +6,7 @@ namespace Semitexa\Orm\Tests\Unit\Hydration;
 
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
-use Semitexa\Orm\Hydration\RelationState;
+use Semitexa\Orm\Domain\Model\RelationState;
 
 final class RelationStateTest extends TestCase
 {

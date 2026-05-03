@@ -13,7 +13,7 @@ use Semitexa\Orm\Attribute\Column;
 use Semitexa\Orm\Attribute\FromTable;
 use Semitexa\Orm\Attribute\Index;
 use Semitexa\Orm\Attribute\PrimaryKey;
-use Semitexa\Orm\Schema\SchemaCollector;
+use Semitexa\Orm\Application\Service\Schema\SchemaCollector;
 
 #[FromTable(name: 'sqlite_documents')]
 final readonly class SqliteValidTypesResourceModel

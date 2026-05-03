@@ -20,6 +20,8 @@ final class SingleConnectionPool implements TenantSwitchingConnectionPoolInterfa
     {
         if ($this->connection === null) {
             $this->connection = ($this->factory)();
+        } else {
+            $this->connection = $this->ensureAlive($this->connection);
         }
 
         return $this->connection;
@@ -57,5 +59,19 @@ final class SingleConnectionPool implements TenantSwitchingConnectionPoolInterfa
     public function supportsTenantSwitch(): bool
     {
         return false;
+    }
+
+    private function ensureAlive(\PDO $connection): \PDO
+    {
+        try {
+            $stmt = $connection->query('SELECT 1');
+            if ($stmt === false) {
+                return ($this->factory)();
+            }
+
+            return $connection;
+        } catch (\PDOException) {
+            return ($this->factory)();
+        }
     }
 }

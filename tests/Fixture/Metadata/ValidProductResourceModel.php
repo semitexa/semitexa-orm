@@ -15,7 +15,7 @@ use Semitexa\Orm\Attribute\SoftDelete;
 use Semitexa\Orm\Attribute\TenantScoped;
 use Semitexa\Orm\Metadata\HasColumnReferences;
 use Semitexa\Orm\Metadata\HasRelationReferences;
-use Semitexa\Orm\Persistence\RelationWritePolicy;
+use Semitexa\Orm\Domain\Enum\RelationWritePolicy;
 
 #[FromTable(name: 'products')]
 #[TenantScoped(strategy: 'column', column: 'tenantId')]

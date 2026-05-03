@@ -6,7 +6,7 @@ namespace Semitexa\Orm\Tests\Unit\Connection;
 
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
-use Semitexa\Orm\Connection\ConnectionRegistry;
+use Semitexa\Orm\Application\Service\Connection\ConnectionRegistry;
 use Semitexa\Orm\Tests\Fixture\Metadata\AnalyticsEventResourceModel;
 
 use Semitexa\Orm\Tests\Fixture\Metadata\ValidProductResourceModel;

@@ -39,4 +39,4 @@ ORM resources go in `Application/Db/MySQL/Model/`. Domain entities live in `Doma
 | `orm:sync` | Execute the DDL plan; supports `--dry-run` and `--allow-destructive` |
 | `orm:seed` | Apply data seeds (fixture data) declared by entity factories |
 
-Update orchestration calls `orm:sync` through `Semitexa\Update\Migration\OrmMigrationGatewayInterface` — never by reaching into ORM internals.
+Update orchestration calls `orm:sync` through `Semitexa\Update\Domain\Contract\OrmMigrationGatewayInterface` — never by reaching into ORM internals.

@@ -8,7 +8,7 @@ use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Semitexa\Orm\Metadata\RelationKind;
 use Semitexa\Orm\Metadata\ResourceModelMetadataExtractor;
-use Semitexa\Orm\Persistence\RelationWritePolicy;
+use Semitexa\Orm\Domain\Enum\RelationWritePolicy;
 use Semitexa\Orm\Tests\Fixture\Metadata\AnalyticsEventResourceModel;
 use Semitexa\Orm\Tests\Fixture\Metadata\ValidProductResourceModel;
 

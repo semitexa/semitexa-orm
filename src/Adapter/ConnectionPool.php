@@ -159,7 +159,11 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
     private function ensureAlive(\PDO $connection): \PDO
     {
         try {
-            $connection->query('SELECT 1');
+            $stmt = $connection->query('SELECT 1');
+            if ($stmt === false) {
+                return ($this->factory)();
+            }
+
             return $connection;
         } catch (\PDOException) {
             // Connection is stale — replace it with a fresh one.

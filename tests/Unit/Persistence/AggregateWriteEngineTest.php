@@ -7,9 +7,9 @@ namespace Semitexa\Orm\Tests\Unit\Persistence;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Semitexa\Orm\Exception\InvalidRelationWriteException;
-use Semitexa\Orm\Hydration\ResourceModelHydrator;
-use Semitexa\Orm\Mapping\MapperRegistry;
-use Semitexa\Orm\Persistence\AggregateWriteEngine;
+use Semitexa\Orm\Application\Service\Hydration\ResourceModelHydrator;
+use Semitexa\Orm\Application\Service\Mapping\MapperRegistry;
+use Semitexa\Orm\Application\Service\Persistence\AggregateWriteEngine;
 use Semitexa\Orm\Tests\Fixture\Hydration\FakeDatabaseAdapter;
 
 use Semitexa\Orm\Tests\Fixture\Metadata\ValidProductResourceModel;

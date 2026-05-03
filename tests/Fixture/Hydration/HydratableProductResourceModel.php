@@ -13,10 +13,10 @@ use Semitexa\Orm\Attribute\HasMany;
 use Semitexa\Orm\Attribute\PrimaryKey;
 use Semitexa\Orm\Attribute\SoftDelete;
 use Semitexa\Orm\Attribute\TenantScoped;
-use Semitexa\Orm\Hydration\RelationState;
+use Semitexa\Orm\Domain\Model\RelationState;
 use Semitexa\Orm\Metadata\HasColumnReferences;
 use Semitexa\Orm\Metadata\HasRelationReferences;
-use Semitexa\Orm\Persistence\RelationWritePolicy;
+use Semitexa\Orm\Domain\Enum\RelationWritePolicy;
 use Semitexa\Orm\Tests\Fixture\Metadata\ValidCategoryResourceModel;
 use Semitexa\Orm\Tests\Fixture\Metadata\ValidReviewResourceModel;
 

@@ -9,7 +9,7 @@ use PHPUnit\Framework\TestCase;
 use Semitexa\Orm\Exception\DuplicateMapperException;
 use Semitexa\Orm\Exception\InvalidMapperDeclarationException;
 use Semitexa\Orm\Exception\MissingMapperException;
-use Semitexa\Orm\Mapping\MapperRegistry;
+use Semitexa\Orm\Application\Service\Mapping\MapperRegistry;
 use Semitexa\Orm\Tests\Fixture\Mapping\DuplicateValidProductMapper;
 
 use Semitexa\Orm\Tests\Fixture\Mapping\HydratableProductDomainModel;

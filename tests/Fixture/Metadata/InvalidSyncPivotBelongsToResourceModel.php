@@ -11,7 +11,7 @@ use Semitexa\Orm\Attribute\FromTable;
 use Semitexa\Orm\Attribute\PrimaryKey;
 use Semitexa\Orm\Metadata\HasColumnReferences;
 use Semitexa\Orm\Metadata\HasRelationReferences;
-use Semitexa\Orm\Persistence\RelationWritePolicy;
+use Semitexa\Orm\Domain\Enum\RelationWritePolicy;
 
 #[FromTable(name: 'invalid_sync_pivot_products')]
 final readonly class InvalidSyncPivotBelongsToResourceModel

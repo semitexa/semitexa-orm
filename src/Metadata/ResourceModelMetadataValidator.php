@@ -79,24 +79,24 @@ final class ResourceModelMetadataValidator
                 ));
             }
 
-            if ($relation->kind === RelationKind::ManyToMany && $relation->writePolicy !== \Semitexa\Orm\Persistence\RelationWritePolicy::SyncPivotOnly) {
+            if ($relation->kind === RelationKind::ManyToMany && $relation->writePolicy !== \Semitexa\Orm\Domain\Enum\RelationWritePolicy::SyncPivotOnly) {
                 throw new InvalidRelationDeclarationException(sprintf(
                     'ManyToMany relation %s::$%s must use %s.',
                     $metadata->className,
                     $relation->propertyName,
-                    \Semitexa\Orm\Persistence\RelationWritePolicy::SyncPivotOnly->name,
+                    \Semitexa\Orm\Domain\Enum\RelationWritePolicy::SyncPivotOnly->name,
                 ));
             }
 
             if (
                 $relation->kind !== RelationKind::ManyToMany
-                && $relation->writePolicy === \Semitexa\Orm\Persistence\RelationWritePolicy::SyncPivotOnly
+                && $relation->writePolicy === \Semitexa\Orm\Domain\Enum\RelationWritePolicy::SyncPivotOnly
             ) {
                 throw new InvalidRelationDeclarationException(sprintf(
                     'Relation %s::$%s can use %s only for ManyToMany associations.',
                     $metadata->className,
                     $relation->propertyName,
-                    \Semitexa\Orm\Persistence\RelationWritePolicy::SyncPivotOnly->name,
+                    \Semitexa\Orm\Domain\Enum\RelationWritePolicy::SyncPivotOnly->name,
                 ));
             }
         }

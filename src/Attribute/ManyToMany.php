@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Attribute;
 
 use Attribute;
-use Semitexa\Orm\Persistence\RelationWritePolicy;
+use Semitexa\Orm\Domain\Enum\RelationWritePolicy;
 
 #[Attribute(Attribute::TARGET_PROPERTY)]
 readonly class ManyToMany
@@ -15,8 +15,8 @@ readonly class ManyToMany
         public string $pivotTable,
         public string $foreignKey,
         public string $relatedKey,
-        public ?\Semitexa\Orm\Schema\ForeignKeyAction $onDelete = null,
-        public ?\Semitexa\Orm\Schema\ForeignKeyAction $onUpdate = null,
+        public ?\Semitexa\Orm\Domain\Enum\ForeignKeyAction $onDelete = null,
+        public ?\Semitexa\Orm\Domain\Enum\ForeignKeyAction $onUpdate = null,
         public ?RelationWritePolicy $writePolicy = null,
     ) {}
 }

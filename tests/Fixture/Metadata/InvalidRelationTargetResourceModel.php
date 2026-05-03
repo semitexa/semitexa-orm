@@ -9,7 +9,7 @@ use Semitexa\Orm\Attribute\BelongsTo;
 use Semitexa\Orm\Attribute\Column;
 use Semitexa\Orm\Attribute\FromTable;
 use Semitexa\Orm\Attribute\PrimaryKey;
-use Semitexa\Orm\Persistence\RelationWritePolicy;
+use Semitexa\Orm\Domain\Enum\RelationWritePolicy;
 
 #[FromTable(name: 'invalid_relation_target_models')]
 final readonly class InvalidRelationTargetResourceModel
