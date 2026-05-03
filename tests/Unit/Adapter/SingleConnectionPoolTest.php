@@ -14,10 +14,11 @@ final class SingleConnectionPoolTest extends TestCase
     public function it_reuses_alive_connection(): void
     {
         $created = 0;
-        $pool = new SingleConnectionPool(static function () use (&$created): \PDO {
+        $statement = $this->createMock(\PDOStatement::class);
+        $pool = new SingleConnectionPool(static function () use (&$created, $statement): \PDO {
             ++$created;
 
-            return new HealthyPdo();
+            return new HealthyPdo($statement);
         });
 
         $first = $pool->pop();
@@ -33,9 +34,10 @@ final class SingleConnectionPoolTest extends TestCase
     #[Test]
     public function it_replaces_stale_connection(): void
     {
+        $statement = $this->createMock(\PDOStatement::class);
         $connections = [
             new StalePdo(),
-            new HealthyPdo(),
+            new HealthyPdo($statement),
         ];
 
         $pool = new SingleConnectionPool(static function () use (&$connections): \PDO {
@@ -60,9 +62,10 @@ final class SingleConnectionPoolTest extends TestCase
     #[Test]
     public function it_replaces_connection_when_health_check_returns_false(): void
     {
+        $statement = $this->createMock(\PDOStatement::class);
         $connections = [
             new FalseHealthCheckPdo(),
-            new HealthyPdo(),
+            new HealthyPdo($statement),
         ];
 
         $pool = new SingleConnectionPool(static function () use (&$connections): \PDO {
@@ -88,23 +91,18 @@ final class SingleConnectionPoolTest extends TestCase
 final class HealthyPdo extends \PDO
 {
     public int $queries = 0;
+    private \PDOStatement $statement;
 
-    public function __construct()
+    public function __construct(\PDOStatement $statement)
     {
+        $this->statement = $statement;
     }
 
     public function query(string $query, ?int $fetchMode = null, mixed ...$fetchModeArgs): \PDOStatement|false
     {
         ++$this->queries;
 
-        return new HealthyPdoStatement();
-    }
-}
-
-final class HealthyPdoStatement extends \PDOStatement
-{
-    public function __construct()
-    {
+        return $this->statement;
     }
 }
 
