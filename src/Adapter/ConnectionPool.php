@@ -9,6 +9,27 @@ use Swoole\Coroutine\Channel;
 
 class ConnectionPool implements TenantSwitchingConnectionPoolInterface
 {
+    /**
+     * PHP shutdown phase flag.
+     *
+     * Swoole tears down its internal Channel state during the PHP shutdown
+     * sequence. Any Channel method called after that point — even isEmpty() —
+     * raises a true PHP fatal ("must call constructor first") that BYPASSES
+     * try/catch. The fatal originates inside the C extension before any
+     * userland exception handling can run.
+     *
+     * The pool's __destruct fires during PHP shutdown after the test or worker
+     * exits, so without a guard, every Swoole-using test session ends with a
+     * fatal that aborts PHPUnit before the final summary line.
+     *
+     * The shutdown_function below flips this flag BEFORE Channel destruction.
+     * close() checks the flag first and skips Channel ops when the runtime
+     * is already gone — no userland operation matters at that point because
+     * the process is exiting anyway.
+     */
+    private static bool $phpShuttingDown = false;
+    private static bool $shutdownHookRegistered = false;
+
     private ?Channel $pool;
 
     /**
@@ -27,8 +48,20 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
         private readonly int $size,
         private readonly \Closure $factory,
     ) {
+        self::registerShutdownHookOnce();
         $this->pool    = new Channel($size);
         $this->created = new Atomic(0);
+    }
+
+    private static function registerShutdownHookOnce(): void
+    {
+        if (self::$shutdownHookRegistered) {
+            return;
+        }
+        self::$shutdownHookRegistered = true;
+        register_shutdown_function(static function (): void {
+            self::$phpShuttingDown = true;
+        });
     }
 
     public function pop(float $timeout = -1): \PDO
@@ -99,13 +132,22 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
             return;
         }
 
+        // PHP shutdown phase — Channel methods would raise an uncatchable
+        // Swoole\Error fatal. Skip the drain; the OS reclaims the Channel.
+        if (self::$phpShuttingDown) {
+            $this->pool = null;
+            return;
+        }
+
         try {
             while (!$this->pool->isEmpty()) {
                 $this->pool->pop();
             }
 
             $this->pool->close();
-        } catch (\Error) {
+        } catch (\Throwable) {
+            // Catch-all for normal-runtime cleanup edge cases — the pool is
+            // going away regardless, so any cleanup error is moot.
             return;
         }
         $this->pool = null;
