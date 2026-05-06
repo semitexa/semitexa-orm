@@ -13,21 +13,22 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
      * PHP shutdown phase flag.
      *
      * Swoole tears down its internal Channel state during the PHP shutdown
-     * sequence. Any Channel method called after that point — even isEmpty() —
+     * Any Channel method called after that point — even isEmpty() —
      * raises a true PHP fatal ("must call constructor first") that BYPASSES
      * try/catch. The fatal originates inside the C extension before any
      * userland exception handling can run.
      *
-     * The pool's __destruct fires during PHP shutdown after the test or worker
-     * exits, so without a guard, every Swoole-using test session ends with a
-     * fatal that aborts PHPUnit before the final summary line.
+     * In long-running workers or tests, object destruction may occur during
+     * PHP shutdown after the runtime is gone. Without a guard, every
+     * Swoole-using test session ends with a fatal that aborts PHPUnit
+     * before the final summary line.
      *
      * The shutdown_function below flips this flag BEFORE Channel destruction.
      * close() checks the flag first and skips Channel ops when the runtime
      * is already gone — no userland operation matters at that point because
      * the process is exiting anyway.
      */
-    private static bool $phpShuttingDown = false;
+     private static bool $phpShuttingDown = false;
     private static bool $shutdownHookRegistered = false;
 
     private ?Channel $pool;
@@ -148,10 +149,10 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
         } catch (\Throwable) {
             // Catch-all for normal-runtime cleanup edge cases — the pool is
             // going away regardless, so any cleanup error is moot.
-            return;
+        } finally {
+            $this->pool = null;
+            $this->created->set(0);
         }
-        $this->pool = null;
-        $this->created->set(0);
     }
 
     public function getSize(): int
