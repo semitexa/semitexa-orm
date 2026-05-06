@@ -14,6 +14,10 @@ final class ConnectionPoolTest extends TestCase
     #[Test]
     public function it_creates_and_closes_pool(): void
     {
+        if (!class_exists(\Swoole\Coroutine::class)) {
+            self::markTestSkipped('Swoole extension is required.');
+        }
+
         Coroutine\run(function () {
             $created = 0;
             $pool = new ConnectionPool(2, static function () use (&$created): \PDO {
@@ -46,6 +50,10 @@ final class ConnectionPoolTest extends TestCase
     #[Test]
     public function it_skips_channel_ops_during_shutdown(): void
     {
+        if (!class_exists(\Swoole\Coroutine::class)) {
+            self::markTestSkipped('Swoole extension is required.');
+        }
+
         Coroutine\run(function () {
             $pool = new ConnectionPool(1, static function (): \PDO {
                 return new \PDO('sqlite::memory:');
@@ -72,6 +80,10 @@ final class ConnectionPoolTest extends TestCase
     #[Test]
     public function it_resets_state_even_on_cleanup_error(): void
     {
+        if (!class_exists(\Swoole\Coroutine::class)) {
+            self::markTestSkipped('Swoole extension is required.');
+        }
+
         Coroutine\run(function () {
             $pool = new ConnectionPool(1, static function (): \PDO {
                 return new \PDO('sqlite::memory:');
