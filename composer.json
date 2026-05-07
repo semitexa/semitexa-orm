@@ -1,37 +1,38 @@
 {
-  "name": "semitexa/orm",
-  "description": "Semitexa ORM — attribute-driven schema, connection pooling, MySQL adapter",
-  "type": "semitexa-module",
-  "license": "MIT",
-  "authors": [
-    {
-      "name": "Semitexa",
-      "email": "support@semitexa.com"
-    }
-  ],
-  "require": {
-    "php": "^8.4",
-    "semitexa/core": "*",
-    "semitexa/tenancy": "*"
-  },
-  "require-dev": {
-    "swoole/ide-helper": "^5.1"
-  },
-  "autoload": {
-    "psr-4": {
-      "Semitexa\\Orm\\": "src/"
-    }
-  },
-  "autoload-dev": {
-    "psr-4": {
-      "Semitexa\\Orm\\Tests\\": "tests/"
-    }
-  },
-  "keywords": [
-    "semitexa",
-    "orm",
-    "mysql",
-    "schema",
-    "attributes"
-  ]
+    "name": "semitexa/orm",
+    "description": "Semitexa ORM — attribute-driven schema, connection pooling, MySQL adapter",
+    "type": "semitexa-module",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Semitexa",
+            "email": "support@semitexa.com"
+        }
+    ],
+    "require": {
+        "php": "^8.4",
+        "semitexa/core": "*",
+        "semitexa/tenancy": "*"
+    },
+    "require-dev": {
+        "swoole/ide-helper": "^5.1"
+    },
+    "autoload": {
+        "psr-4": {
+            "Semitexa\\Orm\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Semitexa\\Orm\\Tests\\": "tests/"
+        }
+    },
+    "keywords": [
+        "semitexa",
+        "orm",
+        "mysql",
+        "schema",
+        "attributes"
+    ],
+    "version": "v1.0.23"
 }
