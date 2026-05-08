@@ -33,6 +33,5 @@
         "mysql",
         "schema",
         "attributes"
-    ],
-    "version": "v1.0.23"
+    ]
 }
