@@ -6,6 +6,7 @@ namespace Semitexa\Orm;
 
 use Semitexa\Core\Discovery\ClassDiscovery;
 use Semitexa\Core\Environment;
+use Semitexa\Core\Event\EventDispatcherInterface;
 use Semitexa\Core\Support\ProjectRoot;
 use Semitexa\Orm\Adapter\ConnectionPool;
 use Semitexa\Orm\Adapter\ConnectionPoolInterface;
@@ -53,6 +54,7 @@ class OrmManager
         ?ClassDiscovery $classDiscovery = null,
         private readonly ?ConnectionConfig $config = null,
         private readonly string $connectionName = 'default',
+        private readonly ?EventDispatcherInterface $events = null,
     ) {
         $this->classDiscovery = $classDiscovery ?? new ClassDiscovery();
     }
@@ -219,6 +221,7 @@ class OrmManager
                 $this->getAdapter(),
                 $this->getResourceModelHydrator(),
                 $this->getResourceModelMetadataRegistry(),
+                $this->events,
             );
         }
 
