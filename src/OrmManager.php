@@ -420,11 +420,20 @@ class OrmManager
             return $pdo;
         };
 
-        // Use ConnectionPool only inside a Swoole coroutine (e.g. request handler). CLI has no coroutine.
+        // Use the coroutine-safe ConnectionPool under a running Swoole server, where PDO sockets are
+        // coroutine-hooked (enableCoroutine(SWOOLE_HOOK_ALL) runs once in the master before workers fork,
+        // so the flag is inherited at WorkerStart). getHookFlags() !== 0 is the causally-exact "server
+        // present" signal and is independent of the current coroutine id — this removes the timing
+        // dependency where a first getPool() outside a coroutine would freeze the worker onto the single
+        // pool. getCid() >= 0 is kept as the in-coroutine fast-path. True CLI (no server, hooks off,
+        // getCid() === -1) falls through to the single shared connection, which is correct there.
         if (
-            class_exists(\Swoole\Coroutine\Channel::class, false)
-            && class_exists(\Swoole\Coroutine::class, false)
-            && \Swoole\Coroutine::getCid() >= 0
+            class_exists(\Swoole\Coroutine::class, false)
+            && (
+                \Swoole\Coroutine::getCid() >= 0
+                || (class_exists(\Swoole\Runtime::class, false)
+                    && \Swoole\Runtime::getHookFlags() !== 0)
+            )
         ) {
             return new ConnectionPool($poolSize, $factory);
         }
