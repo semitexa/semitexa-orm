@@ -105,4 +105,12 @@ final class ConnectionPoolTest extends TestCase
             self::assertSame(0, $created->get());
         });
     }
+
+    protected function tearDown(): void
+    {
+        if (class_exists(\Swoole\Runtime::class)) {
+            \Swoole\Runtime::enableCoroutine(0);
+        }
+    }
 }
+
