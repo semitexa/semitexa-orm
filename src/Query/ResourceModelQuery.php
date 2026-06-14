@@ -37,7 +37,9 @@ use Semitexa\Orm\Domain\Model\ColumnDefinition;
  * @phpstan-type WhereIn array{kind: 'in', connector: 'AND'|'OR', column: ColumnRef, negated: bool, params: list<string>, values: list<mixed>}
  * @phpstan-type WhereBetween array{kind: 'between', connector: 'AND'|'OR', column: ColumnRef, fromParam: string, toParam: string, from: mixed, to: mixed}
  * @phpstan-type WhereRaw array{kind: 'raw', connector: 'AND'|'OR', sql: string, params: array<string, mixed>}
- * @phpstan-type WhereClause WhereComparison|WhereNull|WhereIn|WhereBetween|WhereRaw
+ * @phpstan-type WhereGroupMember array{column: ColumnRef, param: string, value: mixed}
+ * @phpstan-type WhereGroup array{kind: 'group', connector: 'AND'|'OR', operator: Operator, members: list<WhereGroupMember>}
+ * @phpstan-type WhereClause WhereComparison|WhereNull|WhereIn|WhereBetween|WhereRaw|WhereGroup
  */
 final class ResourceModelQuery
 {
@@ -163,6 +165,48 @@ final class ResourceModelQuery
     public function whereLike(ColumnRef $column, string $pattern): self
     {
         return $this->where($column, Operator::Like, $pattern);
+    }
+
+    /**
+     * One Way Phase 2: the single OR-group capability — match when ANY
+     * of the given columns LIKEs the pattern, joined to its sibling
+     * predicates with AND:
+     *
+     *     ... AND (`a` LIKE :g0 OR `b` LIKE :g1)
+     *
+     * This exists for free-text collection search pushed down to SQL
+     * (one term over N declared fields). It is deliberately ONE flat
+     * grouping — not a nested boolean builder: members are always
+     * LIKE comparisons, always OR-joined inside, always AND-joined
+     * outside. Patterns are bound as parameters; callers escape LIKE
+     * wildcards in user input themselves.
+     *
+     * @param non-empty-list<ColumnRef> $columns
+     */
+    public function whereAnyLike(array $columns, string $pattern): self
+    {
+        if ($columns === []) {
+            throw new \InvalidArgumentException('whereAnyLike() expects at least one column.');
+        }
+
+        $members = [];
+        foreach ($columns as $column) {
+            $this->assertColumnBelongsToCurrentResourceModel($column);
+            $members[] = [
+                'column' => $column,
+                'param'  => $this->nextParam('g'),
+                'value'  => $this->normalizeComparisonValue($column, $pattern),
+            ];
+        }
+
+        $this->wheres[] = [
+            'kind' => 'group',
+            'connector' => 'AND',
+            'operator' => Operator::Like,
+            'members' => $members,
+        ];
+
+        return $this;
     }
 
     public function whereNotLike(ColumnRef $column, string $pattern): self
@@ -434,6 +478,19 @@ final class ResourceModelQuery
     // Introspection / debug
     // ------------------------------------------------------------------
 
+    /**
+     * The ResourceModel class this query reads — lets external query
+     * machinery (e.g. the collection criteria compiler) mint
+     * {@see ColumnRef}s for the right model without carrying the class
+     * separately. Pure introspection; no effect on SQL assembly.
+     *
+     * @return class-string
+     */
+    public function resourceModelClass(): string
+    {
+        return $this->resourceModelClass;
+    }
+
     public function toSql(): string
     {
         return $this->buildSql();
@@ -675,6 +732,21 @@ final class ResourceModelQuery
                 '(' . $where['sql'] . ')',
                 $where['params'],
             ],
+            'group' => (function () use ($where): array {
+                $fragments = [];
+                $params = [];
+                foreach ($where['members'] as $member) {
+                    $fragments[] = sprintf(
+                        '`%s` %s :%s',
+                        $member['column']->columnName,
+                        $where['operator']->value,
+                        $member['param'],
+                    );
+                    $params[$member['param']] = $member['value'];
+                }
+
+                return ['(' . implode(' OR ', $fragments) . ')', $params];
+            })(),
         };
     }
 

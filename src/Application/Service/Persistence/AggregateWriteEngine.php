@@ -4,11 +4,15 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Application\Service\Persistence;
 
+use Semitexa\Core\Event\EventDispatcherInterface;
 use Semitexa\Orm\Domain\Enum\RelationWritePolicy;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Exception\InvalidRelationWriteException;
+use Semitexa\Orm\Domain\Enum\ResourceChangeOperation;
+use Semitexa\Orm\Domain\Event\ResourceChangedEvent;
 use Semitexa\Orm\Domain\Model\RelationState;
+use Semitexa\Orm\Domain\Model\ResourceMetadata;
 use Semitexa\Orm\Application\Service\Hydration\ResourceModelHydrator;
 use Semitexa\Orm\Application\Service\Mapping\MapperRegistry;
 use Semitexa\Orm\Metadata\RelationKind;
@@ -23,6 +27,7 @@ final class AggregateWriteEngine
         private readonly DatabaseAdapterInterface       $adapter,
         private readonly ResourceModelHydrator          $hydrator,
         private readonly ?ResourceModelMetadataRegistry $metadataRegistry = null,
+        private readonly ?EventDispatcherInterface       $events = null,
     ) {}
 
     /**
@@ -32,8 +37,11 @@ final class AggregateWriteEngine
     {
         $rootResourceModel = $mapperRegistry->mapToSourceModel($domainModel, $resourceModelClass);
         $rootResourceModel = $this->insertResourceModel($rootResourceModel);
+        $domainResult = $mapperRegistry->mapToDomain($rootResourceModel, $domainModel::class);
 
-        return $mapperRegistry->mapToDomain($rootResourceModel, $domainModel::class);
+        $this->dispatchResourceChanged($resourceModelClass, ResourceChangeOperation::Insert);
+
+        return $domainResult;
     }
 
     /**
@@ -43,6 +51,8 @@ final class AggregateWriteEngine
     {
         $rootResourceModel = $mapperRegistry->mapToSourceModel($domainModel, $resourceModelClass);
         $this->updateResourceModel($rootResourceModel);
+
+        $this->dispatchResourceChanged($resourceModelClass, ResourceChangeOperation::Update);
 
         return $domainModel;
     }
@@ -54,6 +64,37 @@ final class AggregateWriteEngine
     {
         $rootResourceModel = $mapperRegistry->mapToSourceModel($domainModel, $resourceModelClass);
         $this->deleteResourceModel($rootResourceModel);
+
+        $this->dispatchResourceChanged($resourceModelClass, ResourceChangeOperation::Delete);
+    }
+
+    /**
+     * Emit one data-less, scope-keyed {@see ResourceChangedEvent} per aggregate-root
+     * write. This is the single post-write chokepoint: exactly one event per
+     * insert/update/delete, keyed by the root resource's `resourceKey` (P1) — the
+     * nested owned-relation writes do NOT each fire (one signal per aggregate op).
+     *
+     * Dispatch is strictly additive and isolated: with no dispatcher bound it is a
+     * no-op, and a missing/failing listener must never corrupt or roll back the
+     * already-completed write. The invalidation signal is best-effort and
+     * lossy-tolerant by design (track-r-design.md §C.3), so a swallowed failure
+     * costs at most one missed re-query, repaired by the next mutation's signal.
+     *
+     * @param class-string $resourceModelClass
+     */
+    private function dispatchResourceChanged(string $resourceModelClass, ResourceChangeOperation $operation): void
+    {
+        if ($this->events === null) {
+            return;
+        }
+
+        try {
+            $resourceKey = ResourceMetadata::for($resourceModelClass)->getResourceKey();
+            $this->events->dispatch(new ResourceChangedEvent($resourceKey, $operation));
+        } catch (\Throwable) {
+            // Intentionally swallowed: the write has already succeeded. Invalidation
+            // is a best-effort, data-less signal — never break the write path on it.
+        }
     }
 
     private function insertResourceModel(object $resourceModel): object

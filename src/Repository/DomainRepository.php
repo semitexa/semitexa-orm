@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Repository;
 
+use Semitexa\Core\Event\EventDispatcherInterface;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Exception\InvalidResourceModelException;
 use Semitexa\Orm\Application\Service\Hydration\ResourceModelHydrator;
@@ -49,6 +50,7 @@ final class DomainRepository
         ?ResourceModelRelationLoader                    $relationLoader = null,
         private readonly ?ResourceModelMetadataRegistry $metadataRegistry = null,
         ?AggregateWriteEngine                           $writeEngine = null,
+        ?EventDispatcherInterface                       $events = null,
     ) {
         $this->hydrator = $hydrator ?? new ResourceModelHydrator(metadataRegistry: $metadataRegistry);
         $this->relationLoader = $relationLoader ?? new ResourceModelRelationLoader(
@@ -60,6 +62,7 @@ final class DomainRepository
             $adapter,
             $this->hydrator,
             $metadataRegistry,
+            $events,
         );
     }
 

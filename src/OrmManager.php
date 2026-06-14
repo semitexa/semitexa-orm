@@ -6,6 +6,7 @@ namespace Semitexa\Orm;
 
 use Semitexa\Core\Discovery\ClassDiscovery;
 use Semitexa\Core\Environment;
+use Semitexa\Core\Event\EventDispatcherInterface;
 use Semitexa\Core\Support\ProjectRoot;
 use Semitexa\Orm\Adapter\ConnectionPool;
 use Semitexa\Orm\Adapter\ConnectionPoolInterface;
@@ -49,10 +50,25 @@ class OrmManager
     private ?AggregateWriteEngine $aggregateWriteEngine = null;
     private ?OrmBootstrapValidator $bootstrapValidator = null;
 
+    /**
+     * Lazy resolver for the default EventDispatcher, set once per worker at bootstrap
+     * by the framework container (see ContainerFactory). It is invoked lazily — at
+     * first write-engine construction — because the dispatcher is a discovered service
+     * that only exists after the container is built, whereas the default OrmManager is
+     * constructed during bootstrap (before build). This makes EVERY default OrmManager
+     * carry the dispatcher: the explicit ConnectionRegistry::manager() instance AND any
+     * bare `new OrmManager()` repository fallback — without a compile-time coupling from
+     * orm to the core container.
+     *
+     * @var (\Closure(): ?EventDispatcherInterface)|null
+     */
+    private static ?\Closure $defaultEventDispatcherResolver = null;
+
     public function __construct(
         ?ClassDiscovery $classDiscovery = null,
         private readonly ?ConnectionConfig $config = null,
         private readonly string $connectionName = 'default',
+        private readonly ?EventDispatcherInterface $events = null,
     ) {
         $this->classDiscovery = $classDiscovery ?? new ClassDiscovery();
     }
@@ -219,10 +235,43 @@ class OrmManager
                 $this->getAdapter(),
                 $this->getResourceModelHydrator(),
                 $this->getResourceModelMetadataRegistry(),
+                $this->getEventDispatcher(),
             );
         }
 
         return $this->aggregateWriteEngine;
+    }
+
+    /**
+     * Register the lazy default EventDispatcher resolver (framework bootstrap only).
+     * Invoked once per worker by ContainerFactory once the container can resolve
+     * EventDispatcherInterface. Pass null to clear (tests).
+     *
+     * @param (\Closure(): ?EventDispatcherInterface)|null $resolver
+     */
+    public static function setDefaultEventDispatcherResolver(?\Closure $resolver): void
+    {
+        self::$defaultEventDispatcherResolver = $resolver;
+    }
+
+    /**
+     * Resolve the EventDispatcher this manager dispatches resource-changed events
+     * through: an explicitly injected one wins (P2's ctor param / direct tests),
+     * otherwise the framework's lazy default resolver (the bootstrap-wired one),
+     * otherwise null (no container bootstrapped → dispatch stays a silent no-op,
+     * exactly as before this brick).
+     */
+    public function getEventDispatcher(): ?EventDispatcherInterface
+    {
+        if ($this->events !== null) {
+            return $this->events;
+        }
+
+        if (self::$defaultEventDispatcherResolver !== null) {
+            return (self::$defaultEventDispatcherResolver)();
+        }
+
+        return null;
     }
 
     public function getBootstrapValidator(): OrmBootstrapValidator
@@ -371,11 +420,20 @@ class OrmManager
             return $pdo;
         };
 
-        // Use ConnectionPool only inside a Swoole coroutine (e.g. request handler). CLI has no coroutine.
+        // Use the coroutine-safe ConnectionPool under a running Swoole server, where PDO sockets are
+        // coroutine-hooked (enableCoroutine(SWOOLE_HOOK_ALL) runs once in the master before workers fork,
+        // so the flag is inherited at WorkerStart). getHookFlags() !== 0 is the causally-exact "server
+        // present" signal and is independent of the current coroutine id — this removes the timing
+        // dependency where a first getPool() outside a coroutine would freeze the worker onto the single
+        // pool. getCid() >= 0 is kept as the in-coroutine fast-path. True CLI (no server, hooks off,
+        // getCid() === -1) falls through to the single shared connection, which is correct there.
         if (
-            class_exists(\Swoole\Coroutine\Channel::class, false)
-            && class_exists(\Swoole\Coroutine::class, false)
-            && \Swoole\Coroutine::getCid() >= 0
+            class_exists(\Swoole\Coroutine::class, false)
+            && (
+                \Swoole\Coroutine::getCid() >= 0
+                || (class_exists(\Swoole\Runtime::class, false)
+                    && \Swoole\Runtime::getHookFlags() !== 0)
+            )
         ) {
             return new ConnectionPool($poolSize, $factory);
         }

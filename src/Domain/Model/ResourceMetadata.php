@@ -13,6 +13,7 @@ use Semitexa\Orm\Attribute\HasMany;
 use Semitexa\Orm\Attribute\ManyToMany;
 use Semitexa\Orm\Attribute\OneToOne;
 use Semitexa\Orm\Attribute\PrimaryKey;
+use Semitexa\Orm\Attribute\ResourceKey;
 use Semitexa\Orm\Domain\Model\RelationMeta;
 use Semitexa\Orm\Domain\Enum\RelationType;
 
@@ -31,6 +32,7 @@ final class ResourceMetadata
     private static array $cache = [];
 
     private string $tableName;
+    private string $resourceKey;
     private string $pkColumn;
     private string $pkPropertyName;
 
@@ -55,6 +57,16 @@ final class ResourceMetadata
         /** @var FromTable $ft */
         $ft = $fromTableAttrs[0]->newInstance();
         $this->tableName = $ft->name;
+
+        // Resolve scope key: explicit #[ResourceKey] if declared, else default to the table name.
+        $resourceKeyAttrs = $ref->getAttributes(ResourceKey::class);
+        if ($resourceKeyAttrs === []) {
+            $this->resourceKey = $this->tableName;
+        } else {
+            /** @var ResourceKey $rk */
+            $rk = $resourceKeyAttrs[0]->newInstance();
+            $this->resourceKey = $rk->key;
+        }
 
         // Resolve PK: track both the DB column name and the PHP property name separately.
         // They differ when #[Column(name: 'user_id')] renames a property (e.g. $id → user_id).
@@ -187,6 +199,19 @@ final class ResourceMetadata
     public function getTableName(): string
     {
         return $this->tableName;
+    }
+
+    /**
+     * Stable scope key for this resource, used downstream to name invalidation
+     * channels and key the subscriber reverse-index.
+     *
+     * Returns the explicit #[ResourceKey] value when declared, otherwise
+     * defaults to the table name. Keying on the table name (not the FQCN)
+     * decouples the broadcast channel from the PHP namespace.
+     */
+    public function getResourceKey(): string
+    {
+        return $this->resourceKey;
     }
 
     public function getPkColumn(): string
