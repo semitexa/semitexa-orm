@@ -80,6 +80,13 @@ class OrmManager
 
     public function getAdapter(): DatabaseAdapterInterface
     {
+        // A request-time getAdapter() may hold an adapter built at bootstrap over a
+        // stale SingleConnectionPool. Re-check before handing it out: the upgrade
+        // nulls $this->adapter so it rebuilds below over the coroutine-safe pool.
+        if ($this->adapter !== null && $this->pool !== null) {
+            $this->ensureCoroutineSafePool();
+        }
+
         if ($this->adapter === null) {
             $driver = $this->resolveDriver();
 
@@ -104,6 +111,8 @@ class OrmManager
             }
 
             $this->pool = $this->createPool();
+        } else {
+            $this->ensureCoroutineSafePool();
         }
 
         return $this->pool;
@@ -420,25 +429,78 @@ class OrmManager
             return $pdo;
         };
 
-        // Use the coroutine-safe ConnectionPool under a running Swoole server, where PDO sockets are
-        // coroutine-hooked (enableCoroutine(SWOOLE_HOOK_ALL) runs once in the master before workers fork,
-        // so the flag is inherited at WorkerStart). getHookFlags() !== 0 is the causally-exact "server
-        // present" signal and is independent of the current coroutine id — this removes the timing
-        // dependency where a first getPool() outside a coroutine would freeze the worker onto the single
-        // pool. getCid() >= 0 is kept as the in-coroutine fast-path. True CLI (no server, hooks off,
-        // getCid() === -1) falls through to the single shared connection, which is correct there.
-        if (
-            class_exists(\Swoole\Coroutine::class, false)
-            && (
-                \Swoole\Coroutine::getCid() >= 0
-                || (class_exists(\Swoole\Runtime::class, false)
-                    && \Swoole\Runtime::getHookFlags() !== 0)
-            )
-        ) {
+        if ($this->shouldUseCoroutinePool()) {
             return new ConnectionPool($poolSize, $factory);
         }
 
         return new SingleConnectionPool($factory);
+    }
+
+    /**
+     * Whether the coroutine-safe ConnectionPool should back this manager.
+     *
+     * True under a running Swoole server, where PDO sockets are coroutine-hooked
+     * (enableCoroutine(SWOOLE_HOOK_ALL) normally runs once in the master before
+     * workers fork, so the flag is inherited at WorkerStart). getHookFlags() !== 0
+     * is the causally-exact "server present" signal and is independent of the
+     * current coroutine id. getCid() >= 0 is the in-coroutine fast-path. True CLI
+     * (no server, hooks off, getCid() === -1) falls through to the single shared
+     * connection, which is correct there.
+     *
+     * This is evaluated both at pool construction AND on every subsequent
+     * getPool()/getAdapter() (see ensureCoroutineSafePool) so a SingleConnectionPool
+     * cached before the runtime came up can still be upgraded once it is live.
+     */
+    private function shouldUseCoroutinePool(): bool
+    {
+        return class_exists(\Swoole\Coroutine::class, false)
+            && (
+                \Swoole\Coroutine::getCid() >= 0
+                || (class_exists(\Swoole\Runtime::class, false)
+                    && \Swoole\Runtime::getHookFlags() !== 0)
+            );
+    }
+
+    /**
+     * Self-heal a stale pool SELECTION.
+     *
+     * createPool() may cache the non-coroutine SingleConnectionPool if the very
+     * first getPool()/getAdapter() ran before SWOOLE_HOOK_ALL was applied — e.g.
+     * master-side warmup before fork, which then inherits the wrong pool into
+     * every worker. That choice is otherwise frozen for the worker's life, and
+     * SingleConnectionPool gives no true pooling under load. Once the coroutine
+     * runtime is live, swap in the real ConnectionPool and drop every memoized
+     * service that captured the old pool (directly or via the old adapter) so the
+     * next access rebuilds against it.
+     *
+     * Never runs mid-transaction — yanking the pool out from under an open
+     * transaction would orphan its connection.
+     */
+    private function ensureCoroutineSafePool(): void
+    {
+        if (! $this->pool instanceof SingleConnectionPool) {
+            return;
+        }
+
+        if (! $this->shouldUseCoroutinePool()) {
+            return;
+        }
+
+        if ($this->transactionManager !== null && $this->transactionManager->isActive()) {
+            return;
+        }
+
+        $this->pool->close();
+        $this->pool = $this->createPool();
+
+        // Every field below captured the old pool, directly or via the old adapter.
+        $this->adapter                      = null;
+        $this->schemaComparator             = null;
+        $this->syncEngine                   = null;
+        $this->transactionManager           = null;
+        $this->seedRunner                   = null;
+        $this->resourceModelRelationLoader  = null;
+        $this->aggregateWriteEngine         = null;
     }
 
     /** When running on host (CLI), use DB_CLI_* so GUI/CLI connect to host port; inside Docker use DB_HOST/DB_PORT. */
