@@ -32,6 +32,27 @@ final class SingleConnectionPoolTest extends TestCase
     }
 
     #[Test]
+    public function it_drops_a_foreign_connection_pushed_over_the_owned_one(): void
+    {
+        $statement = $this->createMock(\PDOStatement::class);
+        $owned   = new HealthyPdo($statement);
+        $foreign = new HealthyPdo($statement);
+
+        $pool = new SingleConnectionPool(static fn (): \PDO => $owned);
+
+        $first = $pool->pop();
+        self::assertSame($owned, $first);
+
+        // A connection the pool never handed out must not overwrite the cached
+        // one — the extra is dropped (GC-closed), not stored.
+        $pool->push($foreign);
+
+        $second = $pool->pop();
+        self::assertSame($owned, $second);
+        self::assertNotSame($foreign, $second);
+    }
+
+    #[Test]
     public function it_replaces_stale_connection(): void
     {
         $statement = $this->createMock(\PDOStatement::class);
