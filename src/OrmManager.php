@@ -166,6 +166,17 @@ class OrmManager
 
     public function getTransactionManager(): TransactionManager
     {
+        // A memoized TransactionManager may wrap an adapter/pool built at bootstrap
+        // over a stale SingleConnectionPool (before Swoole hooks were enabled). Like
+        // getPool()/getAdapter(), re-check before handing it out so a request that
+        // enters through the transaction path also self-heals onto the
+        // coroutine-safe pool. ensureCoroutineSafePool() preserves the
+        // active-transaction guard and nulls $this->transactionManager on a swap,
+        // so the block below rebuilds it over the fresh pool + adapter.
+        if ($this->transactionManager !== null) {
+            $this->ensureCoroutineSafePool();
+        }
+
         if ($this->transactionManager === null) {
             $driver = $this->resolveDriver();
 
