@@ -48,6 +48,39 @@ final class ConnectionPoolTest extends TestCase
     }
 
     #[Test]
+    public function pop_and_push_work_outside_a_coroutine(): void
+    {
+        if (!class_exists(\Swoole\Coroutine::class)) {
+            self::markTestSkipped('Swoole extension is required.');
+        }
+        // The case the Swoole server never hits but CLI / phpunit do: hooks may be
+        // globally enabled (by a prior test) yet no coroutine is active. Channel
+        // ops fatal here ("API must be called in the coroutine"), bypassing
+        // try/catch — which aborted the whole monorepo test:run.
+        self::assertSame(-1, Coroutine::getCid(), 'Precondition: must run outside a coroutine.');
+
+        $created = 0;
+        $pool = new ConnectionPool(2, static function () use (&$created): \PDO {
+            ++$created;
+            return new \PDO('sqlite::memory:');
+        });
+
+        // pop() hands out a direct connection (bypasses Channel->pop()).
+        $conn = $pool->pop();
+        self::assertInstanceOf(\PDO::class, $conn);
+        self::assertSame(1, $created);
+
+        // push() is a no-op outside a coroutine — must NOT call Channel->push().
+        $pool->push($conn);
+
+        // Still usable: a second pop() returns another fresh connection, proving we
+        // never blocked on / operated the Channel.
+        $conn2 = $pool->pop();
+        self::assertInstanceOf(\PDO::class, $conn2);
+        self::assertSame(2, $created);
+    }
+
+    #[Test]
     public function it_skips_channel_ops_during_shutdown(): void
     {
         if (!class_exists(\Swoole\Coroutine::class)) {

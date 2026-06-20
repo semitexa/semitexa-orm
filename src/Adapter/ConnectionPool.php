@@ -71,6 +71,16 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
             throw new \RuntimeException('Connection pool is closed.');
         }
 
+        // Outside a coroutine the Swoole Channel cannot be operated ("API must be
+        // called in the coroutine") — a fatal that bypasses try/catch. Hand out a
+        // direct, un-pooled connection instead (push() drops it). The Channel pool
+        // is only meaningful inside coroutines (the Swoole server request path);
+        // CLI / phpunit / any non-coroutine caller reached while hooks are globally
+        // enabled gets a fresh connection per call. Never claims a pool slot.
+        if (! self::inCoroutine()) {
+            return ($this->factory)();
+        }
+
         // Atomically claim a slot: increment only if we are still below the
         // limit. cmpset(expected, new) returns true exactly once per slot.
         $current = $this->created->get();
@@ -101,7 +111,27 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
             return;
         }
 
+        // Outside a coroutine `Channel->push()` fatals ("API must be called in the
+        // coroutine"). The connection handed out by pop() in this state was
+        // un-pooled, so drop it (it closes on destruction) instead of crashing.
+        if (! self::inCoroutine()) {
+            return;
+        }
+
         $pool->push($connection);
+    }
+
+    /**
+     * Whether the current execution is inside a Swoole coroutine. The Channel-based
+     * pool can only be operated from a coroutine; non-coroutine callers (CLI,
+     * phpunit, or any code reached while Swoole hooks are globally enabled but no
+     * coroutine is active) must bypass the Channel. Guarded by class_exists so
+     * non-Swoole hosts never reach getCid().
+     */
+    private static function inCoroutine(): bool
+    {
+        return class_exists(\Swoole\Coroutine::class, false)
+            && \Swoole\Coroutine::getCid() >= 0;
     }
 
     /**
