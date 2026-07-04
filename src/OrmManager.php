@@ -265,7 +265,11 @@ class OrmManager
                 $this->getAdapter(),
                 $this->getResourceModelHydrator(),
                 $this->getResourceModelMetadataRegistry(),
-                $this->getEventDispatcher(),
+                // Lazy on purpose: this engine is memoized, and a dispatcher
+                // captured here freezes whatever was resolvable at FIRST write —
+                // in CLI workers that is before any bootstrap registered the
+                // resolver, silently killing auto-publish for the whole process.
+                fn (): ?EventDispatcherInterface => $this->getEventDispatcher(),
             );
         }
 

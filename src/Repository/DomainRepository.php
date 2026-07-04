@@ -50,7 +50,7 @@ final class DomainRepository
         ?ResourceModelRelationLoader                    $relationLoader = null,
         private readonly ?ResourceModelMetadataRegistry $metadataRegistry = null,
         ?AggregateWriteEngine                           $writeEngine = null,
-        ?EventDispatcherInterface                       $events = null,
+        EventDispatcherInterface|\Closure|null          $events = null,
     ) {
         $this->hydrator = $hydrator ?? new ResourceModelHydrator(metadataRegistry: $metadataRegistry);
         $this->relationLoader = $relationLoader ?? new ResourceModelRelationLoader(

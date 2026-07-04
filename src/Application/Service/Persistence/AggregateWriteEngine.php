@@ -23,11 +23,20 @@ use Semitexa\Orm\Application\Service\Uuid7;
 
 final class AggregateWriteEngine
 {
+    /**
+     * `$events` accepts a lazy `\Closure(): ?EventDispatcherInterface` besides a
+     * concrete dispatcher: engines are memoized (OrmManager, DomainRepository),
+     * so a dispatcher captured at construction freezes whatever was resolvable
+     * at that moment. In a CLI worker (scheduler:work) the first ORM write is
+     * the scheduler's own bookkeeping — long before any job registers the
+     * dispatcher resolver — which silently killed auto-publish for every write
+     * that followed. A closure re-resolves at each dispatch instead.
+     */
     public function __construct(
-        private readonly DatabaseAdapterInterface       $adapter,
-        private readonly ResourceModelHydrator          $hydrator,
-        private readonly ?ResourceModelMetadataRegistry $metadataRegistry = null,
-        private readonly ?EventDispatcherInterface       $events = null,
+        private readonly DatabaseAdapterInterface                  $adapter,
+        private readonly ResourceModelHydrator                     $hydrator,
+        private readonly ?ResourceModelMetadataRegistry            $metadataRegistry = null,
+        private readonly EventDispatcherInterface|\Closure|null    $events = null,
     ) {}
 
     /**
@@ -84,13 +93,14 @@ final class AggregateWriteEngine
      */
     private function dispatchResourceChanged(string $resourceModelClass, ResourceChangeOperation $operation): void
     {
-        if ($this->events === null) {
-            return;
-        }
-
         try {
+            $dispatcher = $this->events instanceof \Closure ? ($this->events)() : $this->events;
+            if ($dispatcher === null) {
+                return;
+            }
+
             $resourceKey = ResourceMetadata::for($resourceModelClass)->getResourceKey();
-            $this->events->dispatch(new ResourceChangedEvent($resourceKey, $operation));
+            $dispatcher->dispatch(new ResourceChangedEvent($resourceKey, $operation));
         } catch (\Throwable) {
             // Intentionally swallowed: the write has already succeeded. Invalidation
             // is a best-effort, data-less signal — never break the write path on it.
