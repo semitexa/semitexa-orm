@@ -208,8 +208,18 @@ class OrmManager
     public function getMapperRegistry(): MapperRegistry
     {
         if ($this->mapperRegistry === null) {
-            $this->mapperRegistry = new MapperRegistry($this->classDiscovery);
-            $this->mapperRegistry->build();
+            // Build FIRST, memoize LAST. build() walks the classmap through
+            // ClassDiscovery, whose autoloads are file IO — a coroutine
+            // SUSPENSION point under SWOOLE_HOOK_ALL. Memoizing the empty
+            // registry before build() (the old order) let a concurrent
+            // coroutine on the same manager observe a half-built registry and
+            // die with MissingMapperException — reproduced as intermittent
+            // 500s on the first concurrent burst after a worker boot. Losing
+            // the ??= race is fine: both registries are complete, the first
+            // one wins, the duplicate is GC'd.
+            $registry = new MapperRegistry($this->classDiscovery);
+            $registry->build();
+            $this->mapperRegistry ??= $registry;
         }
 
         return $this->mapperRegistry;
