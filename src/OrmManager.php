@@ -376,9 +376,20 @@ class OrmManager
         $this->adapter = null;
     }
 
+    /**
+     * Destructors run wherever GC happens to fire — mid-container-build, in
+     * another coroutine burst's world, or with no coroutine at all — and a
+     * Swoole Channel touched from the wrong context raises a C-level
+     * "must call constructor first" fatal that BYPASSES try/catch (and,
+     * inside a destructor, is uncatchable by any frame). So the destructor
+     * only DROPS references: releasing the Channel lets refcounting free the
+     * queued PDO connections exactly as a drain would, minus the fatal.
+     * Deliberate teardown at a known-safe point stays {@see shutdown()}.
+     */
     public function __destruct()
     {
-        $this->shutdown();
+        $this->pool = null;
+        $this->adapter = null;
     }
 
     /**

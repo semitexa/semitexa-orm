@@ -170,6 +170,18 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
             return;
         }
 
+        // Outside a coroutine, Channel methods are equally illegal: a Channel
+        // constructed without a coroutine context defers its C-level init, and
+        // even isEmpty() then raises the same "must call constructor first"
+        // fatal (observed live: an OrmManager GC'd during container build in a
+        // coroutineless test process). Dropping the reference releases the
+        // queued connections via refcounting — same outcome as the drain.
+        if (!self::inCoroutine()) {
+            $this->pool = null;
+            $this->created->set(0);
+            return;
+        }
+
         try {
             while (!$this->pool->isEmpty()) {
                 $this->pool->pop();
