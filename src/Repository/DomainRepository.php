@@ -92,6 +92,7 @@ final class DomainRepository
             $this->hydrator,
             $this->relationLoader,
             $this->metadataRegistry,
+            mapperRegistry: $this->mapperRegistry,
         );
 
         if ($this->systemScopeToken !== null) {
