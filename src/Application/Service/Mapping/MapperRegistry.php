@@ -64,7 +64,12 @@ final class MapperRegistry
         $key = $resourceModelClass . "\0" . $domainModelClass;
         if (!isset($this->definitionsByPair[$key])) {
             throw new MissingMapperException(sprintf(
-                'No mapper registered for %s and %s.',
+                'No mapper registered for resource model %s and domain model %s. '
+                . 'Create a final class implementing %s and annotate it '
+                . '#[AsMapper(resourceModel: %s::class, domainModel: %s::class)].',
+                $resourceModelClass,
+                $domainModelClass,
+                ResourceModelMapperInterface::class,
                 $resourceModelClass,
                 $domainModelClass,
             ));
