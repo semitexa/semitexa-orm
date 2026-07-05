@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Repository;
 
 use Semitexa\Core\Event\EventDispatcherInterface;
+use Semitexa\Core\Exception\NotFoundException;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Exception\InvalidResourceModelException;
 use Semitexa\Orm\Application\Service\Hydration\ResourceModelHydrator;
@@ -118,11 +119,11 @@ final class DomainRepository
     {
         $entity = $this->findById($id);
         if ($entity === null) {
-            throw new \RuntimeException(sprintf(
-                'No %s found with id "%s".',
-                $this->domainModelClass,
-                (string) $id,
-            ));
+            // A typed NotFoundException maps to HTTP 404 (getStatusCode) instead
+            // of the generic 500 a bare RuntimeException produced. Still a
+            // RuntimeException (DomainException extends it), so existing broad
+            // catches keep working.
+            throw new NotFoundException($this->domainModelClass, $id);
         }
 
         return $entity;
