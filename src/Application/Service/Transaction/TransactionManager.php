@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Application\Service\Transaction;
 
+use Semitexa\Core\Support\CoroutineLocal;
 use Semitexa\Core\Event\EventDispatcherInterface;
 use Semitexa\Orm\Adapter\ConnectionPoolInterface;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
@@ -11,20 +12,64 @@ use Semitexa\Orm\Adapter\SqliteAdapter;
 
 class TransactionManager
 {
-    /** Active PDO connection for the current (outermost) transaction, null when idle. */
-    private ?\PDO $activeConnection = null;
-
-    /** Nesting depth: 0 = no transaction, 1 = outer BEGIN, 2+ = savepoints. */
-    private int $depth = 0;
-
-    /** @var object[] Buffered events to dispatch after successful outer commit. */
-    private array $pendingEvents = [];
+    /**
+     * The transaction state (active connection, nesting depth, buffered events)
+     * is REQUEST-SCOPED, but this manager is a worker-singleton: one instance
+     * per worker serves every request coroutine on that worker. Under Swoole,
+     * beginTransaction()/exec() yield on the DB socket, so a second coroutine
+     * can run between them. Were the state a plain instance field, coroutine B
+     * would observe coroutine A's depth/PDO mid-flight — reusing A's connection,
+     * corrupting A's transaction, and cross-leaking A's pendingEvents. So the
+     * state is keyed per coroutine via CoroutineLocal: each coroutine (each
+     * request) gets its own transaction, auto-cleaned when the coroutine ends;
+     * in CLI (no coroutine) it falls back to a process-static that each
+     * transaction resets in its finally. Within ONE coroutine, run() → nested
+     * run() still share state (correct nesting). $eventDispatcher stays an
+     * instance field — it is boot config, identical for every request.
+     */
+    private const KEY_ACTIVE_CONNECTION = 'orm.tx.activeConnection';
+    private const KEY_DEPTH = 'orm.tx.depth';
+    private const KEY_PENDING_EVENTS = 'orm.tx.pendingEvents';
 
     public function __construct(
         private readonly ConnectionPoolInterface $pool,
         private readonly DatabaseAdapterInterface $adapter,
         private ?EventDispatcherInterface $eventDispatcher = null,
     ) {}
+
+    /** Active PDO connection for the current coroutine's (outermost) transaction, null when idle. */
+    private function activeConnection(): ?\PDO
+    {
+        return CoroutineLocal::get(self::KEY_ACTIVE_CONNECTION);
+    }
+
+    private function setActiveConnection(?\PDO $pdo): void
+    {
+        CoroutineLocal::set(self::KEY_ACTIVE_CONNECTION, $pdo);
+    }
+
+    /** Nesting depth for the current coroutine: 0 = no transaction, 1 = outer BEGIN, 2+ = savepoints. */
+    private function depth(): int
+    {
+        return (int) CoroutineLocal::get(self::KEY_DEPTH, 0);
+    }
+
+    private function setDepth(int $depth): void
+    {
+        CoroutineLocal::set(self::KEY_DEPTH, $depth);
+    }
+
+    /** @return object[] Buffered events for the current coroutine, dispatched after successful outer commit. */
+    private function pendingEvents(): array
+    {
+        return CoroutineLocal::get(self::KEY_PENDING_EVENTS, []);
+    }
+
+    /** @param object[] $events */
+    private function setPendingEvents(array $events): void
+    {
+        CoroutineLocal::set(self::KEY_PENDING_EVENTS, $events);
+    }
 
     public function setEventDispatcher(EventDispatcherInterface $eventDispatcher): void
     {
@@ -33,23 +78,25 @@ class TransactionManager
 
     public function bufferEvent(object $event): void
     {
-        $this->pendingEvents[] = $event;
+        $events = $this->pendingEvents();
+        $events[] = $event;
+        $this->setPendingEvents($events);
     }
 
     public function isActive(): bool
     {
-        return $this->depth > 0;
+        return $this->depth() > 0;
     }
 
     /** @return object[] */
     public function getPendingEvents(): array
     {
-        return $this->pendingEvents;
+        return $this->pendingEvents();
     }
 
     public function clearPendingEvents(): void
     {
-        $this->pendingEvents = [];
+        $this->setPendingEvents([]);
     }
 
     /**
@@ -69,7 +116,7 @@ class TransactionManager
      */
     public function run(callable $callback): mixed
     {
-        if ($this->depth === 0) {
+        if ($this->depth() === 0) {
             return $this->runOuter($callback);
         }
 
@@ -88,8 +135,8 @@ class TransactionManager
         }
 
         $pdo = $this->pool->pop();
-        $this->activeConnection = $pdo;
-        $this->depth = 1;
+        $this->setActiveConnection($pdo);
+        $this->setDepth(1);
 
         try {
             // beginTransaction() is INSIDE the try: on a stale/dead connection
@@ -110,15 +157,15 @@ class TransactionManager
 
             return $result;
         } catch (\Throwable $e) {
-            $this->pendingEvents = [];
+            $this->setPendingEvents([]);
             if ($pdo->inTransaction()) {
                 $pdo->rollBack();
             }
             throw $e;
         } finally {
             $this->pool->push($pdo);
-            $this->activeConnection = null;
-            $this->depth = 0;
+            $this->setActiveConnection(null);
+            $this->setDepth(0);
         }
     }
 
@@ -136,8 +183,8 @@ class TransactionManager
         }
 
         $pdo = $this->adapter->getPdo();
-        $this->activeConnection = $pdo;
-        $this->depth = 1;
+        $this->setActiveConnection($pdo);
+        $this->setDepth(1);
 
         $connAdapter = new SingleConnectionAdapter($pdo, $this->adapter->getServerVersion());
         $pdo->beginTransaction();
@@ -150,14 +197,14 @@ class TransactionManager
 
             return $result;
         } catch (\Throwable $e) {
-            $this->pendingEvents = [];
+            $this->setPendingEvents([]);
             if ($pdo->inTransaction()) {
                 $pdo->rollBack();
             }
             throw $e;
         } finally {
-            $this->activeConnection = null;
-            $this->depth = 0;
+            $this->setActiveConnection(null);
+            $this->setDepth(0);
         }
     }
 
@@ -168,13 +215,14 @@ class TransactionManager
      */
     private function runNested(callable $callback): mixed
     {
-        $pdo = $this->activeConnection;
+        $pdo = $this->activeConnection();
         if (!$pdo instanceof \PDO) {
             throw new \LogicException('Nested transaction requested without an active PDO connection.');
         }
 
-        $this->depth++;
-        $savepointName = 'sp_' . $this->depth;
+        $depth = $this->depth() + 1;
+        $this->setDepth($depth);
+        $savepointName = 'sp_' . $depth;
 
         $connAdapter = new SingleConnectionAdapter($pdo, $this->adapter->getServerVersion());
         $pdo->exec("SAVEPOINT {$savepointName}");
@@ -187,20 +235,20 @@ class TransactionManager
             $pdo->exec("ROLLBACK TO SAVEPOINT {$savepointName}");
             throw $e;
         } finally {
-            $this->depth--;
+            $this->setDepth($this->depth() - 1);
         }
     }
 
     private function flushPendingEvents(): void
     {
         if ($this->eventDispatcher !== null) {
-            $events = $this->pendingEvents;
-            $this->pendingEvents = [];
+            $events = $this->pendingEvents();
+            $this->setPendingEvents([]);
             foreach ($events as $event) {
                 $this->eventDispatcher->dispatch($event);
             }
         } else {
-            $this->pendingEvents = [];
+            $this->setPendingEvents([]);
         }
     }
 }
