@@ -91,10 +91,18 @@ class TransactionManager
         $this->activeConnection = $pdo;
         $this->depth = 1;
 
-        $connAdapter = new SingleConnectionAdapter($pdo, $this->adapter->getServerVersion());
-        $pdo->beginTransaction();
-
         try {
+            // beginTransaction() is INSIDE the try: on a stale/dead connection
+            // ("server has gone away") it throws, and the finally below must
+            // still return the connection to the pool and reset depth/active —
+            // otherwise the slot is leaked (the pool shrinks toward exhaustion)
+            // and the worker is left with depth=1 pointing at a dead PDO, which
+            // corrupts every subsequent transaction into the nested-savepoint
+            // branch. A pushed-back dead connection is healed by the pool's
+            // ensureAlive() on the next pop().
+            $connAdapter = new SingleConnectionAdapter($pdo, $this->adapter->getServerVersion());
+            $pdo->beginTransaction();
+
             $result = $callback($connAdapter);
             $pdo->commit();
 
