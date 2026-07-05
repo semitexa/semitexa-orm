@@ -154,6 +154,36 @@ final class DomainRepositoryTest extends TestCase
         $this->assertSame('INSERT INTO `products` (`id`, `tenantId`, `name`, `categoryId`, `deletedAt`) VALUES (:id, :tenantId, :name, :categoryId, :deletedAt)', $adapter->executed[0]['sql']);
     }
 
+    #[Test]
+    public function find_by_is_bounded_by_default_not_a_whole_table_load(): void
+    {
+        $adapter = new FakeDatabaseAdapter([]);
+        $repository = $this->hydratableRepository($adapter)->forTenant('tenant-1');
+
+        $repository->findBy(['tenantId' => 'tenant-1']); // no explicit limit
+
+        $this->assertStringContainsString(
+            'LIMIT 1000',
+            $adapter->executed[0]['sql'],
+            'findBy without a limit must be bounded (matching findAll), not load the whole matching set',
+        );
+    }
+
+    #[Test]
+    public function find_by_null_limit_opts_into_an_unbounded_fetch(): void
+    {
+        $adapter = new FakeDatabaseAdapter([]);
+        $repository = $this->hydratableRepository($adapter)->forTenant('tenant-1');
+
+        $repository->findBy(['tenantId' => 'tenant-1'], limit: null);
+
+        $this->assertStringNotContainsString(
+            'LIMIT',
+            $adapter->executed[0]['sql'],
+            'an explicit null is the unbounded opt-in',
+        );
+    }
+
     private function hydratableRepository(FakeDatabaseAdapter $adapter): DomainRepository
     {
         return new DomainRepository(

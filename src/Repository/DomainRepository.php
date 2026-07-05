@@ -144,11 +144,17 @@ final class DomainRepository
     }
 
     /**
+     * Fetch rows matching $criteria, bounded to $limit (default 1000, matching
+     * {@see findAll()}). Pass null for an unbounded fetch — use with care on
+     * large tables. The old null default meant a caller omitting $limit loaded
+     * the entire matching set into memory; the bounded default prevents that
+     * accidental whole-table load while keeping unbounded an explicit opt-in.
+     *
      * @param array<string, mixed> $criteria property name → value (null → IS NULL)
      * @param list<RelationRef> $relations
      * @return list<object>
      */
-    public function findBy(array $criteria, array $relations = [], ?int $limit = null): array
+    public function findBy(array $criteria, array $relations = [], ?int $limit = 1000): array
     {
         $query = $this->applyCriteria($this->query(), $criteria, $relations);
 
