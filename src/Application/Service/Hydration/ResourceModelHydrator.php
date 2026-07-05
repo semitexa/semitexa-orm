@@ -29,6 +29,14 @@ final class ResourceModelHydrator
      */
     private static array $plans = [];
 
+    /**
+     * Per-class dehydration plan cache (write path) — cached ReflectionProperty
+     * + ColumnDefinition per column, resolved once per class. See {@see dehydrationPlan()}.
+     *
+     * @var array<class-string, list<array{property: \ReflectionProperty, columnName: string, columnDef: ColumnDefinition}>>
+     */
+    private static array $dehydrationPlans = [];
+
     public function __construct(
         private readonly ?TypeCaster                    $typeCaster = null,
         private readonly ?ResourceModelMetadataRegistry $metadataRegistry = null,
@@ -171,23 +179,52 @@ final class ResourceModelHydrator
      */
     public function dehydrate(object $resourceModel): array
     {
-        $metadata = ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($resourceModel::class);
         $typeCaster = $this->typeCaster ?? new TypeCaster();
 
         $data = [];
-        foreach ($metadata->columns() as $column) {
-            $property = new \ReflectionProperty($resourceModel, $column->propertyName);
+        foreach ($this->dehydrationPlan($resourceModel::class) as $entry) {
+            $property = $entry['property'];
             if (!$property->isInitialized($resourceModel)) {
                 continue;
             }
 
-            $data[$column->columnName] = $typeCaster->castToDb(
+            $data[$entry['columnName']] = $typeCaster->castToDb(
                 $property->getValue($resourceModel),
-                $this->toColumnDefinition($column),
+                $entry['columnDef'],
             );
         }
 
         return $data;
+    }
+
+    /**
+     * Resolve (and memoize) the per-class dehydration plan — the write-path twin
+     * of {@see plan()}. `dehydrate()` runs once per row of every save, yet it
+     * built a `new \ReflectionProperty` and a `ColumnDefinition` per column on
+     * every row though both are constant per class. A ReflectionProperty is
+     * bound to a class, not an instance (getValue/isInitialized take the object),
+     * so it is safe to cache and reuse across rows.
+     *
+     * @param class-string $class
+     * @return list<array{property: \ReflectionProperty, columnName: string, columnDef: ColumnDefinition}>
+     */
+    private function dehydrationPlan(string $class): array
+    {
+        if (isset(self::$dehydrationPlans[$class])) {
+            return self::$dehydrationPlans[$class];
+        }
+
+        $metadata = ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($class);
+        $plan = [];
+        foreach ($metadata->columns() as $column) {
+            $plan[] = [
+                'property'   => new \ReflectionProperty($class, $column->propertyName),
+                'columnName' => $column->columnName,
+                'columnDef'  => $this->toColumnDefinition($column),
+            ];
+        }
+
+        return self::$dehydrationPlans[$class] = $plan;
     }
 
     private function toColumnDefinition(ColumnMetadata $column): ColumnDefinition

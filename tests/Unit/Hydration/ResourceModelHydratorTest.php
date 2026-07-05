@@ -83,6 +83,26 @@ final class ResourceModelHydratorTest extends TestCase
     }
 
     #[Test]
+    public function dehydrate_reuses_the_cached_plan_across_distinct_instances(): void
+    {
+        // The dehydration plan (cached ReflectionProperty + ColumnDefinition per
+        // column) is memoized per class; a ReflectionProperty is class-bound, not
+        // instance-bound. Two different instances must still dehydrate to their
+        // OWN values through the shared cached plan.
+        $hydrator = new ResourceModelHydrator();
+        $a = new HydratableProductResourceModel('a', 't-a', 'Alpha', 'cat-a', null, RelationState::notLoaded(), RelationState::notLoaded());
+        $b = new HydratableProductResourceModel('b', 't-b', 'Beta', 'cat-b', null, RelationState::notLoaded(), RelationState::notLoaded());
+
+        $rowA = $hydrator->dehydrate($a);
+        $rowB = $hydrator->dehydrate($b);
+
+        $this->assertSame('a', $rowA['id']);
+        $this->assertSame('Alpha', $rowA['name']);
+        $this->assertSame('b', $rowB['id']);
+        $this->assertSame('Beta', $rowB['name']);
+    }
+
+    #[Test]
     public function fails_when_a_required_column_is_missing(): void
     {
         $hydrator = new ResourceModelHydrator();
