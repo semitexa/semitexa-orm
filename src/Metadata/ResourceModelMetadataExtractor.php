@@ -26,7 +26,8 @@ final class ResourceModelMetadataExtractor
         $fromTableAttrs = $ref->getAttributes(FromTable::class);
         if ($fromTableAttrs === []) {
             throw new \InvalidArgumentException(sprintf(
-                'Class %s has no #[FromTable] attribute.',
+                'Resource model %s is missing the required #[FromTable] attribute. '
+                . 'Add #[FromTable(name: \'your_table\')] to the class so the ORM knows which table it maps to.',
                 $resourceModelClass,
             ));
         }

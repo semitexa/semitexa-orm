@@ -140,21 +140,31 @@ final class AggregateWriteEngineTest extends TestCase
         $engine->update($domainModel, ValidTaggedProductResourceModel::class, $registry);
         $engine->delete($domainModel, ValidTaggedProductResourceModel::class, $registry);
 
+        // The two tags now go in ONE multi-row INSERT per sync (was one INSERT
+        // per tag), while the delete-then-replace shape is unchanged.
         $this->assertSame(
             [
                 'INSERT INTO `tagged_products` (`id`, `name`) VALUES (:id, :name)',
                 'DELETE FROM `product_tags` WHERE `productId` = :__pivot_fk',
-                'INSERT INTO `product_tags` (`productId`, `tagId`) VALUES (:foreign_key, :related_key)',
-                'INSERT INTO `product_tags` (`productId`, `tagId`) VALUES (:foreign_key, :related_key)',
+                'INSERT INTO `product_tags` (`productId`, `tagId`) VALUES (:productId_0, :tagId_0), (:productId_1, :tagId_1)',
                 'UPDATE `tagged_products` SET `name` = :name WHERE `id` = :__pk',
                 'DELETE FROM `product_tags` WHERE `productId` = :__pivot_fk',
-                'INSERT INTO `product_tags` (`productId`, `tagId`) VALUES (:foreign_key, :related_key)',
-                'INSERT INTO `product_tags` (`productId`, `tagId`) VALUES (:foreign_key, :related_key)',
+                'INSERT INTO `product_tags` (`productId`, `tagId`) VALUES (:productId_0, :tagId_0), (:productId_1, :tagId_1)',
                 'DELETE FROM `product_tags` WHERE `productId` = :__pivot_fk',
                 'DELETE FROM `tagged_products` WHERE `id` = :__pk',
             ],
             array_map(static fn (array $entry): string => $entry['sql'], $adapter->executed),
         );
+
+        // The batched INSERT carries the same rows, one placeholder set per row.
+        $batchedInsert = array_values(array_filter(
+            $adapter->executed,
+            static fn (array $e): bool => str_contains($e['sql'], 'VALUES (:productId_0'),
+        ))[0];
+        $this->assertSame([
+            'productId_0' => 'product-1', 'tagId_0' => 'tag-1',
+            'productId_1' => 'product-1', 'tagId_1' => 'tag-2',
+        ], $batchedInsert['params']);
     }
 
     private function buildRegistry(): MapperRegistry

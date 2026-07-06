@@ -10,6 +10,7 @@ use Semitexa\Core\Log\LoggerInterface;
 use Semitexa\Orm\Adapter\ConnectionPoolInterface;
 use Semitexa\Orm\Adapter\TenantSwitchingConnectionPoolInterface;
 use Semitexa\Orm\Application\Handler\DomainListener\TenantResolvedConnectionListener;
+use Semitexa\Orm\Exception\TenantConnectionSwitchException;
 use Semitexa\Tenancy\Context\TenantContext;
 use Semitexa\Tenancy\Domain\Event\TenantResolved;
 
@@ -149,34 +150,76 @@ final class TenantResolvedConnectionListenerTest extends TestCase
     }
 
     #[Test]
-    public function it_logs_switch_failures_with_injected_logger(): void
+    public function a_switch_capable_pool_that_fails_to_switch_aborts_the_request(): void
+    {
+        // supportsTenantSwitch() === true means the deployment isolates tenants
+        // by database. If the switch then fails we must NOT proceed on the
+        // previous/default connection — that would serve the wrong tenant's
+        // data. Fail closed: abort.
+        $listener = new TenantResolvedConnectionListener();
+        $pool = new class implements TenantSwitchingConnectionPoolInterface {
+            public function pop(float $timeout = -1): \PDO
+            {
+                throw new \BadMethodCallException('Not used in this test.');
+            }
+
+            public function push(\PDO $connection): void {}
+            public function close(): void {}
+            public function getSize(): int { return 1; }
+            public function getAvailable(): int { return 0; }
+
+            public function switchTo(string $tenantId): void
+            {
+                throw new \LogicException('connection for tenant is misconfigured');
+            }
+
+            public function supportsTenantSwitch(): bool
+            {
+                return true;
+            }
+        };
+        $this->injectPool($listener, $pool);
+
+        $this->expectException(TenantConnectionSwitchException::class);
+        $listener->handle(new TenantResolved(TenantContext::fromResolution('tenant-x', 'domain', 'tenant-x.test')));
+    }
+
+    #[Test]
+    public function it_logs_at_error_and_fails_closed_when_the_switch_fails(): void
     {
         $listener = new TenantResolvedConnectionListener();
         $this->injectPool($listener, $this->failingPool());
         $logger = new class implements LoggerInterface {
-            public ?string $warningMessage = null;
+            public ?string $errorMessage = null;
 
             /** @var array<string, mixed> */
-            public array $warningContext = [];
+            public array $errorContext = [];
 
-            public function error(string $message, array $context = []): void {}
-            public function critical(string $message, array $context = []): void {}
-            public function warning(string $message, array $context = []): void
+            public function error(string $message, array $context = []): void
             {
-                $this->warningMessage = $message;
-                $this->warningContext = $context;
+                $this->errorMessage = $message;
+                $this->errorContext = $context;
             }
+            public function critical(string $message, array $context = []): void {}
+            public function warning(string $message, array $context = []): void {}
             public function info(string $message, array $context = []): void {}
             public function notice(string $message, array $context = []): void {}
             public function debug(string $message, array $context = []): void {}
         };
         $this->injectLogger($listener, $logger);
 
-        $listener->handle(new TenantResolved(TenantContext::fromResolution('tenant-a', 'domain', 'tenant-a.test')));
+        try {
+            $listener->handle(new TenantResolved(TenantContext::fromResolution('tenant-a', 'domain', 'tenant-a.test')));
+            self::fail('the switch failure must abort the request');
+        } catch (TenantConnectionSwitchException $e) {
+            self::assertSame('tenant-a', $e->tenantId);
+            self::assertInstanceOf(\LogicException::class, $e->getPrevious());
+        }
 
-        $this->assertSame('Failed to switch connection pool to tenant', $logger->warningMessage);
-        $this->assertSame('tenant-a', $logger->warningContext['tenant'] ?? null);
-        $this->assertSame(\LogicException::class, $logger->warningContext['exception'] ?? null);
+        // The isolation failure is logged at ERROR (not warning) before aborting.
+        self::assertSame('Failed to switch connection pool to resolved tenant; aborting to prevent cross-tenant access', $logger->errorMessage);
+        self::assertSame('tenant-a', $logger->errorContext['tenant'] ?? null);
+        self::assertSame(\LogicException::class, $logger->errorContext['exception'] ?? null);
     }
 
     #[Test]
@@ -193,8 +236,11 @@ final class TenantResolvedConnectionListenerTest extends TestCase
 
         try {
             $listener->handle(new TenantResolved(TenantContext::fromResolution('tenant-b', 'domain', 'tenant-b.test')));
-            $contents = is_file($logFile) ? (string) file_get_contents($logFile) : '';
+            self::fail('the switch failure must abort the request');
+        } catch (TenantConnectionSwitchException) {
+            // expected — fail closed
         } finally {
+            $contents = is_file($logFile) ? (string) file_get_contents($logFile) : '';
             ini_set('log_errors', is_string($previousLogErrors) ? $previousLogErrors : '1');
             ini_set('error_log', is_string($previousErrorLog) ? $previousErrorLog : '');
             if (is_file($logFile)) {
@@ -202,7 +248,7 @@ final class TenantResolvedConnectionListenerTest extends TestCase
             }
         }
 
-        $this->assertStringContainsString('Failed to switch connection pool to tenant', $contents);
+        $this->assertStringContainsString('Failed to switch connection pool to resolved tenant', $contents);
         $this->assertStringContainsString('tenant=tenant-b', $contents);
     }
 

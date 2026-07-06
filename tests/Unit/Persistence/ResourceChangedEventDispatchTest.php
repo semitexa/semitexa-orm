@@ -130,6 +130,38 @@ final class ResourceChangedEventDispatchTest extends TestCase
         $this->assertCount(0, $dispatcher->captured, 'but no ResourceChangedEvent was emitted (bypass)');
     }
 
+    #[Test]
+    public function a_lazy_dispatcher_closure_is_resolved_at_dispatch_time_not_at_construction(): void
+    {
+        // Regression: engines are memoized, and a dispatcher captured at
+        // construction freezes whatever was resolvable at FIRST write. In CLI
+        // workers (scheduler:work) the first write happens before any bootstrap
+        // registers the resolver — auto-publish silently died for the whole
+        // process. The closure form must re-resolve on EVERY dispatch.
+        $adapter = new FakeDatabaseAdapter([]);
+        $slot = new class {
+            public ?EventDispatcherInterface $dispatcher = null;
+        };
+        $engine = new AggregateWriteEngine(
+            $adapter,
+            new ResourceModelHydrator(),
+            null,
+            fn (): ?EventDispatcherInterface => $slot->dispatcher,
+        );
+
+        // Write BEFORE any dispatcher is resolvable — a silent no-op, as before.
+        $engine->insert($this->validDomainModel(id: ''), ValidProductResourceModel::class, $this->buildRegistry());
+
+        // The bootstrap arrives late (the scheduler:work reality)...
+        $slot->dispatcher = $this->capturingDispatcher();
+
+        // ...and the SAME memoized engine must now dispatch.
+        $engine->insert($this->validDomainModel(id: ''), ValidProductResourceModel::class, $this->buildRegistry());
+
+        $this->assertCount(1, $slot->dispatcher->captured);
+        $this->assertSame('products', $slot->dispatcher->captured[0]->resourceKey);
+    }
+
     /**
      * @return object{captured: list<ResourceChangedEvent>}&EventDispatcherInterface
      */

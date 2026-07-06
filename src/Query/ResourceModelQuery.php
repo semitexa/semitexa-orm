@@ -70,7 +70,21 @@ final class ResourceModelQuery
         private readonly ResourceModelRelationLoader    $relationLoader,
         private readonly ?ResourceModelMetadataRegistry $metadataRegistry = null,
         private readonly ?TypeCaster                    $typeCaster = null,
+        /**
+         * The owning mapper registry. When present (queries built through
+         * DomainRepository::query() always supply it), fetch*As() default to it,
+         * so callers no longer thread getMapperRegistry() into every fetch.
+         */
+        private readonly ?MapperRegistry                $mapperRegistry = null,
     ) {}
+
+    private function resolveMapperRegistry(?MapperRegistry $explicit): MapperRegistry
+    {
+        return $explicit ?? $this->mapperRegistry ?? throw new \LogicException(
+            'fetch*As() needs a MapperRegistry: this ResourceModelQuery was built without one, '
+            . 'so pass it explicitly (or build the query via DomainRepository::query(), which supplies it).',
+        );
+    }
 
     // ------------------------------------------------------------------
     // WHERE predicates
@@ -379,15 +393,17 @@ final class ResourceModelQuery
     /**
      * @return list<object>
      */
-    public function fetchAllAs(string $domainModelClass, MapperRegistry $mapperRegistry): array
+    public function fetchAllAs(string $domainModelClass, ?MapperRegistry $mapperRegistry = null): array
     {
+        $registry = $this->resolveMapperRegistry($mapperRegistry);
+
         return array_map(
-            fn (object $resourceModel): object => $mapperRegistry->mapToDomain($resourceModel, $domainModelClass),
+            fn (object $resourceModel): object => $registry->mapToDomain($resourceModel, $domainModelClass),
             $this->fetchAll(),
         );
     }
 
-    public function fetchOneAs(string $domainModelClass, MapperRegistry $mapperRegistry): ?object
+    public function fetchOneAs(string $domainModelClass, ?MapperRegistry $mapperRegistry = null): ?object
     {
         $item = $this->fetchOne();
 
@@ -395,7 +411,7 @@ final class ResourceModelQuery
             return null;
         }
 
-        return $mapperRegistry->mapToDomain($item, $domainModelClass);
+        return $this->resolveMapperRegistry($mapperRegistry)->mapToDomain($item, $domainModelClass);
     }
 
     /**
@@ -465,12 +481,13 @@ final class ResourceModelQuery
      *
      * @return PaginatedResult<object>
      */
-    public function paginateAs(int $page, int $perPage, string $domainModelClass, MapperRegistry $mapperRegistry): PaginatedResult
+    public function paginateAs(int $page, int $perPage, string $domainModelClass, ?MapperRegistry $mapperRegistry = null): PaginatedResult
     {
         $raw = $this->paginate($page, $perPage);
+        $registry = $this->resolveMapperRegistry($mapperRegistry);
 
         return $raw->map(
-            static fn (object $rm): object => $mapperRegistry->mapToDomain($rm, $domainModelClass),
+            static fn (object $rm): object => $registry->mapToDomain($rm, $domainModelClass),
         );
     }
 

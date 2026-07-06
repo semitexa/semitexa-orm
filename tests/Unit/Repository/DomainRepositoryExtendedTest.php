@@ -6,6 +6,8 @@ namespace Semitexa\Orm\Tests\Unit\Repository;
 
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
+use Semitexa\Core\Exception\NotFoundException;
+use Semitexa\Core\Http\HttpStatus;
 use Semitexa\Orm\Application\Service\Hydration\ResourceModelHydrator;
 use Semitexa\Orm\Application\Service\Hydration\ResourceModelRelationLoader;
 use Semitexa\Orm\Application\Service\Mapping\MapperRegistry;
@@ -50,12 +52,18 @@ final class DomainRepositoryExtendedTest extends TestCase
     }
 
     #[Test]
-    public function find_by_id_or_fail_throws_when_not_found(): void
+    public function find_by_id_or_fail_throws_a_not_found_that_maps_to_404(): void
     {
         $adapter = new FakeDatabaseAdapter([]);
 
-        $this->expectException(\RuntimeException::class);
-        $this->repository($adapter)->forTenant('tenant-1')->findByIdOrFail('missing');
+        try {
+            $this->repository($adapter)->forTenant('tenant-1')->findByIdOrFail('missing');
+            self::fail('a missing id must throw');
+        } catch (NotFoundException $e) {
+            self::assertSame(HttpStatus::NotFound, $e->getStatusCode(), 'maps to 404, not a generic 500');
+            self::assertInstanceOf(\RuntimeException::class, $e, 'still a RuntimeException so broad catches keep working');
+            self::assertStringContainsString('missing', $e->getMessage());
+        }
     }
 
     #[Test]

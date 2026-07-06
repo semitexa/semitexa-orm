@@ -76,10 +76,16 @@ final class OrmManagerDispatcherWiringTest extends TestCase
         $engine = $manager->getAggregateWriteEngine();
 
         $events = (new \ReflectionProperty(AggregateWriteEngine::class, 'events'))->getValue($engine);
+        // The engine holds a LAZY resolver on purpose: it is memoized, and a
+        // dispatcher captured at construction would freeze pre-bootstrap null
+        // in CLI workers (the scheduler:work auto-publish regression). The
+        // wiring contract is therefore: resolving the engine's closure yields
+        // the same dispatcher the OrmManager resolves.
+        $this->assertInstanceOf(\Closure::class, $events, 'the engine must carry the lazy resolver, not a captured dispatcher');
         $this->assertSame(
             $captured,
-            $events,
-            'the dispatcher the OrmManager resolved must be the one the AggregateWriteEngine emits through',
+            $events(),
+            'the dispatcher the OrmManager resolves must be the one the AggregateWriteEngine emits through',
         );
     }
 

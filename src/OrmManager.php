@@ -208,8 +208,18 @@ class OrmManager
     public function getMapperRegistry(): MapperRegistry
     {
         if ($this->mapperRegistry === null) {
-            $this->mapperRegistry = new MapperRegistry($this->classDiscovery);
-            $this->mapperRegistry->build();
+            // Build FIRST, memoize LAST. build() walks the classmap through
+            // ClassDiscovery, whose autoloads are file IO — a coroutine
+            // SUSPENSION point under SWOOLE_HOOK_ALL. Memoizing the empty
+            // registry before build() (the old order) let a concurrent
+            // coroutine on the same manager observe a half-built registry and
+            // die with MissingMapperException — reproduced as intermittent
+            // 500s on the first concurrent burst after a worker boot. Losing
+            // the ??= race is fine: both registries are complete, the first
+            // one wins, the duplicate is GC'd.
+            $registry = new MapperRegistry($this->classDiscovery);
+            $registry->build();
+            $this->mapperRegistry ??= $registry;
         }
 
         return $this->mapperRegistry;
@@ -255,7 +265,11 @@ class OrmManager
                 $this->getAdapter(),
                 $this->getResourceModelHydrator(),
                 $this->getResourceModelMetadataRegistry(),
-                $this->getEventDispatcher(),
+                // Lazy on purpose: this engine is memoized, and a dispatcher
+                // captured here freezes whatever was resolvable at FIRST write —
+                // in CLI workers that is before any bootstrap registered the
+                // resolver, silently killing auto-publish for the whole process.
+                fn (): ?EventDispatcherInterface => $this->getEventDispatcher(),
             );
         }
 
@@ -362,9 +376,20 @@ class OrmManager
         $this->adapter = null;
     }
 
+    /**
+     * Destructors run wherever GC happens to fire — mid-container-build, in
+     * another coroutine burst's world, or with no coroutine at all — and a
+     * Swoole Channel touched from the wrong context raises a C-level
+     * "must call constructor first" fatal that BYPASSES try/catch (and,
+     * inside a destructor, is uncatchable by any frame). So the destructor
+     * only DROPS references: releasing the Channel lets refcounting free the
+     * queued PDO connections exactly as a drain would, minus the fatal.
+     * Deliberate teardown at a known-safe point stays {@see shutdown()}.
+     */
     public function __destruct()
     {
-        $this->shutdown();
+        $this->pool = null;
+        $this->adapter = null;
     }
 
     /**

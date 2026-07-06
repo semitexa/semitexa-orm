@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Repository;
 
 use Semitexa\Core\Event\EventDispatcherInterface;
+use Semitexa\Core\Exception\NotFoundException;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Exception\InvalidResourceModelException;
 use Semitexa\Orm\Application\Service\Hydration\ResourceModelHydrator;
@@ -50,7 +51,7 @@ final class DomainRepository
         ?ResourceModelRelationLoader                    $relationLoader = null,
         private readonly ?ResourceModelMetadataRegistry $metadataRegistry = null,
         ?AggregateWriteEngine                           $writeEngine = null,
-        ?EventDispatcherInterface                       $events = null,
+        EventDispatcherInterface|\Closure|null          $events = null,
     ) {
         $this->hydrator = $hydrator ?? new ResourceModelHydrator(metadataRegistry: $metadataRegistry);
         $this->relationLoader = $relationLoader ?? new ResourceModelRelationLoader(
@@ -92,6 +93,7 @@ final class DomainRepository
             $this->hydrator,
             $this->relationLoader,
             $this->metadataRegistry,
+            mapperRegistry: $this->mapperRegistry,
         );
 
         if ($this->systemScopeToken !== null) {
@@ -117,11 +119,11 @@ final class DomainRepository
     {
         $entity = $this->findById($id);
         if ($entity === null) {
-            throw new \RuntimeException(sprintf(
-                'No %s found with id "%s".',
-                $this->domainModelClass,
-                (string) $id,
-            ));
+            // A typed NotFoundException maps to HTTP 404 (getStatusCode) instead
+            // of the generic 500 a bare RuntimeException produced. Still a
+            // RuntimeException (DomainException extends it), so existing broad
+            // catches keep working.
+            throw new NotFoundException($this->domainModelClass, $id);
         }
 
         return $entity;
@@ -144,11 +146,17 @@ final class DomainRepository
     }
 
     /**
+     * Fetch rows matching $criteria, bounded to $limit (default 1000, matching
+     * {@see findAll()}). Pass null for an unbounded fetch — use with care on
+     * large tables. The old null default meant a caller omitting $limit loaded
+     * the entire matching set into memory; the bounded default prevents that
+     * accidental whole-table load while keeping unbounded an explicit opt-in.
+     *
      * @param array<string, mixed> $criteria property name → value (null → IS NULL)
      * @param list<RelationRef> $relations
      * @return list<object>
      */
-    public function findBy(array $criteria, array $relations = [], ?int $limit = null): array
+    public function findBy(array $criteria, array $relations = [], ?int $limit = 1000): array
     {
         $query = $this->applyCriteria($this->query(), $criteria, $relations);
 

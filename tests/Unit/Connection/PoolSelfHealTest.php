@@ -10,6 +10,7 @@ use ReflectionObject;
 use Semitexa\Orm\Adapter\ConnectionPool;
 use Semitexa\Orm\Adapter\SingleConnectionPool;
 use Semitexa\Orm\Application\Service\Transaction\TransactionManager;
+use Semitexa\Core\Support\CoroutineLocal;
 use Semitexa\Orm\Domain\Model\ConnectionConfig;
 use Semitexa\Orm\OrmManager;
 use Swoole\Coroutine;
@@ -103,18 +104,28 @@ final class PoolSelfHealTest extends TestCase
         $single = $manager->getPool();
         self::assertInstanceOf(SingleConnectionPool::class, $single);
 
-        // Simulate an open transaction on the cached manager.
+        // Simulate an open transaction on the cached manager. The nesting depth
+        // now lives in CoroutineLocal (per-request isolation); outside a coroutine
+        // it falls back to a process-static, so we drive isActive() true via the
+        // same key the manager reads — no live BEGIN, no pop(), no database.
         $tm = new TransactionManager($single, $manager->getAdapter());
-        $this->setPrivate($tm, 'depth', 1);
         $this->setPrivate($manager, 'transactionManager', $tm);
+        $depthKey = (new \ReflectionClass(TransactionManager::class))->getConstant('KEY_DEPTH');
+        CoroutineLocal::set($depthKey, 1);
 
-        Runtime::enableCoroutine(SWOOLE_HOOK_ALL);
+        try {
+            Runtime::enableCoroutine(SWOOLE_HOOK_ALL);
 
-        self::assertInstanceOf(
-            SingleConnectionPool::class,
-            $manager->getPool(),
-            'The pool must not be yanked out from under an active transaction.',
-        );
+            self::assertTrue($tm->isActive(), 'Precondition: the simulated transaction must read as active.');
+            self::assertInstanceOf(
+                SingleConnectionPool::class,
+                $manager->getPool(),
+                'The pool must not be yanked out from under an active transaction.',
+            );
+        } finally {
+            // The CLI-static fallback persists across tests in the same process.
+            CoroutineLocal::set($depthKey, 0);
+        }
     }
 
     private function mysqlManager(): OrmManager

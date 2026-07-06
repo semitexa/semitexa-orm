@@ -52,7 +52,11 @@ final class ResourceMetadata
         // Resolve table name
         $fromTableAttrs = $ref->getAttributes(FromTable::class);
         if ($fromTableAttrs === []) {
-            throw new \RuntimeException("Class {$resourceClass} has no #[FromTable] attribute.");
+            throw new \RuntimeException(sprintf(
+                'Resource model %s is missing the required #[FromTable] attribute. '
+                . 'Add #[FromTable(name: \'your_table\')] so the ORM knows which table it maps to.',
+                $resourceClass,
+            ));
         }
         /** @var FromTable $ft */
         $ft = $fromTableAttrs[0]->newInstance();

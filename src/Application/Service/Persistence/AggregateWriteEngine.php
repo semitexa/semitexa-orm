@@ -17,17 +17,30 @@ use Semitexa\Orm\Application\Service\Hydration\ResourceModelHydrator;
 use Semitexa\Orm\Application\Service\Mapping\MapperRegistry;
 use Semitexa\Orm\Metadata\RelationKind;
 use Semitexa\Orm\Metadata\RelationMetadata;
+use Semitexa\Orm\Query\InsertQuery;
 use Semitexa\Orm\Metadata\ResourceModelMetadata;
 use Semitexa\Orm\Metadata\ResourceModelMetadataRegistry;
 use Semitexa\Orm\Application\Service\Uuid7;
 
 final class AggregateWriteEngine
 {
+    /** Max rows per batched pivot INSERT — keeps bound params well under driver limits. */
+    private const PIVOT_INSERT_CHUNK = 500;
+
+    /**
+     * `$events` accepts a lazy `\Closure(): ?EventDispatcherInterface` besides a
+     * concrete dispatcher: engines are memoized (OrmManager, DomainRepository),
+     * so a dispatcher captured at construction freezes whatever was resolvable
+     * at that moment. In a CLI worker (scheduler:work) the first ORM write is
+     * the scheduler's own bookkeeping — long before any job registers the
+     * dispatcher resolver — which silently killed auto-publish for every write
+     * that followed. A closure re-resolves at each dispatch instead.
+     */
     public function __construct(
-        private readonly DatabaseAdapterInterface       $adapter,
-        private readonly ResourceModelHydrator          $hydrator,
-        private readonly ?ResourceModelMetadataRegistry $metadataRegistry = null,
-        private readonly ?EventDispatcherInterface       $events = null,
+        private readonly DatabaseAdapterInterface                  $adapter,
+        private readonly ResourceModelHydrator                     $hydrator,
+        private readonly ?ResourceModelMetadataRegistry            $metadataRegistry = null,
+        private readonly EventDispatcherInterface|\Closure|null    $events = null,
     ) {}
 
     /**
@@ -84,13 +97,14 @@ final class AggregateWriteEngine
      */
     private function dispatchResourceChanged(string $resourceModelClass, ResourceChangeOperation $operation): void
     {
-        if ($this->events === null) {
-            return;
-        }
-
         try {
+            $dispatcher = $this->events instanceof \Closure ? ($this->events)() : $this->events;
+            if ($dispatcher === null) {
+                return;
+            }
+
             $resourceKey = ResourceMetadata::for($resourceModelClass)->getResourceKey();
-            $this->events->dispatch(new ResourceChangedEvent($resourceKey, $operation));
+            $dispatcher->dispatch(new ResourceChangedEvent($resourceKey, $operation));
         } catch (\Throwable) {
             // Intentionally swallowed: the write has already succeeded. Invalidation
             // is a best-effort, data-less signal — never break the write path on it.
@@ -307,18 +321,23 @@ final class AggregateWriteEngine
             return;
         }
 
+        $rows = [];
         foreach ($this->iterableValue($value) as $item) {
-            $relatedId = $this->extractRelatedIdentifier($item, $relation);
-            $insertSql = sprintf(
-                'INSERT INTO `%s` (`%s`, `%s`) VALUES (:foreign_key, :related_key)',
-                $relation->pivotTable,
-                $relation->foreignKey,
-                $relation->relatedKey,
-            );
-            $this->adapter->execute($insertSql, [
-                'foreign_key' => $parentId,
-                'related_key' => $relatedId,
-            ]);
+            $rows[] = [
+                $relation->foreignKey => $parentId,
+                $relation->relatedKey => $this->extractRelatedIdentifier($item, $relation),
+            ];
+        }
+        if ($rows === []) {
+            return;
+        }
+
+        // One multi-row INSERT per chunk instead of one round-trip per related
+        // item (M INSERTs → ceil(M / CHUNK)). Chunked so a pathologically large
+        // pivot set stays under the driver's bound-parameter limit.
+        $insert = new InsertQuery($relation->pivotTable, $this->adapter);
+        foreach (array_chunk($rows, self::PIVOT_INSERT_CHUNK) as $chunk) {
+            $insert->executeBatch($chunk);
         }
     }
 

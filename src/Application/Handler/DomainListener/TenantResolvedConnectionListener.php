@@ -12,6 +12,7 @@ use Semitexa\Core\Log\LoggerInterface;
 use Semitexa\Core\Tenant\Layer\OrganizationLayer;
 use Semitexa\Orm\Adapter\ConnectionPoolInterface;
 use Semitexa\Orm\Adapter\TenantSwitchingConnectionPoolInterface;
+use Semitexa\Orm\Exception\TenantConnectionSwitchException;
 use Semitexa\Tenancy\Domain\Event\TenantResolved;
 
 /**
@@ -49,18 +50,27 @@ final class TenantResolvedConnectionListener
         try {
             $this->connectionPool->switchTo($org->rawValue());
         } catch (\LogicException $e) {
+            // A non-default tenant was resolved but the pool could not be
+            // switched to its database. Continuing would run this tenant's
+            // request against the previous/default connection — a cross-tenant
+            // isolation breach. Fail CLOSED: log and abort rather than silently
+            // serve or write the wrong tenant's data. Pools that intentionally
+            // share one database report supportsTenantSwitch() === false and are
+            // skipped above, so this path only fires when a switch was expected.
             $context = [
                 'tenant' => $org->rawValue(),
                 'exception' => $e::class,
                 'message' => $e->getMessage(),
             ];
+            $message = 'Failed to switch connection pool to resolved tenant; aborting to prevent cross-tenant access';
 
             if (isset($this->logger)) {
-                $this->logger->warning('Failed to switch connection pool to tenant', $context);
-                return;
+                $this->logger->error($message, $context);
+            } else {
+                FallbackErrorLogger::log($message, $context);
             }
 
-            FallbackErrorLogger::log('Failed to switch connection pool to tenant', $context);
+            throw new TenantConnectionSwitchException($org->rawValue(), $e);
         }
     }
 }

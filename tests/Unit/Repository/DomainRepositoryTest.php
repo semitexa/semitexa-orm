@@ -10,6 +10,7 @@ use Semitexa\Orm\Application\Service\Hydration\ResourceModelHydrator;
 use Semitexa\Orm\Application\Service\Hydration\ResourceModelRelationLoader;
 use Semitexa\Orm\Application\Service\Mapping\MapperRegistry;
 use Semitexa\Orm\Query\Direction;
+use Semitexa\Orm\Query\ResourceModelQuery;
 use Semitexa\Orm\Query\SystemScopeToken;
 use Semitexa\Orm\Repository\DomainRepository;
 use Semitexa\Orm\Tests\Fixture\Hydration\FakeDatabaseAdapter;
@@ -152,6 +153,79 @@ final class DomainRepositoryTest extends TestCase
 
         $this->assertGreaterThanOrEqual(7, count($adapter->executed));
         $this->assertSame('INSERT INTO `products` (`id`, `tenantId`, `name`, `categoryId`, `deletedAt`) VALUES (:id, :tenantId, :name, :categoryId, :deletedAt)', $adapter->executed[0]['sql']);
+    }
+
+    #[Test]
+    public function find_by_is_bounded_by_default_not_a_whole_table_load(): void
+    {
+        $adapter = new FakeDatabaseAdapter([]);
+        $repository = $this->hydratableRepository($adapter)->forTenant('tenant-1');
+
+        $repository->findBy(['tenantId' => 'tenant-1']); // no explicit limit
+
+        $this->assertStringContainsString(
+            'LIMIT 1000',
+            $adapter->executed[0]['sql'],
+            'findBy without a limit must be bounded (matching findAll), not load the whole matching set',
+        );
+    }
+
+    #[Test]
+    public function find_by_null_limit_opts_into_an_unbounded_fetch(): void
+    {
+        $adapter = new FakeDatabaseAdapter([]);
+        $repository = $this->hydratableRepository($adapter)->forTenant('tenant-1');
+
+        $repository->findBy(['tenantId' => 'tenant-1'], limit: null);
+
+        $this->assertStringNotContainsString(
+            'LIMIT',
+            $adapter->executed[0]['sql'],
+            'an explicit null is the unbounded opt-in',
+        );
+    }
+
+    #[Test]
+    public function fetch_defaults_the_mapper_registry_from_the_query(): void
+    {
+        // A query built via DomainRepository::query() carries the repo's registry,
+        // so fetchAllAs() no longer needs it threaded in by hand.
+        $adapter = new FakeDatabaseAdapter([
+            'SELECT * FROM `hydratable_products` WHERE `tenantId` = :tenant_scope AND `deletedAt` IS NULL ORDER BY `name` DESC LIMIT 5' => [[
+                'id' => 'product-1',
+                'tenantId' => 'tenant-1',
+                'name' => 'Product 1',
+                'categoryId' => 'category-1',
+                'deletedAt' => null,
+            ]],
+        ]);
+        $repository = $this->hydratableRepository($adapter)->forTenant('tenant-1');
+
+        $items = $repository
+            ->orderBy($repository->query(), HydratableProductResourceModel::column('name'), Direction::Desc)
+            ->limit(5)
+            ->fetchAllAs(HydratableProductDomainModel::class); // no MapperRegistry argument
+
+        $this->assertCount(1, $items);
+        $this->assertSame('product-1', $items[0]->id);
+    }
+
+    #[Test]
+    public function fetch_on_a_registry_less_query_fails_with_a_clear_message(): void
+    {
+        // A raw query built without a registry AND called without one can't map —
+        // fail fast with an actionable message, not a null dereference.
+        $adapter = new FakeDatabaseAdapter([]);
+        $query = new ResourceModelQuery(
+            HydratableProductResourceModel::class,
+            $adapter,
+            new ResourceModelHydrator(),
+            new ResourceModelRelationLoader($adapter, new ResourceModelHydrator()),
+        );
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('needs a MapperRegistry');
+        $query->fetchAllAs(HydratableProductDomainModel::class);
     }
 
     private function hydratableRepository(FakeDatabaseAdapter $adapter): DomainRepository
