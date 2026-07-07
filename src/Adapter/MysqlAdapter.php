@@ -6,12 +6,7 @@ namespace Semitexa\Orm\Adapter;
 
 class MysqlAdapter implements DatabaseAdapterInterface
 {
-    /**
-     * Per-connection prepared-statement cap. ORM SQL is templated (a finite
-     * set per worker), but whereRaw() can mint unbounded shapes — reset the
-     * connection's cache rather than grow without bound.
-     */
-    private const STATEMENT_CACHE_MAX = 256;
+    use PreparesCachedStatements;
 
     private string $serverVersion = '';
 
@@ -174,15 +169,7 @@ class MysqlAdapter implements DatabaseAdapterInterface
             return $stmt;
         }
 
-        $stmt = $connection->prepare($sql);
-        if ($stmt === false) {
-            // Unreachable under ERRMODE_EXCEPTION; guards the type either way.
-            throw new \RuntimeException('PDO::prepare returned false for: ' . $sql);
-        }
-        if (count($cache) >= self::STATEMENT_CACHE_MAX) {
-            $cache = [];
-        }
-        $cache[$sql] = $stmt;
+        $stmt = $this->prepareIntoCache($connection, $sql, $cache);
         $this->statements[$connection] = $cache;
 
         return $stmt;

@@ -74,6 +74,51 @@ final class StatementCacheTest extends TestCase
     }
 
     #[Test]
+    public function a_1615_failure_is_recovered_by_re_preparing_once(): void
+    {
+        // The positive side of the retry gate: a cached statement invalidated
+        // by DDL (MySQL 1615) is forgotten, re-prepared and the execute
+        // completes — the caller never sees the failure.
+        $pdo = new CountingPdo('sqlite::memory:');
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $pdo->setAttribute(\PDO::ATTR_STATEMENT_CLASS, [Failing1615OnceStatement::class]);
+        $pdo->exec('CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)');
+        $adapter = new MysqlAdapter(new FixedConnectionPool($pdo));
+
+        $adapter->execute('INSERT INTO t (v) VALUES (:v)', ['v' => 'a']);
+        self::assertSame(1, $pdo->prepareCalls);
+
+        Failing1615OnceStatement::$armed = true;
+        $adapter->execute('INSERT INTO t (v) VALUES (:v)', ['v' => 'b']);
+
+        self::assertFalse(Failing1615OnceStatement::$armed, 'The synthetic 1615 must have fired.');
+        self::assertSame(2, $pdo->prepareCalls, 'Recovery is exactly one re-prepare of the same SQL.');
+        self::assertSame(2, (int) $pdo->query('SELECT COUNT(*) FROM t')->fetchColumn(), 'The retried write must be applied.');
+    }
+
+    #[Test]
+    public function single_connection_adapter_also_recovers_from_1615(): void
+    {
+        $pdo = new CountingPdo('sqlite::memory:');
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $pdo->setAttribute(\PDO::ATTR_STATEMENT_CLASS, [Failing1615OnceStatement::class]);
+        $pdo->exec('CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)');
+        $adapter = new SingleConnectionAdapter($pdo, '8.0');
+
+        $adapter->execute('INSERT INTO t (v) VALUES (:v)', ['v' => 'a']);
+        Failing1615OnceStatement::$armed = true;
+        $adapter->execute('INSERT INTO t (v) VALUES (:v)', ['v' => 'b']);
+
+        self::assertSame(2, $pdo->prepareCalls, 'Recovery is exactly one re-prepare of the same SQL.');
+        self::assertSame(2, (int) $pdo->query('SELECT COUNT(*) FROM t')->fetchColumn());
+    }
+
+    protected function tearDown(): void
+    {
+        Failing1615OnceStatement::$armed = false;
+    }
+
+    #[Test]
     public function distinct_sql_strings_prepare_separately(): void
     {
         $pdo = new CountingPdo('sqlite::memory:');
@@ -96,6 +141,32 @@ final class CountingPdo extends \PDO
         $this->prepareCalls++;
 
         return parent::prepare($query, $options);
+    }
+}
+
+/**
+ * PDOStatement double (installed via ATTR_STATEMENT_CLASS) that fails exactly
+ * one execute() with a synthetic MySQL 1615 "Prepared statement needs to be
+ * re-prepared" while everything else runs against the real SQLite database.
+ */
+class Failing1615OnceStatement extends \PDOStatement
+{
+    public static bool $armed = false;
+
+    protected function __construct()
+    {
+    }
+
+    public function execute(?array $params = null): bool
+    {
+        if (self::$armed) {
+            self::$armed = false;
+            $e = new \PDOException('SQLSTATE[HY000]: General error: 1615 Prepared statement needs to be re-prepared');
+            $e->errorInfo = ['HY000', 1615, 'Prepared statement needs to be re-prepared'];
+            throw $e;
+        }
+
+        return parent::execute($params);
     }
 }
 

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Application\Service\Transaction;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
+use Semitexa\Orm\Adapter\PreparesCachedStatements;
 use Semitexa\Orm\Adapter\QueryResult;
 use Semitexa\Orm\Adapter\ServerCapability;
 
@@ -14,7 +15,7 @@ use Semitexa\Orm\Adapter\ServerCapability;
  */
 class SingleConnectionAdapter implements DatabaseAdapterInterface
 {
-    private const STATEMENT_CACHE_MAX = 256;
+    use PreparesCachedStatements;
 
     /**
      * Per-SQL prepared-statement cache. This adapter lives for one
@@ -111,16 +112,6 @@ class SingleConnectionAdapter implements DatabaseAdapterInterface
 
     private function preparedStatement(string $sql): \PDOStatement
     {
-        if (count($this->statements) >= self::STATEMENT_CACHE_MAX) {
-            $this->statements = [];
-        }
-        $stmt = $this->connection->prepare($sql);
-        if ($stmt === false) {
-            // Unreachable under ERRMODE_EXCEPTION; guards the type either way.
-            throw new \RuntimeException('PDO::prepare returned false for: ' . $sql);
-        }
-        $this->statements[$sql] = $stmt;
-
-        return $stmt;
+        return $this->prepareIntoCache($this->connection, $sql, $this->statements);
     }
 }

@@ -57,6 +57,55 @@ final class SmartUpsertTest extends TestCase
         self::assertCount(0, $adapter->executed);
     }
 
+    #[Test]
+    public function a_heterogeneous_batch_takes_its_row_shape_from_the_first_resource(): void
+    {
+        // ResourceModelHydrator skips uninitialized typed properties
+        // per-instance, so resources in one batch can dehydrate to different
+        // column sets. batchUpsert() keys the column list off the FIRST row:
+        // a later row's missing column is null-filled, and a column absent
+        // from the first row is dropped for the whole batch. This pins that
+        // contract — callers must batch same-shape resources for full writes.
+        $adapter = new FakeDatabaseAdapter([]);
+        $upsert = new SmartUpsert($adapter);
+
+        $upsert->upsert([
+            $this->product('p-1', 'One'),          // full shape
+            $this->partialProduct('p-2'),          // name/tenant/category uninitialized
+        ]);
+
+        self::assertCount(1, $adapter->executed, 'A mixed batch is still one statement.');
+        $params = $adapter->executed[0]['params'];
+        self::assertSame('One', $params['r0_name']);
+        self::assertNull($params['r1_name'], "The partial row's missing column is null-filled.");
+
+        // Reverse order: the partial FIRST row narrows the batch to its own
+        // columns — the full row's extra columns are dropped.
+        $adapter2 = new FakeDatabaseAdapter([]);
+        $upsert2 = new SmartUpsert($adapter2);
+        $upsert2->upsert([
+            $this->partialProduct('p-3'),
+            $this->product('p-4', 'Four'),
+        ]);
+
+        $sql2 = $adapter2->executed[0]['sql'];
+        $params2 = $adapter2->executed[0]['params'];
+        self::assertStringNotContainsString('`name`', $sql2, 'Columns absent from the first row are dropped for the whole batch.');
+        self::assertArrayNotHasKey('r1_name', $params2);
+        self::assertSame('p-3', $params2['r0_id']);
+        self::assertSame('p-4', $params2['r1_id']);
+    }
+
+    /** A resource with ONLY the PK initialized (reflection bypasses the ctor). */
+    private function partialProduct(string $id): ValidProductResourceModel
+    {
+        $reflection = new \ReflectionClass(ValidProductResourceModel::class);
+        $partial = $reflection->newInstanceWithoutConstructor();
+        $reflection->getProperty('id')->setValue($partial, $id);
+
+        return $partial;
+    }
+
     private function product(string $id, string $name): ValidProductResourceModel
     {
         return new ValidProductResourceModel(
