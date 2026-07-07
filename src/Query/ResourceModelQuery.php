@@ -432,6 +432,103 @@ final class ResourceModelQuery
     }
 
     /**
+     * SUM over one column of the matching rows (0 when nothing matches).
+     * Same WHERE / tenant / soft-delete state as fetchAll().
+     */
+    public function sum(ColumnRef $column): int|float
+    {
+        $value = $this->aggregate('SUM', $column);
+        if ($value === null) {
+            return 0;
+        }
+
+        return is_int($value) || (is_string($value) && preg_match('/^-?\d+$/', $value) === 1)
+            ? (int) $value
+            : (float) $value;
+    }
+
+    /**
+     * AVG over one column of the matching rows; null when nothing matches.
+     */
+    public function avg(ColumnRef $column): ?float
+    {
+        $value = $this->aggregate('AVG', $column);
+
+        return $value === null ? null : (float) $value;
+    }
+
+    /**
+     * MIN of one column of the matching rows; null when nothing matches.
+     * Returned as the driver's raw value (string/int) — cast at the call
+     * site, the column's PHP type is the caller's context.
+     */
+    public function min(ColumnRef $column): mixed
+    {
+        return $this->aggregate('MIN', $column);
+    }
+
+    /**
+     * MAX of one column of the matching rows; null when nothing matches.
+     */
+    public function max(ColumnRef $column): mixed
+    {
+        return $this->aggregate('MAX', $column);
+    }
+
+    /**
+     * Row counts grouped by one column — the reporting workhorse:
+     * `$q->countBy(ColumnRef::for(Task::class, 'status'))` →
+     * `['open' => 12, 'done' => 30]`. Same WHERE / tenant / soft-delete
+     * state as fetchAll(); groups ordered by count descending. NOTE: a SQL
+     * NULL group surfaces under the '' array key (PHP null-key coercion) —
+     * filter nulls in WHERE when that distinction matters.
+     *
+     * @return array<int|string, int>
+     */
+    public function countBy(ColumnRef $group): array
+    {
+        $this->assertColumnBelongsToCurrentResourceModel($group);
+        [$whereSql, $params] = $this->buildWhereAndParams();
+        $metadata = $this->metadata();
+        $sql = sprintf(
+            // Secondary sort on the group value: equal counts would otherwise
+            // come back in a driver-dependent order.
+            'SELECT `%1$s` AS __g, COUNT(*) AS __c FROM `%2$s`%3$s GROUP BY `%1$s` ORDER BY __c DESC, `%1$s` ASC',
+            $group->columnName,
+            $metadata->tableName,
+            $whereSql,
+        );
+
+        $out = [];
+        foreach ($this->adapter->execute($sql, $params)->rows as $row) {
+            $out[$row['__g']] = (int) $row['__c'];
+        }
+
+        return $out;
+    }
+
+    private function aggregate(string $function, ColumnRef $column): mixed
+    {
+        $this->assertColumnBelongsToCurrentResourceModel($column);
+        [$whereSql, $params] = $this->buildWhereAndParams();
+        $metadata = $this->metadata();
+        $sql = sprintf(
+            'SELECT %s(`%s`) AS __a FROM `%s`%s',
+            $function,
+            $column->columnName,
+            $metadata->tableName,
+            $whereSql,
+        );
+
+        $value = $this->adapter->execute($sql, $params)->fetchColumn();
+
+        // fetchColumn() signals "no row / no column" as false; the SQL
+        // aggregate itself signals "no matching rows" as NULL — normalize
+        // both to null so callers see one empty-set shape.
+        return $value === false ? null : $value;
+    }
+
+    /**
      * Whether at least one row matches — implemented as a cheap `LIMIT 1` probe.
      */
     public function exists(): bool

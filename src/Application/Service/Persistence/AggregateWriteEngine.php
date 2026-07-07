@@ -9,6 +9,7 @@ use Semitexa\Orm\Domain\Enum\RelationWritePolicy;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Exception\InvalidRelationWriteException;
+use Semitexa\Orm\Exception\StaleAggregateException;
 use Semitexa\Orm\Domain\Enum\ResourceChangeOperation;
 use Semitexa\Orm\Domain\Event\ResourceChangedEvent;
 use Semitexa\Orm\Domain\Model\RelationState;
@@ -20,6 +21,7 @@ use Semitexa\Orm\Metadata\RelationMetadata;
 use Semitexa\Orm\Query\InsertQuery;
 use Semitexa\Orm\Metadata\ResourceModelMetadata;
 use Semitexa\Orm\Metadata\ResourceModelMetadataRegistry;
+use Semitexa\Orm\Application\Service\Transaction\TransactionManager;
 use Semitexa\Orm\Application\Service\Uuid7;
 
 final class AggregateWriteEngine
@@ -35,13 +37,47 @@ final class AggregateWriteEngine
      * the scheduler's own bookkeeping — long before any job registers the
      * dispatcher resolver — which silently killed auto-publish for every write
      * that followed. A closure re-resolves at each dispatch instead.
+     *
+     * `$transactions` accepts the same lazy-closure shape for the same reason:
+     * the memoized engine must not freeze a TransactionManager built over a
+     * pool that OrmManager later self-heals/swaps — resolve per write. When
+     * null (hand-built engines in tests), writes run on the bare adapter with
+     * NO transaction, i.e. the legacy non-atomic behaviour.
      */
     public function __construct(
         private readonly DatabaseAdapterInterface                  $adapter,
         private readonly ResourceModelHydrator                     $hydrator,
         private readonly ?ResourceModelMetadataRegistry            $metadataRegistry = null,
         private readonly EventDispatcherInterface|\Closure|null    $events = null,
+        private readonly TransactionManager|\Closure|null          $transactions = null,
     ) {}
+
+    /**
+     * Run one aggregate write atomically. The whole statement series (root
+     * row + cascade-owned children + pivot sync) either commits or rolls
+     * back — a mid-cascade failure can no longer leave partial rows behind.
+     *
+     * The work receives the TRANSACTION'S adapter: TransactionManager::run
+     * binds a dedicated connection, and statements issued on the engine's own
+     * pooled adapter would bypass the BEGIN entirely. Nested calls (a caller
+     * already inside TransactionManager::run) become savepoints.
+     *
+     * @template T
+     * @param callable(DatabaseAdapterInterface): T $work
+     * @return T
+     */
+    private function atomically(callable $work): mixed
+    {
+        $transactions = $this->transactions instanceof \Closure
+            ? ($this->transactions)()
+            : $this->transactions;
+
+        if ($transactions === null) {
+            return $work($this->adapter);
+        }
+
+        return $transactions->run($work);
+    }
 
     /**
      * @param class-string $resourceModelClass
@@ -49,7 +85,9 @@ final class AggregateWriteEngine
     public function insert(object $domainModel, string $resourceModelClass, MapperRegistry $mapperRegistry): object
     {
         $rootResourceModel = $mapperRegistry->mapToSourceModel($domainModel, $resourceModelClass);
-        $rootResourceModel = $this->insertResourceModel($rootResourceModel);
+        $rootResourceModel = $this->atomically(
+            fn (DatabaseAdapterInterface $adapter): object => $this->insertResourceModel($rootResourceModel, $adapter),
+        );
         $domainResult = $mapperRegistry->mapToDomain($rootResourceModel, $domainModel::class);
 
         $this->dispatchResourceChanged($resourceModelClass, ResourceChangeOperation::Insert);
@@ -63,9 +101,22 @@ final class AggregateWriteEngine
     public function update(object $domainModel, string $resourceModelClass, MapperRegistry $mapperRegistry): object
     {
         $rootResourceModel = $mapperRegistry->mapToSourceModel($domainModel, $resourceModelClass);
-        $this->updateResourceModel($rootResourceModel);
+        $updatedResourceModel = $this->atomically(
+            fn (DatabaseAdapterInterface $adapter): object => $this->updateResourceModel($rootResourceModel, $adapter),
+        );
 
         $this->dispatchResourceChanged($resourceModelClass, ResourceChangeOperation::Update);
+
+        // On a #[Version] resource the row now carries version+1 — return the
+        // BUMPED domain so `update($x); update($x);` keeps working. Returning
+        // the input here would self-stale every sequential update. Keyed off
+        // metadata, NOT object identity: a non-readonly resource is bumped
+        // in place (same instance), which an identity check would miss.
+        if ($this->metadata($resourceModelClass)->versionProperty !== null
+            || $updatedResourceModel !== $rootResourceModel
+        ) {
+            return $mapperRegistry->mapToDomain($updatedResourceModel, $domainModel::class);
+        }
 
         return $domainModel;
     }
@@ -76,7 +127,9 @@ final class AggregateWriteEngine
     public function delete(object $domainModel, string $resourceModelClass, MapperRegistry $mapperRegistry): void
     {
         $rootResourceModel = $mapperRegistry->mapToSourceModel($domainModel, $resourceModelClass);
-        $this->deleteResourceModel($rootResourceModel);
+        $this->atomically(function (DatabaseAdapterInterface $adapter) use ($rootResourceModel): void {
+            $this->deleteResourceModel($rootResourceModel, $adapter);
+        });
 
         $this->dispatchResourceChanged($resourceModelClass, ResourceChangeOperation::Delete);
     }
@@ -104,40 +157,62 @@ final class AggregateWriteEngine
             }
 
             $resourceKey = ResourceMetadata::for($resourceModelClass)->getResourceKey();
-            $dispatcher->dispatch(new ResourceChangedEvent($resourceKey, $operation));
+            $event = new ResourceChangedEvent($resourceKey, $operation);
+
+            // Commit-gate: when this write nested inside a CALLER transaction
+            // (our atomically() became a savepoint and has already returned,
+            // but the outer tx is still open), an immediate dispatch would let
+            // subscribers re-query PRE-COMMIT state — and an outer rollback
+            // would have signalled a change that never existed. Buffer on the
+            // TransactionManager instead; it flushes after the outer commit
+            // and clears on rollback. Late-wire the dispatcher so the flush
+            // can actually deliver.
+            $transactions = $this->transactions instanceof \Closure
+                ? ($this->transactions)()
+                : $this->transactions;
+            if ($transactions !== null && $transactions->isActive()) {
+                $transactions->setEventDispatcher($dispatcher);
+                $transactions->bufferEvent($event);
+                return;
+            }
+
+            $dispatcher->dispatch($event);
         } catch (\Throwable) {
             // Intentionally swallowed: the write has already succeeded. Invalidation
             // is a best-effort, data-less signal — never break the write path on it.
         }
     }
 
-    private function insertResourceModel(object $resourceModel): object
+    private function insertResourceModel(object $resourceModel, DatabaseAdapterInterface $adapter): object
     {
         $resourceModel = $this->prepareInsertResourceModel($resourceModel);
         $metadata = $this->metadata($resourceModel::class);
         $this->validateReferenceOnlyRelations($resourceModel, $metadata);
-        $resourceModel = $this->executeInsert($resourceModel, $metadata);
-        $this->persistOwnedRelations($resourceModel, $metadata, true);
+        $resourceModel = $this->executeInsert($resourceModel, $metadata, $adapter);
+        $this->persistOwnedRelations($resourceModel, $metadata, true, $adapter);
 
         return $resourceModel;
     }
 
-    private function updateResourceModel(object $resourceModel): void
+    /** @return object the resource model as persisted (version-bumped when #[Version] applies) */
+    private function updateResourceModel(object $resourceModel, DatabaseAdapterInterface $adapter): object
     {
         $metadata = $this->metadata($resourceModel::class);
         $this->validateReferenceOnlyRelations($resourceModel, $metadata);
-        $this->executeUpdate($resourceModel, $metadata);
-        $this->persistOwnedRelations($resourceModel, $metadata, false);
+        $resourceModel = $this->executeUpdate($resourceModel, $metadata, $adapter);
+        $this->persistOwnedRelations($resourceModel, $metadata, false, $adapter);
+
+        return $resourceModel;
     }
 
-    private function deleteResourceModel(object $resourceModel): void
+    private function deleteResourceModel(object $resourceModel, DatabaseAdapterInterface $adapter): void
     {
         $metadata = $this->metadata($resourceModel::class);
-        $this->deleteOwnedRelations($resourceModel, $metadata);
-        $this->executeDelete($resourceModel, $metadata);
+        $this->deleteOwnedRelations($resourceModel, $metadata, $adapter);
+        $this->executeDelete($resourceModel, $metadata, $adapter);
     }
 
-    private function executeInsert(object $resourceModel, ResourceModelMetadata $metadata): object
+    private function executeInsert(object $resourceModel, ResourceModelMetadata $metadata, DatabaseAdapterInterface $adapter): object
     {
         $row = $this->hydrator->dehydrate($resourceModel);
         $columns = array_keys($row);
@@ -148,7 +223,7 @@ final class AggregateWriteEngine
             implode(', ', array_map(static fn (string $column): string => ':' . $column, $columns)),
         );
 
-        $result = $this->adapter->execute($sql, $row);
+        $result = $adapter->execute($sql, $row);
         $primaryKey = $metadata->primaryKeyProperty;
         if ($primaryKey === null) {
             return $resourceModel;
@@ -167,7 +242,8 @@ final class AggregateWriteEngine
         return $this->withPropertyValue($resourceModel, $primaryKey, (int) $result->lastInsertId);
     }
 
-    private function executeUpdate(object $resourceModel, ResourceModelMetadata $metadata): void
+    /** @return object the input model, version-bumped when #[Version] applies */
+    private function executeUpdate(object $resourceModel, ResourceModelMetadata $metadata, DatabaseAdapterInterface $adapter): object
     {
         $primaryKey = $this->requirePrimaryKey($metadata);
         $row = $this->hydrator->dehydrate($resourceModel);
@@ -175,23 +251,62 @@ final class AggregateWriteEngine
         $pkValue = $row[$pkColumn] ?? $this->propertyValue($resourceModel, $primaryKey);
         unset($row[$pkColumn]);
 
+        // Optimistic locking: guard on the #[Version] the caller READ and bump
+        // it in the same statement. A concurrent writer that committed first
+        // makes the guard miss -> zero affected rows -> StaleAggregateException
+        // instead of a silent lost update.
+        $versionGuard = '';
+        $expectedVersion = null;
+        if ($metadata->versionProperty !== null) {
+            $versionColumn = $metadata->column($metadata->versionProperty)->columnName;
+            $expectedVersion = $row[$versionColumn] ?? null;
+            if (!is_numeric($expectedVersion)) {
+                throw new \LogicException(sprintf(
+                    '#[Version] property %s::$%s must carry the read version (int) on update.',
+                    $resourceModel::class,
+                    $metadata->versionProperty,
+                ));
+            }
+            $row[$versionColumn] = (int) $expectedVersion + 1;
+            $versionGuard = sprintf(' AND `%s` = :__expected_version', $versionColumn);
+        }
+
         $assignments = implode(', ', array_map(
             static fn (string $column): string => sprintf('`%s` = :%s', $column, $column),
             array_keys($row),
         ));
 
         $sql = sprintf(
-            'UPDATE `%s` SET %s WHERE `%s` = :__pk',
+            'UPDATE `%s` SET %s WHERE `%s` = :__pk%s',
             $metadata->tableName,
             $assignments,
             $pkColumn,
+            $versionGuard,
         );
 
         $row['__pk'] = $pkValue;
-        $this->adapter->execute($sql, $row);
+        if ($versionGuard !== '') {
+            $row['__expected_version'] = (int) $expectedVersion;
+        }
+        $result = $adapter->execute($sql, $row);
+
+        if ($versionGuard !== '' && $result->rowCount === 0) {
+            throw new StaleAggregateException(sprintf(
+                'Optimistic-lock miss updating %s (pk %s, expected version %d): the row was modified concurrently or no longer exists. Re-read and retry.',
+                $metadata->tableName,
+                (string) $pkValue,
+                (int) $expectedVersion,
+            ));
+        }
+
+        if ($metadata->versionProperty !== null) {
+            return $this->withPropertyValue($resourceModel, $metadata->versionProperty, (int) $expectedVersion + 1);
+        }
+
+        return $resourceModel;
     }
 
-    private function executeDelete(object $resourceModel, ResourceModelMetadata $metadata): void
+    private function executeDelete(object $resourceModel, ResourceModelMetadata $metadata, DatabaseAdapterInterface $adapter): void
     {
         $primaryKey = $this->requirePrimaryKey($metadata);
         $pkColumn = $metadata->column($primaryKey)->columnName;
@@ -203,35 +318,35 @@ final class AggregateWriteEngine
             $pkColumn,
         );
 
-        $this->adapter->execute($sql, ['__pk' => $pkValue]);
+        $adapter->execute($sql, ['__pk' => $pkValue]);
     }
 
-    private function persistOwnedRelations(object $resourceModel, ResourceModelMetadata $metadata, bool $isInsert): void
+    private function persistOwnedRelations(object $resourceModel, ResourceModelMetadata $metadata, bool $isInsert, DatabaseAdapterInterface $adapter): void
     {
         foreach ($metadata->relations() as $relation) {
             $value = $this->unwrapRelationValue($this->propertyValue($resourceModel, $relation->propertyName));
 
             if ($relation->writePolicy === RelationWritePolicy::CascadeOwned) {
-                $this->persistCascadeOwnedRelation($resourceModel, $metadata, $relation, $value, $isInsert);
+                $this->persistCascadeOwnedRelation($resourceModel, $metadata, $relation, $value, $isInsert, $adapter);
                 continue;
             }
 
             if ($relation->writePolicy === RelationWritePolicy::SyncPivotOnly) {
-                $this->syncPivotRelation($resourceModel, $metadata, $relation, $value, $isInsert);
+                $this->syncPivotRelation($resourceModel, $metadata, $relation, $value, $isInsert, $adapter);
             }
         }
     }
 
-    private function deleteOwnedRelations(object $resourceModel, ResourceModelMetadata $metadata): void
+    private function deleteOwnedRelations(object $resourceModel, ResourceModelMetadata $metadata, DatabaseAdapterInterface $adapter): void
     {
         foreach ($metadata->relations() as $relation) {
             if ($relation->writePolicy === RelationWritePolicy::CascadeOwned) {
-                $this->deleteCascadeOwnedRelation($resourceModel, $metadata, $relation);
+                $this->deleteCascadeOwnedRelation($resourceModel, $metadata, $relation, $adapter);
                 continue;
             }
 
             if ($relation->writePolicy === RelationWritePolicy::SyncPivotOnly) {
-                $this->syncPivotRelation($resourceModel, $metadata, $relation, [], false);
+                $this->syncPivotRelation($resourceModel, $metadata, $relation, [], false, $adapter);
             }
         }
     }
@@ -242,6 +357,7 @@ final class AggregateWriteEngine
         RelationMetadata      $relation,
         mixed                 $value,
         bool                  $isInsert,
+        DatabaseAdapterInterface $adapter,
     ): void {
         $parentId = $this->propertyValue($resourceModel, $this->requirePrimaryKey($metadata));
 
@@ -253,7 +369,7 @@ final class AggregateWriteEngine
                 $targetMetadata->tableName,
                 $fkColumn,
             );
-            $this->adapter->execute($sql, ['__parent_fk' => $parentId]);
+            $adapter->execute($sql, ['__parent_fk' => $parentId]);
         }
 
         if ($value === null) {
@@ -268,7 +384,7 @@ final class AggregateWriteEngine
                 ));
             }
 
-            $this->insertResourceModel($this->withPropertyValue($value, $relation->foreignKey, $parentId));
+            $this->insertResourceModel($this->withPropertyValue($value, $relation->foreignKey, $parentId), $adapter);
             return;
         }
 
@@ -280,7 +396,7 @@ final class AggregateWriteEngine
                 ));
             }
 
-            $this->insertResourceModel($this->withPropertyValue($item, $relation->foreignKey, $parentId));
+            $this->insertResourceModel($this->withPropertyValue($item, $relation->foreignKey, $parentId), $adapter);
         }
     }
 
@@ -288,6 +404,7 @@ final class AggregateWriteEngine
         object                $resourceModel,
         ResourceModelMetadata $metadata,
         RelationMetadata      $relation,
+        DatabaseAdapterInterface $adapter,
     ): void {
         $targetMetadata = $this->metadata($relation->targetClass);
         $fkColumn = $targetMetadata->column($relation->foreignKey)->columnName;
@@ -299,7 +416,7 @@ final class AggregateWriteEngine
             $fkColumn,
         );
 
-        $this->adapter->execute($sql, ['__parent_fk' => $parentId]);
+        $adapter->execute($sql, ['__parent_fk' => $parentId]);
     }
 
     private function syncPivotRelation(
@@ -308,6 +425,7 @@ final class AggregateWriteEngine
         RelationMetadata      $relation,
         mixed                 $value,
         bool                  $isInsert,
+        DatabaseAdapterInterface $adapter,
     ): void {
         $parentId = $this->propertyValue($resourceModel, $this->requirePrimaryKey($metadata));
         $deleteSql = sprintf(
@@ -315,7 +433,7 @@ final class AggregateWriteEngine
             $relation->pivotTable,
             $relation->foreignKey,
         );
-        $this->adapter->execute($deleteSql, ['__pivot_fk' => $parentId]);
+        $adapter->execute($deleteSql, ['__pivot_fk' => $parentId]);
 
         if ($value === null || (!$isInsert && $value === [])) {
             return;
@@ -335,7 +453,7 @@ final class AggregateWriteEngine
         // One multi-row INSERT per chunk instead of one round-trip per related
         // item (M INSERTs → ceil(M / CHUNK)). Chunked so a pathologically large
         // pivot set stays under the driver's bound-parameter limit.
-        $insert = new InsertQuery($relation->pivotTable, $this->adapter);
+        $insert = new InsertQuery($relation->pivotTable, $adapter);
         foreach (array_chunk($rows, self::PIVOT_INSERT_CHUNK) as $chunk) {
             $insert->executeBatch($chunk);
         }

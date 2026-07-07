@@ -270,6 +270,10 @@ class OrmManager
                 // in CLI workers that is before any bootstrap registered the
                 // resolver, silently killing auto-publish for the whole process.
                 fn (): ?EventDispatcherInterface => $this->getEventDispatcher(),
+                // Lazy for the same reason: getTransactionManager() self-heals
+                // onto a fresh pool; a manager captured at first write would
+                // pin the stale one.
+                fn (): TransactionManager => $this->getTransactionManager(),
             );
         }
 

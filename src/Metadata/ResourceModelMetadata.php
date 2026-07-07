@@ -20,6 +20,7 @@ final readonly class ResourceModelMetadata
         public ?SoftDeleteMetadata $softDelete = null,
         public ?string $primaryKeyProperty = null,
         public string $connectionName = 'default',
+        public ?string $versionProperty = null,
     ) {}
 
     /**

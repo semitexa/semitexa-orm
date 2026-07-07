@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Application\Service\Transaction;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
+use Semitexa\Orm\Adapter\PreparesCachedStatements;
 use Semitexa\Orm\Adapter\QueryResult;
 use Semitexa\Orm\Adapter\ServerCapability;
 
@@ -14,6 +15,19 @@ use Semitexa\Orm\Adapter\ServerCapability;
  */
 class SingleConnectionAdapter implements DatabaseAdapterInterface
 {
+    use PreparesCachedStatements;
+
+    /**
+     * Per-SQL prepared-statement cache. This adapter lives for one
+     * transaction on one connection, and aggregate writes repeat the same
+     * templated statements (cascade children, pivot chunks) — native
+     * prepares (ATTR_EMULATE_PREPARES=false) make each prepare() a server
+     * round-trip worth skipping.
+     *
+     * @var array<string, \PDOStatement>
+     */
+    private array $statements = [];
+
     public function __construct(
         private readonly \PDO $connection,
         private readonly string $serverVersion,
@@ -36,8 +50,26 @@ class SingleConnectionAdapter implements DatabaseAdapterInterface
 
     public function execute(string $sql, array $params = []): QueryResult
     {
-        $stmt = $this->connection->prepare($sql);
-        $stmt->execute($params);
+        $stmt = $this->statements[$sql] ?? null;
+        if ($stmt === null) {
+            $stmt = $this->preparedStatement($sql);
+        }
+        try {
+            $stmt->execute($params);
+        } catch (\PDOException $e) {
+            // Defensive re-prepare, gated to MySQL 1615 ("statement needs to
+            // be re-prepared" — DDL invalidated the cached statement). 1615
+            // fails BEFORE any row is touched and does NOT roll back the open
+            // transaction, so a re-prepared retry is safe here. NEVER retry
+            // other errors: a deadlock (1213) has already rolled the tx back,
+            // and a blind re-execute would silently apply a partial write.
+            if (($e->errorInfo[1] ?? null) !== 1615) {
+                throw $e;
+            }
+            unset($this->statements[$sql]);
+            $stmt = $this->preparedStatement($sql);
+            $stmt->execute($params);
+        }
 
         $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
         $rowCount = $stmt->rowCount();
@@ -76,5 +108,10 @@ class SingleConnectionAdapter implements DatabaseAdapterInterface
     public function getConnection(): \PDO
     {
         return $this->connection;
+    }
+
+    private function preparedStatement(string $sql): \PDOStatement
+    {
+        return $this->prepareIntoCache($this->connection, $sql, $this->statements);
     }
 }

@@ -16,6 +16,7 @@ use Semitexa\Orm\Metadata\RelationRef;
 use Semitexa\Orm\Metadata\ResourceModelMetadata;
 use Semitexa\Orm\Metadata\ResourceModelMetadataRegistry;
 use Semitexa\Orm\Application\Service\Persistence\AggregateWriteEngine;
+use Semitexa\Orm\Application\Service\Transaction\TransactionManager;
 use Semitexa\Orm\Query\Direction;
 use Semitexa\Orm\Query\Operator;
 use Semitexa\Orm\Query\SystemScopeToken;
@@ -52,6 +53,7 @@ final class DomainRepository
         private readonly ?ResourceModelMetadataRegistry $metadataRegistry = null,
         ?AggregateWriteEngine                           $writeEngine = null,
         EventDispatcherInterface|\Closure|null          $events = null,
+        TransactionManager|\Closure|null                $transactions = null,
     ) {
         $this->hydrator = $hydrator ?? new ResourceModelHydrator(metadataRegistry: $metadataRegistry);
         $this->relationLoader = $relationLoader ?? new ResourceModelRelationLoader(
@@ -64,6 +66,7 @@ final class DomainRepository
             $this->hydrator,
             $metadataRegistry,
             $events,
+            $transactions,
         );
     }
 

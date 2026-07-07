@@ -6,11 +6,34 @@ namespace Semitexa\Orm\Adapter;
 
 class MysqlAdapter implements DatabaseAdapterInterface
 {
+    use PreparesCachedStatements;
+
     private string $serverVersion = '';
+
+    /**
+     * Prepared-statement cache, keyed per PDO connection. The pool uses
+     * native prepares (ATTR_EMULATE_PREPARES=false), so every prepare() is a
+     * server round-trip; templated ORM SQL repeats constantly. A statement
+     * belongs to its connection: WeakMap keys by the PDO instance so a
+     * healed/discarded connection takes its statements with it, and the
+     * statement is only ever used inside this method's pop()/push() window —
+     * the connection (and thus the statement) has exactly one owner at a time.
+     *
+     * CAVEAT for future tenant-switching pools: MySQL binds the default
+     * schema at PREPARE time. A pool whose switchTo() re-points an existing
+     * connection to another database MUST clear that connection's cached
+     * statements, or pre-switch statements would execute against the previous
+     * tenant's schema. No in-repo pool implements switchTo() today (all
+     * throw) — revisit before shipping one.
+     *
+     * @var \WeakMap<\PDO, array<string, \PDOStatement>>
+     */
+    private \WeakMap $statements;
 
     public function __construct(
         private readonly ConnectionPoolInterface $pool,
     ) {
+        $this->statements = new \WeakMap();
     }
 
     public function supports(ServerCapability $capability): bool
@@ -42,8 +65,23 @@ class MysqlAdapter implements DatabaseAdapterInterface
         $connection = $this->pool->pop();
 
         try {
-            $stmt = $connection->prepare($sql);
-            $stmt->execute($params);
+            $stmt = $this->preparedStatement($connection, $sql);
+            try {
+                $stmt->execute($params);
+            } catch (\PDOException $e) {
+                // Defensive re-prepare, gated to MySQL 1615 ("statement needs
+                // to be re-prepared" — DDL invalidated the cached statement).
+                // NEVER retry other errors: a deadlock (1213) or lock-wait
+                // rollback inside an open transaction destroys the tx, and a
+                // blind re-execute would silently succeed in autocommit —
+                // partial writes with no error trail.
+                if (($e->errorInfo[1] ?? null) !== 1615) {
+                    throw $e;
+                }
+                $this->forgetStatement($connection, $sql);
+                $stmt = $this->preparedStatement($connection, $sql);
+                $stmt->execute($params);
+            }
 
             // Materialize ALL data before returning connection to pool.
             // This is critical for coroutine safety — after push(), another
@@ -120,5 +158,28 @@ class MysqlAdapter implements DatabaseAdapterInterface
         if (version_compare($this->serverVersion, '8.0.0', '<')) {
             throw new \RuntimeException("Semitexa ORM requires MySQL 8.0+, got {$this->serverVersion}.");
         }
+    }
+
+    private function preparedStatement(\PDO $connection, string $sql): \PDOStatement
+    {
+        /** @var array<string, \PDOStatement> $cache */
+        $cache = $this->statements[$connection] ?? [];
+        $stmt = $cache[$sql] ?? null;
+        if ($stmt instanceof \PDOStatement) {
+            return $stmt;
+        }
+
+        $stmt = $this->prepareIntoCache($connection, $sql, $cache);
+        $this->statements[$connection] = $cache;
+
+        return $stmt;
+    }
+
+    private function forgetStatement(\PDO $connection, string $sql): void
+    {
+        /** @var array<string, \PDOStatement> $cache */
+        $cache = $this->statements[$connection] ?? [];
+        unset($cache[$sql]);
+        $this->statements[$connection] = $cache;
     }
 }

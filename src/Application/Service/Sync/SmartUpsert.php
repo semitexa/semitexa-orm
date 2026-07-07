@@ -5,18 +5,20 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Application\Service\Sync;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
-use Semitexa\Orm\Application\Service\Hydration\Hydrator;
+use Semitexa\Orm\Application\Service\Hydration\ResourceModelHydrator;
 use Semitexa\Orm\Domain\Model\ResourceMetadata;
 
 class SmartUpsert
 {
-    private Hydrator $hydrator;
+    private ResourceModelHydrator $hydrator;
 
     public function __construct(
         private readonly DatabaseAdapterInterface $adapter,
-        ?Hydrator $hydrator = null,
+        ?ResourceModelHydrator $hydrator = null,
     ) {
-        $this->hydrator = $hydrator ?? new Hydrator();
+        // The one shared dehydration implementation (memoized per-class plan) —
+        // this file was the last consumer of the deleted legacy Hydrator.
+        $this->hydrator = $hydrator ?? new ResourceModelHydrator();
     }
 
     /**
