@@ -81,7 +81,9 @@ final class QueryAggregationTest extends TestCase
     {
         $counts = $this->query()->countBy(self::statusColumn());
 
-        self::assertSame(['open' => 2, 'done' => 2, 'canceled' => 1], $counts);
+        // Frequency first; ties break on the group value ASC, so the order
+        // is identical on every driver.
+        self::assertSame(['done' => 2, 'open' => 2, 'canceled' => 1], $counts);
     }
 
     #[Test]
@@ -91,7 +93,7 @@ final class QueryAggregationTest extends TestCase
             ->where(self::amount(), Operator::GreaterThan, 10)
             ->countBy(self::statusColumn());
 
-        self::assertSame(['open' => 1, 'done' => 1, 'canceled' => 1], $counts);
+        self::assertSame(['canceled' => 1, 'done' => 1, 'open' => 1], $counts);
     }
 
     #[Test]

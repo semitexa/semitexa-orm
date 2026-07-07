@@ -62,9 +62,9 @@ final class ResourceModelMetadataExtractor
                     ));
                 }
                 $type = $property->getType();
-                if (!$type instanceof \ReflectionNamedType || $type->getName() !== 'int') {
+                if (!$type instanceof \ReflectionNamedType || $type->getName() !== 'int' || $type->allowsNull()) {
                     throw new \LogicException(sprintf(
-                        '#[Version] on %s::$%s must be typed int — the guard compares and increments it numerically.',
+                        '#[Version] on %s::$%s must be typed non-nullable int — the guard compares and increments it numerically.',
                         $resourceModelClass,
                         $property->getName(),
                     ));

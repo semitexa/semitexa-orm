@@ -491,7 +491,9 @@ final class ResourceModelQuery
         [$whereSql, $params] = $this->buildWhereAndParams();
         $metadata = $this->metadata();
         $sql = sprintf(
-            'SELECT `%1$s` AS __g, COUNT(*) AS __c FROM `%2$s`%3$s GROUP BY `%1$s` ORDER BY __c DESC',
+            // Secondary sort on the group value: equal counts would otherwise
+            // come back in a driver-dependent order.
+            'SELECT `%1$s` AS __g, COUNT(*) AS __c FROM `%2$s`%3$s GROUP BY `%1$s` ORDER BY __c DESC, `%1$s` ASC',
             $group->columnName,
             $metadata->tableName,
             $whereSql,
