@@ -9,6 +9,7 @@ use Semitexa\Orm\Domain\Enum\RelationWritePolicy;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Exception\InvalidRelationWriteException;
+use Semitexa\Orm\Exception\StaleAggregateException;
 use Semitexa\Orm\Domain\Enum\ResourceChangeOperation;
 use Semitexa\Orm\Domain\Event\ResourceChangedEvent;
 use Semitexa\Orm\Domain\Model\RelationState;
@@ -216,20 +217,53 @@ final class AggregateWriteEngine
         $pkValue = $row[$pkColumn] ?? $this->propertyValue($resourceModel, $primaryKey);
         unset($row[$pkColumn]);
 
+        // Optimistic locking: guard on the #[Version] the caller READ and bump
+        // it in the same statement. A concurrent writer that committed first
+        // makes the guard miss -> zero affected rows -> StaleAggregateException
+        // instead of a silent lost update.
+        $versionGuard = '';
+        $expectedVersion = null;
+        if ($metadata->versionProperty !== null) {
+            $versionColumn = $metadata->column($metadata->versionProperty)->columnName;
+            $expectedVersion = $row[$versionColumn] ?? null;
+            if (!is_numeric($expectedVersion)) {
+                throw new \LogicException(sprintf(
+                    '#[Version] property %s::$%s must carry the read version (int) on update.',
+                    $resourceModel::class,
+                    $metadata->versionProperty,
+                ));
+            }
+            $row[$versionColumn] = (int) $expectedVersion + 1;
+            $versionGuard = sprintf(' AND `%s` = :__expected_version', $versionColumn);
+        }
+
         $assignments = implode(', ', array_map(
             static fn (string $column): string => sprintf('`%s` = :%s', $column, $column),
             array_keys($row),
         ));
 
         $sql = sprintf(
-            'UPDATE `%s` SET %s WHERE `%s` = :__pk',
+            'UPDATE `%s` SET %s WHERE `%s` = :__pk%s',
             $metadata->tableName,
             $assignments,
             $pkColumn,
+            $versionGuard,
         );
 
         $row['__pk'] = $pkValue;
-        $adapter->execute($sql, $row);
+        if ($versionGuard !== '') {
+            $row['__expected_version'] = (int) $expectedVersion;
+        }
+        $result = $adapter->execute($sql, $row);
+
+        if ($versionGuard !== '' && $result->rowCount === 0) {
+            throw new StaleAggregateException(sprintf(
+                'Optimistic-lock miss updating %s (pk %s, expected version %d): the row was modified concurrently or no longer exists. Re-read and retry.',
+                $metadata->tableName,
+                (string) $pkValue,
+                (int) $expectedVersion,
+            ));
+        }
     }
 
     private function executeDelete(object $resourceModel, ResourceModelMetadata $metadata, DatabaseAdapterInterface $adapter): void

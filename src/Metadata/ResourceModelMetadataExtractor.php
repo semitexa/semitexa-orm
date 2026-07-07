@@ -13,6 +13,7 @@ use Semitexa\Orm\Attribute\ManyToMany;
 use Semitexa\Orm\Attribute\OneToOne;
 use Semitexa\Orm\Attribute\PrimaryKey;
 use Semitexa\Orm\Attribute\SoftDelete;
+use Semitexa\Orm\Attribute\Version;
 use Semitexa\Orm\Attribute\TenantScoped;
 
 final class ResourceModelMetadataExtractor
@@ -41,6 +42,7 @@ final class ResourceModelMetadataExtractor
         $columnsByProperty = [];
         $relationsByProperty = [];
         $primaryKeyProperty = null;
+        $versionProperty = null;
 
         foreach ($ref->getProperties() as $property) {
             $column = $this->extractColumn($property);
@@ -49,6 +51,25 @@ final class ResourceModelMetadataExtractor
                 if ($column->isPrimaryKey) {
                     $primaryKeyProperty = $column->propertyName;
                 }
+            }
+
+            if ($property->getAttributes(Version::class) !== []) {
+                if ($column === null) {
+                    throw new \LogicException(sprintf(
+                        '#[Version] on %s::$%s requires a #[Column] on the same property.',
+                        $resourceModelClass,
+                        $property->getName(),
+                    ));
+                }
+                if ($versionProperty !== null) {
+                    throw new \LogicException(sprintf(
+                        '%s declares more than one #[Version] property (%s and %s).',
+                        $resourceModelClass,
+                        $versionProperty,
+                        $property->getName(),
+                    ));
+                }
+                $versionProperty = $property->getName();
             }
 
             $relation = $this->extractRelation($property);
@@ -66,6 +87,7 @@ final class ResourceModelMetadataExtractor
             softDelete: $this->extractSoftDelete($ref, $columnsByProperty),
             primaryKeyProperty: $primaryKeyProperty,
             connectionName: $connectionName,
+            versionProperty: $versionProperty,
         );
     }
 
