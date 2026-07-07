@@ -87,6 +87,26 @@ final class OptimisticLockingTest extends TestCase
     }
 
     #[Test]
+    public function a_non_readonly_version_resource_is_rejected_before_any_write(): void
+    {
+        // Guards why readonly-only fixtures suffice above: a non-readonly
+        // resource would be version-bumped IN PLACE (same instance), which
+        // the identity path in update() could misread as "no bump". The
+        // metadata contract forbids that shape outright — fail-fast, never
+        // a silently stale return.
+        $registry = new MapperRegistry();
+        $registry->build(
+            mapperClasses: [OlMutableNoteMapper::class],
+            domainModelClasses: [OlNoteDomain::class],
+        );
+
+        $this->expectException(\Semitexa\Orm\Exception\InvalidResourceModelException::class);
+        $this->expectExceptionMessage('must be readonly');
+        $this->orm->getAggregateWriteEngine()
+            ->update(new OlNoteDomain('n1', 'v2', 1), OlMutableNoteFixture::class, $registry);
+    }
+
+    #[Test]
     public function updating_a_deleted_row_also_throws(): void
     {
         $this->orm->getAdapter()->execute("DELETE FROM ol_notes WHERE id = 'n1'");
@@ -149,5 +169,40 @@ final class OlNoteMapper implements \Semitexa\Orm\Domain\Contract\ResourceModelM
         $domainModel instanceof OlNoteDomain || throw new \InvalidArgumentException('Unexpected domain model.');
 
         return new OlNoteFixture($domainModel->id, $domainModel->body, $domainModel->version);
+    }
+}
+
+#[FromTable(name: 'ol_notes')]
+final class OlMutableNoteFixture
+{
+    public function __construct(
+        #[PrimaryKey(strategy: 'uuid')]
+        #[Column(type: MySqlType::Varchar, length: 36)]
+        public string $id,
+
+        #[Column(type: MySqlType::Varchar, length: 255)]
+        public string $body,
+
+        #[Version]
+        #[Column(type: MySqlType::Int)]
+        public int $version,
+    ) {}
+}
+
+#[AsMapper(resourceModel: OlMutableNoteFixture::class, domainModel: OlNoteDomain::class)]
+final class OlMutableNoteMapper implements \Semitexa\Orm\Domain\Contract\ResourceModelMapperInterface
+{
+    public function toDomain(object $resourceModel): object
+    {
+        $resourceModel instanceof OlMutableNoteFixture || throw new \InvalidArgumentException('Unexpected resource model.');
+
+        return new OlNoteDomain($resourceModel->id, $resourceModel->body, $resourceModel->version);
+    }
+
+    public function toSourceModel(object $domainModel): object
+    {
+        $domainModel instanceof OlNoteDomain || throw new \InvalidArgumentException('Unexpected domain model.');
+
+        return new OlMutableNoteFixture($domainModel->id, $domainModel->body, $domainModel->version);
     }
 }

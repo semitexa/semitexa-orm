@@ -51,13 +51,24 @@ class SingleConnectionAdapter implements DatabaseAdapterInterface
     {
         $stmt = $this->statements[$sql] ?? null;
         if ($stmt === null) {
-            if (count($this->statements) >= self::STATEMENT_CACHE_MAX) {
-                $this->statements = [];
-            }
-            $stmt = $this->connection->prepare($sql);
-            $this->statements[$sql] = $stmt;
+            $stmt = $this->preparedStatement($sql);
         }
-        $stmt->execute($params);
+        try {
+            $stmt->execute($params);
+        } catch (\PDOException $e) {
+            // Defensive re-prepare, gated to MySQL 1615 ("statement needs to
+            // be re-prepared" — DDL invalidated the cached statement). 1615
+            // fails BEFORE any row is touched and does NOT roll back the open
+            // transaction, so a re-prepared retry is safe here. NEVER retry
+            // other errors: a deadlock (1213) has already rolled the tx back,
+            // and a blind re-execute would silently apply a partial write.
+            if (($e->errorInfo[1] ?? null) !== 1615) {
+                throw $e;
+            }
+            unset($this->statements[$sql]);
+            $stmt = $this->preparedStatement($sql);
+            $stmt->execute($params);
+        }
 
         $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
         $rowCount = $stmt->rowCount();
@@ -96,5 +107,20 @@ class SingleConnectionAdapter implements DatabaseAdapterInterface
     public function getConnection(): \PDO
     {
         return $this->connection;
+    }
+
+    private function preparedStatement(string $sql): \PDOStatement
+    {
+        if (count($this->statements) >= self::STATEMENT_CACHE_MAX) {
+            $this->statements = [];
+        }
+        $stmt = $this->connection->prepare($sql);
+        if ($stmt === false) {
+            // Unreachable under ERRMODE_EXCEPTION; guards the type either way.
+            throw new \RuntimeException('PDO::prepare returned false for: ' . $sql);
+        }
+        $this->statements[$sql] = $stmt;
+
+        return $stmt;
     }
 }

@@ -29,7 +29,7 @@ final readonly class OrderResource
     use HasRelationReferences;
 
     public function __construct(
-        #[PrimaryKey(strategy: 'uuid')]              // or 'auto' for AUTO_INCREMENT
+        #[PrimaryKey(strategy: 'uuid')]              // string UUID PK; for AUTO_INCREMENT use strategy: 'auto' with `public int $id` + MySqlType::Int
         #[Column(type: MySqlType::Varchar, length: 36)]
         public string $id,
 

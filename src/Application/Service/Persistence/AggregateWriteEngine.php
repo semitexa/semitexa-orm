@@ -109,8 +109,12 @@ final class AggregateWriteEngine
 
         // On a #[Version] resource the row now carries version+1 — return the
         // BUMPED domain so `update($x); update($x);` keeps working. Returning
-        // the input here would self-stale every sequential update.
-        if ($updatedResourceModel !== $rootResourceModel) {
+        // the input here would self-stale every sequential update. Keyed off
+        // metadata, NOT object identity: a non-readonly resource is bumped
+        // in place (same instance), which an identity check would miss.
+        if ($this->metadata($resourceModelClass)->versionProperty !== null
+            || $updatedResourceModel !== $rootResourceModel
+        ) {
             return $mapperRegistry->mapToDomain($updatedResourceModel, $domainModel::class);
         }
 
