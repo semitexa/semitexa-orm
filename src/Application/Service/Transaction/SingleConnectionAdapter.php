@@ -14,6 +14,19 @@ use Semitexa\Orm\Adapter\ServerCapability;
  */
 class SingleConnectionAdapter implements DatabaseAdapterInterface
 {
+    private const STATEMENT_CACHE_MAX = 256;
+
+    /**
+     * Per-SQL prepared-statement cache. This adapter lives for one
+     * transaction on one connection, and aggregate writes repeat the same
+     * templated statements (cascade children, pivot chunks) — native
+     * prepares (ATTR_EMULATE_PREPARES=false) make each prepare() a server
+     * round-trip worth skipping.
+     *
+     * @var array<string, \PDOStatement>
+     */
+    private array $statements = [];
+
     public function __construct(
         private readonly \PDO $connection,
         private readonly string $serverVersion,
@@ -36,7 +49,14 @@ class SingleConnectionAdapter implements DatabaseAdapterInterface
 
     public function execute(string $sql, array $params = []): QueryResult
     {
-        $stmt = $this->connection->prepare($sql);
+        $stmt = $this->statements[$sql] ?? null;
+        if ($stmt === null) {
+            if (count($this->statements) >= self::STATEMENT_CACHE_MAX) {
+                $this->statements = [];
+            }
+            $stmt = $this->connection->prepare($sql);
+            $this->statements[$sql] = $stmt;
+        }
         $stmt->execute($params);
 
         $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);

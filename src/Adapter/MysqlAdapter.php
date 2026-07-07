@@ -6,11 +6,32 @@ namespace Semitexa\Orm\Adapter;
 
 class MysqlAdapter implements DatabaseAdapterInterface
 {
+    /**
+     * Per-connection prepared-statement cap. ORM SQL is templated (a finite
+     * set per worker), but whereRaw() can mint unbounded shapes — reset the
+     * connection's cache rather than grow without bound.
+     */
+    private const STATEMENT_CACHE_MAX = 256;
+
     private string $serverVersion = '';
+
+    /**
+     * Prepared-statement cache, keyed per PDO connection. The pool uses
+     * native prepares (ATTR_EMULATE_PREPARES=false), so every prepare() is a
+     * server round-trip; templated ORM SQL repeats constantly. A statement
+     * belongs to its connection: WeakMap keys by the PDO instance so a
+     * healed/discarded connection takes its statements with it, and the
+     * statement is only ever used inside this method's pop()/push() window —
+     * the connection (and thus the statement) has exactly one owner at a time.
+     *
+     * @var \WeakMap<\PDO, array<string, \PDOStatement>>
+     */
+    private \WeakMap $statements;
 
     public function __construct(
         private readonly ConnectionPoolInterface $pool,
     ) {
+        $this->statements = new \WeakMap();
     }
 
     public function supports(ServerCapability $capability): bool
@@ -42,8 +63,17 @@ class MysqlAdapter implements DatabaseAdapterInterface
         $connection = $this->pool->pop();
 
         try {
-            $stmt = $connection->prepare($sql);
-            $stmt->execute($params);
+            $stmt = $this->preparedStatement($connection, $sql);
+            try {
+                $stmt->execute($params);
+            } catch (\PDOException $e) {
+                // Defensive re-prepare: a cached statement can be invalidated
+                // server-side (e.g. MySQL 1615 after DDL touches the table).
+                // Drop it, prepare fresh, retry ONCE; a second failure is real.
+                $this->forgetStatement($connection, $sql);
+                $stmt = $this->preparedStatement($connection, $sql);
+                $stmt->execute($params);
+            }
 
             // Materialize ALL data before returning connection to pool.
             // This is critical for coroutine safety — after push(), another
@@ -120,5 +150,30 @@ class MysqlAdapter implements DatabaseAdapterInterface
         if (version_compare($this->serverVersion, '8.0.0', '<')) {
             throw new \RuntimeException("Semitexa ORM requires MySQL 8.0+, got {$this->serverVersion}.");
         }
+    }
+
+    private function preparedStatement(\PDO $connection, string $sql): \PDOStatement
+    {
+        $cache = $this->statements[$connection] ?? [];
+        $stmt = $cache[$sql] ?? null;
+        if ($stmt instanceof \PDOStatement) {
+            return $stmt;
+        }
+
+        $stmt = $connection->prepare($sql);
+        if (count($cache) >= self::STATEMENT_CACHE_MAX) {
+            $cache = [];
+        }
+        $cache[$sql] = $stmt;
+        $this->statements[$connection] = $cache;
+
+        return $stmt;
+    }
+
+    private function forgetStatement(\PDO $connection, string $sql): void
+    {
+        $cache = $this->statements[$connection] ?? [];
+        unset($cache[$sql]);
+        $this->statements[$connection] = $cache;
     }
 }

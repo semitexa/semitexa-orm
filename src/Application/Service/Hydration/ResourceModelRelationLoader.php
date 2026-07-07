@@ -67,12 +67,12 @@ final class ResourceModelRelationLoader
         $indexed = [];
         foreach ($rows as $row) {
             $related = $this->hydrator->hydrate($row, $relation->targetClass);
-            $pk = $this->arrayKeyFrom((new \ReflectionProperty($related, $targetPkProperty))->getValue($related));
+            $pk = $this->arrayKeyFrom($this->prop($related::class, $targetPkProperty)->getValue($related));
             $indexed[$pk] = $related;
         }
 
         foreach ($resourceModels as $resourceModel) {
-            $fkValue = (new \ReflectionProperty($resourceModel, $relation->foreignKey))->getValue($resourceModel);
+            $fkValue = $this->prop($resourceModel::class, $relation->foreignKey)->getValue($resourceModel);
             if ($fkValue === null) {
                 $this->relationState($resourceModel, $relation->propertyName)->markLoaded(null);
                 continue;
@@ -106,12 +106,12 @@ final class ResourceModelRelationLoader
         $grouped = [];
         foreach ($rows as $row) {
             $related = $this->hydrator->hydrate($row, $relation->targetClass);
-            $fk = $this->arrayKeyFrom((new \ReflectionProperty($related, $relation->foreignKey))->getValue($related));
+            $fk = $this->arrayKeyFrom($this->prop($related::class, $relation->foreignKey)->getValue($related));
             $grouped[$fk][] = $related;
         }
 
         foreach ($resourceModels as $resourceModel) {
-            $parentId = $this->arrayKeyFrom((new \ReflectionProperty($resourceModel, $parentPkProperty))->getValue($resourceModel));
+            $parentId = $this->arrayKeyFrom($this->prop($resourceModel::class, $parentPkProperty)->getValue($resourceModel));
             $this->relationState($resourceModel, $relation->propertyName)->markLoaded($grouped[$parentId] ?? []);
         }
     }
@@ -139,12 +139,12 @@ final class ResourceModelRelationLoader
         $indexed = [];
         foreach ($rows as $row) {
             $related = $this->hydrator->hydrate($row, $relation->targetClass);
-            $fk = $this->arrayKeyFrom((new \ReflectionProperty($related, $relation->foreignKey))->getValue($related));
+            $fk = $this->arrayKeyFrom($this->prop($related::class, $relation->foreignKey)->getValue($related));
             $indexed[$fk] = $related;
         }
 
         foreach ($resourceModels as $resourceModel) {
-            $parentId = $this->arrayKeyFrom((new \ReflectionProperty($resourceModel, $parentPkProperty))->getValue($resourceModel));
+            $parentId = $this->arrayKeyFrom($this->prop($resourceModel::class, $parentPkProperty)->getValue($resourceModel));
             $this->relationState($resourceModel, $relation->propertyName)->markLoaded($indexed[$parentId] ?? null);
         }
     }
@@ -201,12 +201,12 @@ final class ResourceModelRelationLoader
         $indexed = [];
         foreach ($rows as $row) {
             $related = $this->hydrator->hydrate($row, $relation->targetClass);
-            $pk = $this->arrayKeyFrom((new \ReflectionProperty($related, $targetPkProperty))->getValue($related));
+            $pk = $this->arrayKeyFrom($this->prop($related::class, $targetPkProperty)->getValue($related));
             $indexed[$pk] = $related;
         }
 
         foreach ($resourceModels as $resourceModel) {
-            $parentId = $this->arrayKeyFrom((new \ReflectionProperty($resourceModel, $parentPkProperty))->getValue($resourceModel));
+            $parentId = $this->arrayKeyFrom($this->prop($resourceModel::class, $parentPkProperty)->getValue($resourceModel));
             $items = [];
             foreach ($pivotMap[$parentId] ?? [] as $relatedId) {
                 if (isset($indexed[$relatedId])) {
@@ -225,7 +225,7 @@ final class ResourceModelRelationLoader
     {
         $values = [];
         foreach ($resourceModels as $resourceModel) {
-            $property = new \ReflectionProperty($resourceModel, $propertyName);
+            $property = $this->prop($resourceModel::class, $propertyName);
             if (!$property->isInitialized($resourceModel)) {
                 continue;
             }
@@ -269,7 +269,7 @@ final class ResourceModelRelationLoader
 
     private function relationState(object $resourceModel, string $relationProperty): RelationState
     {
-        $property = new \ReflectionProperty($resourceModel, $relationProperty);
+        $property = $this->prop($resourceModel::class, $relationProperty);
         $current = $property->getValue($resourceModel);
 
         if (!$current instanceof RelationState) {
@@ -320,5 +320,23 @@ final class ResourceModelRelationLoader
             'Expected int|string relation key, got %s.',
             get_debug_type($value),
         ));
+    }
+
+    /**
+     * Cached ReflectionProperty lookup. Relation batching calls these in
+     * per-row loops; a ReflectionProperty binds to the CLASS (getValue takes
+     * the instance), so one instance per class::property serves every row.
+     *
+     * @var array<string, \ReflectionProperty>
+     */
+    private array $propertyCache = [];
+
+    /**
+     * @param class-string $class
+     */
+    private function prop(string $class, string $property): \ReflectionProperty
+    {
+        return $this->propertyCache[$class . '::' . $property]
+            ??= new \ReflectionProperty($class, $property);
     }
 }
