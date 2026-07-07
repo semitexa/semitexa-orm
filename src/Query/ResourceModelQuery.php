@@ -442,7 +442,9 @@ final class ResourceModelQuery
             return 0;
         }
 
-        return is_int($value) || (is_string($value) && ctype_digit($value)) ? (int) $value : (float) $value;
+        return is_int($value) || (is_string($value) && preg_match('/^-?\d+$/', $value) === 1)
+            ? (int) $value
+            : (float) $value;
     }
 
     /**
@@ -477,7 +479,9 @@ final class ResourceModelQuery
      * Row counts grouped by one column — the reporting workhorse:
      * `$q->countBy(ColumnRef::for(Task::class, 'status'))` →
      * `['open' => 12, 'done' => 30]`. Same WHERE / tenant / soft-delete
-     * state as fetchAll(); groups ordered by count descending.
+     * state as fetchAll(); groups ordered by count descending. NOTE: a SQL
+     * NULL group surfaces under the '' array key (PHP null-key coercion) —
+     * filter nulls in WHERE when that distinction matters.
      *
      * @return array<int|string, int>
      */

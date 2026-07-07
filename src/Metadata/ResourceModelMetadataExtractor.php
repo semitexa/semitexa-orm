@@ -61,6 +61,14 @@ final class ResourceModelMetadataExtractor
                         $property->getName(),
                     ));
                 }
+                $type = $property->getType();
+                if (!$type instanceof \ReflectionNamedType || $type->getName() !== 'int') {
+                    throw new \LogicException(sprintf(
+                        '#[Version] on %s::$%s must be typed int — the guard compares and increments it numerically.',
+                        $resourceModelClass,
+                        $property->getName(),
+                    ));
+                }
                 if ($versionProperty !== null) {
                     throw new \LogicException(sprintf(
                         '%s declares more than one #[Version] property (%s and %s).',

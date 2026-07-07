@@ -68,6 +68,25 @@ final class OptimisticLockingTest extends TestCase
     }
 
     #[Test]
+    public function update_returns_the_bumped_aggregate_so_sequential_updates_work(): void
+    {
+        $engine = $this->orm->getAggregateWriteEngine();
+
+        $note = new OlNoteDomain('n1', 'v2', 1);
+        $note = $engine->update($note, OlNoteFixture::class, $this->registry());
+        self::assertInstanceOf(OlNoteDomain::class, $note);
+        self::assertSame(2, $note->version, 'update() must hand back the bumped version.');
+
+        // The returned aggregate is immediately updatable again — no self-stale.
+        $note = $engine->update(new OlNoteDomain('n1', 'v3', $note->version), OlNoteFixture::class, $this->registry());
+        self::assertSame(3, $note->version);
+
+        $row = $this->orm->getAdapter()->query('SELECT body, version FROM ol_notes')->rows[0];
+        self::assertSame('v3', $row['body']);
+        self::assertSame(3, (int) $row['version']);
+    }
+
+    #[Test]
     public function updating_a_deleted_row_also_throws(): void
     {
         $this->orm->getAdapter()->execute("DELETE FROM ol_notes WHERE id = 'n1'");

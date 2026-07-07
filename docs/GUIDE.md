@@ -21,7 +21,7 @@ SQL decision, not an accident.
 
 ```php
 #[FromTable(name: 'orders')]
-#[TenantScoped(strategy: 'column', column: 'tenantId')]
+#[TenantScoped(strategy: 'same_storage', column: 'tenantId')]
 #[SoftDelete(column: 'deletedAt')]
 final readonly class OrderResource
 {
@@ -140,13 +140,16 @@ version the aggregate was read with and bump it in the same statement:
 
 ```php
 try {
-    $repo->update($order);                 // WHERE id = ? AND version = ?
+    $order = $repo->update($order);        // WHERE id = ? AND version = ?
 } catch (StaleAggregateException) {
     // someone committed first — re-read, reapply, retry
 }
 ```
 
-Without `#[Version]` updates behave as before (last write wins).
+`update()` returns the aggregate with the BUMPED version — reassign it if
+you keep working with the object, otherwise the next update of the stale
+in-memory copy will (correctly) throw. Without `#[Version]` updates behave
+as before (last write wins).
 
 ## Transactions
 
@@ -157,9 +160,15 @@ $orm->getTransactionManager()->run(function (DatabaseAdapterInterface $tx) {
 });
 ```
 
-Nesting creates savepoints. Events buffered via `bufferEvent()` flush
-only after the OUTER commit. All transaction state is per-coroutine
+Nesting creates savepoints. All transaction state is per-coroutine
 (`CoroutineLocal`) — safe under Swoole concurrency.
+
+The engine's `ResourceChangedEvent` auto-publish is commit-gated: a
+repository write that nests inside your `run()` buffers its signal on the
+TransactionManager and it flushes after YOUR commit (and is dropped on
+rollback). If you call `bufferEvent()` yourself, wire a dispatcher with
+`setEventDispatcher()` first — flushing with no dispatcher discards
+silently.
 
 ## Wiring a store
 

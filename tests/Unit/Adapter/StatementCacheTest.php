@@ -49,6 +49,31 @@ final class StatementCacheTest extends TestCase
     }
 
     #[Test]
+    public function a_failing_execute_is_not_blindly_retried(): void
+    {
+        // The re-prepare retry is gated to MySQL 1615. Any other failure
+        // (here: duplicate key) must propagate on the FIRST execute — a blind
+        // retry inside an open transaction could silently commit partial
+        // writes in autocommit after the tx was destroyed.
+        $pdo = new CountingPdo('sqlite::memory:');
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $pdo->exec('CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)');
+        $adapter = new MysqlAdapter(new FixedConnectionPool($pdo));
+
+        $adapter->execute('INSERT INTO t (id, v) VALUES (:id, :v)', ['id' => 1, 'v' => 'a']);
+        $before = $pdo->prepareCalls;
+
+        try {
+            $adapter->execute('INSERT INTO t (id, v) VALUES (:id, :v)', ['id' => 1, 'v' => 'dup']);
+            self::fail('The duplicate-key insert must throw.');
+        } catch (\PDOException) {
+            // expected
+        }
+
+        self::assertSame($before, $pdo->prepareCalls, 'No re-prepare (= no retry) on a non-1615 failure.');
+    }
+
+    #[Test]
     public function distinct_sql_strings_prepare_separately(): void
     {
         $pdo = new CountingPdo('sqlite::memory:');

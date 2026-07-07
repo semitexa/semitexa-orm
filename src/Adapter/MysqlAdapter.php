@@ -24,6 +24,13 @@ class MysqlAdapter implements DatabaseAdapterInterface
      * statement is only ever used inside this method's pop()/push() window —
      * the connection (and thus the statement) has exactly one owner at a time.
      *
+     * CAVEAT for future tenant-switching pools: MySQL binds the default
+     * schema at PREPARE time. A pool whose switchTo() re-points an existing
+     * connection to another database MUST clear that connection's cached
+     * statements, or pre-switch statements would execute against the previous
+     * tenant's schema. No in-repo pool implements switchTo() today (all
+     * throw) — revisit before shipping one.
+     *
      * @var \WeakMap<\PDO, array<string, \PDOStatement>>
      */
     private \WeakMap $statements;
@@ -67,9 +74,15 @@ class MysqlAdapter implements DatabaseAdapterInterface
             try {
                 $stmt->execute($params);
             } catch (\PDOException $e) {
-                // Defensive re-prepare: a cached statement can be invalidated
-                // server-side (e.g. MySQL 1615 after DDL touches the table).
-                // Drop it, prepare fresh, retry ONCE; a second failure is real.
+                // Defensive re-prepare, gated to MySQL 1615 ("statement needs
+                // to be re-prepared" — DDL invalidated the cached statement).
+                // NEVER retry other errors: a deadlock (1213) or lock-wait
+                // rollback inside an open transaction destroys the tx, and a
+                // blind re-execute would silently succeed in autocommit —
+                // partial writes with no error trail.
+                if (($e->errorInfo[1] ?? null) !== 1615) {
+                    throw $e;
+                }
                 $this->forgetStatement($connection, $sql);
                 $stmt = $this->preparedStatement($connection, $sql);
                 $stmt->execute($params);
@@ -154,6 +167,7 @@ class MysqlAdapter implements DatabaseAdapterInterface
 
     private function preparedStatement(\PDO $connection, string $sql): \PDOStatement
     {
+        /** @var array<string, \PDOStatement> $cache */
         $cache = $this->statements[$connection] ?? [];
         $stmt = $cache[$sql] ?? null;
         if ($stmt instanceof \PDOStatement) {
@@ -161,6 +175,10 @@ class MysqlAdapter implements DatabaseAdapterInterface
         }
 
         $stmt = $connection->prepare($sql);
+        if ($stmt === false) {
+            // Unreachable under ERRMODE_EXCEPTION; guards the type either way.
+            throw new \RuntimeException('PDO::prepare returned false for: ' . $sql);
+        }
         if (count($cache) >= self::STATEMENT_CACHE_MAX) {
             $cache = [];
         }
@@ -172,6 +190,7 @@ class MysqlAdapter implements DatabaseAdapterInterface
 
     private function forgetStatement(\PDO $connection, string $sql): void
     {
+        /** @var array<string, \PDOStatement> $cache */
         $cache = $this->statements[$connection] ?? [];
         unset($cache[$sql]);
         $this->statements[$connection] = $cache;

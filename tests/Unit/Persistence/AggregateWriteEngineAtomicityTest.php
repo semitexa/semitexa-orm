@@ -126,6 +126,94 @@ final class AggregateWriteEngineAtomicityTest extends TestCase
         self::assertSame(0, (int) $adapter->query('SELECT COUNT(*) AS c FROM reviews')->rows[0]['c']);
     }
 
+    #[Test]
+    public function a_nested_write_buffers_its_change_signal_until_the_outer_commit(): void
+    {
+        $this->orm->getAdapter()->execute(
+            'CREATE TABLE reviews (id TEXT PRIMARY KEY, productId TEXT, rating INTEGER)'
+        );
+
+        $dispatched = [];
+        $spy = new class($dispatched) implements \Semitexa\Core\Event\EventDispatcherInterface {
+            public function __construct(private array &$sink) {}
+            public function dispatch(object $event): void
+            {
+                $this->sink[] = $event;
+            }
+
+            public function create(string $eventClass, array $payload): object
+            {
+                return new $eventClass(...$payload);
+            }
+
+            public function addPostDispatchHook(callable $hook): void
+            {
+            }
+        };
+
+        $engine = new AggregateWriteEngine(
+            $this->orm->getAdapter(),
+            new ResourceModelHydrator(),
+            null,
+            $spy,
+            fn () => $this->orm->getTransactionManager(),
+        );
+
+        $duringTx = null;
+        $this->orm->getTransactionManager()->run(function () use ($engine, &$dispatched, &$duringTx): void {
+            $engine->insert($this->productWithReviews(), ValidProductResourceModel::class, $this->registry());
+            $duringTx = count($dispatched);
+        });
+
+        self::assertSame(0, $duringTx, 'The change signal must NOT fire inside the open outer transaction.');
+        self::assertCount(1, $dispatched, 'The buffered signal must flush after the outer commit.');
+    }
+
+    #[Test]
+    public function a_rolled_back_outer_transaction_drops_the_buffered_signal(): void
+    {
+        $this->orm->getAdapter()->execute(
+            'CREATE TABLE reviews (id TEXT PRIMARY KEY, productId TEXT, rating INTEGER)'
+        );
+
+        $dispatched = [];
+        $spy = new class($dispatched) implements \Semitexa\Core\Event\EventDispatcherInterface {
+            public function __construct(private array &$sink) {}
+            public function dispatch(object $event): void
+            {
+                $this->sink[] = $event;
+            }
+
+            public function create(string $eventClass, array $payload): object
+            {
+                return new $eventClass(...$payload);
+            }
+
+            public function addPostDispatchHook(callable $hook): void
+            {
+            }
+        };
+
+        $engine = new AggregateWriteEngine(
+            $this->orm->getAdapter(),
+            new ResourceModelHydrator(),
+            null,
+            $spy,
+            fn () => $this->orm->getTransactionManager(),
+        );
+
+        try {
+            $this->orm->getTransactionManager()->run(function () use ($engine): void {
+                $engine->insert($this->productWithReviews(), ValidProductResourceModel::class, $this->registry());
+                throw new \RuntimeException('outer rollback');
+            });
+        } catch (\RuntimeException) {
+            // expected
+        }
+
+        self::assertCount(0, $dispatched, 'A rolled-back write must not signal a change that never existed.');
+    }
+
     private function registry(): MapperRegistry
     {
         $registry = new MapperRegistry();

@@ -101,11 +101,18 @@ final class AggregateWriteEngine
     public function update(object $domainModel, string $resourceModelClass, MapperRegistry $mapperRegistry): object
     {
         $rootResourceModel = $mapperRegistry->mapToSourceModel($domainModel, $resourceModelClass);
-        $this->atomically(function (DatabaseAdapterInterface $adapter) use ($rootResourceModel): void {
-            $this->updateResourceModel($rootResourceModel, $adapter);
-        });
+        $updatedResourceModel = $this->atomically(
+            fn (DatabaseAdapterInterface $adapter): object => $this->updateResourceModel($rootResourceModel, $adapter),
+        );
 
         $this->dispatchResourceChanged($resourceModelClass, ResourceChangeOperation::Update);
+
+        // On a #[Version] resource the row now carries version+1 — return the
+        // BUMPED domain so `update($x); update($x);` keeps working. Returning
+        // the input here would self-stale every sequential update.
+        if ($updatedResourceModel !== $rootResourceModel) {
+            return $mapperRegistry->mapToDomain($updatedResourceModel, $domainModel::class);
+        }
 
         return $domainModel;
     }
@@ -146,7 +153,26 @@ final class AggregateWriteEngine
             }
 
             $resourceKey = ResourceMetadata::for($resourceModelClass)->getResourceKey();
-            $dispatcher->dispatch(new ResourceChangedEvent($resourceKey, $operation));
+            $event = new ResourceChangedEvent($resourceKey, $operation);
+
+            // Commit-gate: when this write nested inside a CALLER transaction
+            // (our atomically() became a savepoint and has already returned,
+            // but the outer tx is still open), an immediate dispatch would let
+            // subscribers re-query PRE-COMMIT state — and an outer rollback
+            // would have signalled a change that never existed. Buffer on the
+            // TransactionManager instead; it flushes after the outer commit
+            // and clears on rollback. Late-wire the dispatcher so the flush
+            // can actually deliver.
+            $transactions = $this->transactions instanceof \Closure
+                ? ($this->transactions)()
+                : $this->transactions;
+            if ($transactions !== null && $transactions->isActive()) {
+                $transactions->setEventDispatcher($dispatcher);
+                $transactions->bufferEvent($event);
+                return;
+            }
+
+            $dispatcher->dispatch($event);
         } catch (\Throwable) {
             // Intentionally swallowed: the write has already succeeded. Invalidation
             // is a best-effort, data-less signal — never break the write path on it.
@@ -164,12 +190,15 @@ final class AggregateWriteEngine
         return $resourceModel;
     }
 
-    private function updateResourceModel(object $resourceModel, DatabaseAdapterInterface $adapter): void
+    /** @return object the resource model as persisted (version-bumped when #[Version] applies) */
+    private function updateResourceModel(object $resourceModel, DatabaseAdapterInterface $adapter): object
     {
         $metadata = $this->metadata($resourceModel::class);
         $this->validateReferenceOnlyRelations($resourceModel, $metadata);
-        $this->executeUpdate($resourceModel, $metadata, $adapter);
+        $resourceModel = $this->executeUpdate($resourceModel, $metadata, $adapter);
         $this->persistOwnedRelations($resourceModel, $metadata, false, $adapter);
+
+        return $resourceModel;
     }
 
     private function deleteResourceModel(object $resourceModel, DatabaseAdapterInterface $adapter): void
@@ -209,7 +238,8 @@ final class AggregateWriteEngine
         return $this->withPropertyValue($resourceModel, $primaryKey, (int) $result->lastInsertId);
     }
 
-    private function executeUpdate(object $resourceModel, ResourceModelMetadata $metadata, DatabaseAdapterInterface $adapter): void
+    /** @return object the input model, version-bumped when #[Version] applies */
+    private function executeUpdate(object $resourceModel, ResourceModelMetadata $metadata, DatabaseAdapterInterface $adapter): object
     {
         $primaryKey = $this->requirePrimaryKey($metadata);
         $row = $this->hydrator->dehydrate($resourceModel);
@@ -264,6 +294,12 @@ final class AggregateWriteEngine
                 (int) $expectedVersion,
             ));
         }
+
+        if ($metadata->versionProperty !== null) {
+            return $this->withPropertyValue($resourceModel, $metadata->versionProperty, (int) $expectedVersion + 1);
+        }
+
+        return $resourceModel;
     }
 
     private function executeDelete(object $resourceModel, ResourceModelMetadata $metadata, DatabaseAdapterInterface $adapter): void
