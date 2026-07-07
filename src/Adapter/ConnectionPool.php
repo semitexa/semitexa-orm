@@ -202,6 +202,17 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
         return $this->size;
     }
 
+    /**
+     * Whether pop() is currently handing out throwaway connections: outside a
+     * coroutine every pop() mints a fresh PDO and push() drops it, so callers
+     * must not hold references (e.g. cached statements) that outlive the call —
+     * each held reference keeps a real server socket open.
+     */
+    public function handsOutEphemeralConnections(): bool
+    {
+        return ! self::inCoroutine();
+    }
+
     public function getAvailable(): int
     {
         if ($this->pool === null) {

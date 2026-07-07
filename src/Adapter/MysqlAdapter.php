@@ -162,6 +162,22 @@ class MysqlAdapter implements DatabaseAdapterInterface
 
     private function preparedStatement(\PDO $connection, string $sql): \PDOStatement
     {
+        // When the pool hands out a FRESH un-pooled PDO per pop() (its
+        // non-coroutine fallback) and push() drops it, the connection lives on
+        // refcount alone. Caching its statement would create a
+        // WeakMap→PDOStatement→PDO cycle that only cycle-GC can reclaim, so
+        // query-dense CLI/phpunit stretches hold every socket open until the
+        // next sweep (observed: MySQL max_connections exhausted mid-suite).
+        // Cache only connections that will actually come back.
+        if ($this->pool instanceof ConnectionPool && $this->pool->handsOutEphemeralConnections()) {
+            $stmt = $connection->prepare($sql);
+            if ($stmt === false) {
+                throw new \RuntimeException('PDO::prepare returned false for: ' . $sql);
+            }
+
+            return $stmt;
+        }
+
         /** @var array<string, \PDOStatement> $cache */
         $cache = $this->statements[$connection] ?? [];
         $stmt = $cache[$sql] ?? null;
