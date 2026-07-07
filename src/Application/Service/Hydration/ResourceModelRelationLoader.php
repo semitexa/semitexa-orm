@@ -20,9 +20,17 @@ final class ResourceModelRelationLoader
     ) {}
 
     /**
+     * Batch-load relations for a set of hydrated resource models.
+     *
+     * `$onlyRelations` accepts DOT PATHS for nested eager loading:
+     * `['items.product', 'customer']` loads `items` and `customer` on the
+     * roots, then recurses into the loaded items and batch-loads their
+     * `product` — every level stays one `IN (...)` query per relation, so a
+     * P-parent chain of depth D costs O(relations x D) queries, never O(rows).
+     *
      * @param object[] $resourceModels
      * @param class-string $resourceModelClass
-     * @param string[]|null $onlyRelations
+     * @param string[]|null $onlyRelations relation property names, dot paths allowed
      */
     public function loadRelations(array $resourceModels, string $resourceModelClass, ?array $onlyRelations = null): void
     {
@@ -32,8 +40,23 @@ final class ResourceModelRelationLoader
 
         $metadata = ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($resourceModelClass);
 
+        // Split dot paths into this level's names + per-relation remainders.
+        $topLevel = null;
+        $nested = [];
+        if ($onlyRelations !== null) {
+            $topLevel = [];
+            foreach ($onlyRelations as $path) {
+                $dot = strpos($path, '.');
+                $head = $dot === false ? $path : substr($path, 0, $dot);
+                $topLevel[$head] = $head;
+                if ($dot !== false) {
+                    $nested[$head][] = substr($path, $dot + 1);
+                }
+            }
+        }
+
         foreach ($metadata->relations() as $relation) {
-            if ($onlyRelations !== null && !in_array($relation->propertyName, $onlyRelations, true)) {
+            if ($topLevel !== null && !isset($topLevel[$relation->propertyName])) {
                 continue;
             }
 
@@ -43,7 +66,50 @@ final class ResourceModelRelationLoader
                 RelationKind::OneToOne => $this->loadOneToOne($resourceModels, $relation, $resourceModelClass),
                 RelationKind::ManyToMany => $this->loadManyToMany($resourceModels, $relation, $resourceModelClass),
             };
+
+            $children = $nested[$relation->propertyName] ?? [];
+            if ($children !== []) {
+                $related = $this->collectLoadedRelated($resourceModels, $relation->propertyName);
+                if ($related !== []) {
+                    $this->loadRelations($related, $relation->targetClass, $children);
+                }
+            }
         }
+    }
+
+    /**
+     * The just-loaded related models of one relation across all parents,
+     * deduplicated by identity (belongsTo shares hydrated instances between
+     * parents) — the input set for the next nesting level.
+     *
+     * @param object[] $resourceModels
+     * @return list<object>
+     */
+    private function collectLoadedRelated(array $resourceModels, string $relationProperty): array
+    {
+        $out = [];
+        foreach ($resourceModels as $resourceModel) {
+            $raw = $this->prop($resourceModel::class, $relationProperty)->getValue($resourceModel);
+            $value = $raw instanceof RelationState
+                ? ($raw->isLoaded() ? $raw->value() : null)
+                : $raw;
+            if ($value === null) {
+                continue;
+            }
+            if (is_iterable($value)) {
+                foreach ($value as $item) {
+                    if (is_object($item)) {
+                        $out[spl_object_id($item)] = $item;
+                    }
+                }
+                continue;
+            }
+            if (is_object($value)) {
+                $out[spl_object_id($value)] = $value;
+            }
+        }
+
+        return array_values($out);
     }
 
     /**
