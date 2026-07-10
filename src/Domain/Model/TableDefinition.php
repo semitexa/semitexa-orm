@@ -38,6 +38,20 @@ class TableDefinition
 
     public function addIndex(IndexDefinition $index): void
     {
+        // Dedupe by effective DDL name: an explicit #[Index] and a #[Filterable]
+        // auto-index on the same columns would otherwise emit two CREATE INDEX
+        // statements with the same generated name (fatal on SQLite table create).
+        $effectiveName = $index->name
+            ?? ($index->unique ? 'uniq' : 'idx') . '_' . $this->name . '_' . implode('_', $index->columns);
+
+        foreach ($this->indexes as $existing) {
+            $existingName = $existing->name
+                ?? ($existing->unique ? 'uniq' : 'idx') . '_' . $this->name . '_' . implode('_', $existing->columns);
+            if ($existingName === $effectiveName) {
+                return;
+            }
+        }
+
         $this->indexes[] = $index;
     }
 
