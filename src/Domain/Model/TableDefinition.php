@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Domain\Model;
 
 use Semitexa\Orm\Domain\Enum\ForeignKeyAction;
+use Semitexa\Orm\Exception\InvalidIndexDeclarationException;
 
 
 class TableDefinition
@@ -41,18 +42,37 @@ class TableDefinition
         // Dedupe by effective DDL name: an explicit #[Index] and a #[Filterable]
         // auto-index on the same columns would otherwise emit two CREATE INDEX
         // statements with the same generated name (fatal on SQLite table create).
-        $effectiveName = $index->name
-            ?? ($index->unique ? 'uniq' : 'idx') . '_' . $this->name . '_' . implode('_', $index->columns);
+        $effectiveName = $this->effectiveIndexName($index);
 
         foreach ($this->indexes as $existing) {
-            $existingName = $existing->name
-                ?? ($existing->unique ? 'uniq' : 'idx') . '_' . $this->name . '_' . implode('_', $existing->columns);
-            if ($existingName === $effectiveName) {
+            if ($this->effectiveIndexName($existing) !== $effectiveName) {
+                continue;
+            }
+
+            // A true duplicate (same columns AND same uniqueness) is dropped.
+            // A name collision between differently-defined indexes is NOT a
+            // duplicate — silently discarding it would drop a uniqueness
+            // constraint or a distinct index and emit an incorrect schema.
+            // Fail loudly so the schema author resolves the naming conflict.
+            if ($existing->columns === $index->columns && $existing->unique === $index->unique) {
                 return;
             }
+
+            throw new InvalidIndexDeclarationException(sprintf(
+                'Index name collision on table "%s": "%s" is already defined with different '
+                . 'columns or uniqueness. Rename one of the indexes to resolve the conflict.',
+                $this->name,
+                $effectiveName,
+            ));
         }
 
         $this->indexes[] = $index;
+    }
+
+    private function effectiveIndexName(IndexDefinition $index): string
+    {
+        return $index->name
+            ?? ($index->unique ? 'uniq' : 'idx') . '_' . $this->name . '_' . implode('_', $index->columns);
     }
 
     public function addForeignKey(ForeignKeyDefinition $fk): void
