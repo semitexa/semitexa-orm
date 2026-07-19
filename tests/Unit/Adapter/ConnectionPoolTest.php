@@ -139,6 +139,58 @@ final class ConnectionPoolTest extends TestCase
         });
     }
 
+    #[Test]
+    public function pop_releases_the_claimed_slot_when_the_factory_throws(): void
+    {
+        if (!class_exists(\Swoole\Coroutine::class)) {
+            self::markTestSkipped('Swoole extension is required.');
+        }
+
+        Coroutine\run(function () {
+            $fail = true;
+            $pool = new ConnectionPool(1, static function () use (&$fail): \PDO {
+                if ($fail) {
+                    // Simulate a transient PDO connect failure — a network blip
+                    // or MySQL momentarily refusing the connection.
+                    throw new \PDOException('simulated connect failure');
+                }
+                return new \PDO('sqlite::memory:');
+            });
+
+            $ref = new \ReflectionClass($pool);
+            $createdProp = $ref->getProperty('created');
+            $createdProp->setAccessible(true);
+
+            // Repeated connect failures must NOT accumulate on the slot counter.
+            // Before the fix each failure leaked one slot (cmpset ran, the factory
+            // threw, nothing rolled it back); after `size` failures the pool was
+            // full-but-empty and every pop() blocked forever on the Channel — the
+            // production ratcheting deadlock this guards against.
+            for ($i = 0; $i < 5; ++$i) {
+                try {
+                    $pool->pop();
+                    self::fail('Expected the factory exception to propagate.');
+                } catch (\PDOException $e) {
+                    self::assertSame('simulated connect failure', $e->getMessage());
+                }
+
+                self::assertSame(
+                    0,
+                    $createdProp->getValue($pool)->get(),
+                    'A failed factory call must release the slot it optimistically claimed.',
+                );
+            }
+
+            // Not wedged: once the factory recovers, pop() creates a real
+            // connection via the fast path instead of blocking on an empty
+            // Channel (which, with timeout -1, would hang forever).
+            $fail = false;
+            $conn = $pool->pop();
+            self::assertInstanceOf(\PDO::class, $conn);
+            self::assertSame(1, $createdProp->getValue($pool)->get());
+        });
+    }
+
     protected function tearDown(): void
     {
         if (class_exists(\Swoole\Runtime::class)) {

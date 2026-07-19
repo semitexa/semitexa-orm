@@ -89,7 +89,22 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
             if ($this->created->cmpset($current, $current + 1)) {
                 // We won the race — create and return the new connection
                 // without pushing it to the channel first.
-                return ($this->factory)();
+                try {
+                    return ($this->factory)();
+                } catch (\Throwable $e) {
+                    // The factory (a real PDO connect) can throw: a transient
+                    // network blip, MySQL momentarily refusing, an auth hiccup.
+                    // The slot was already claimed by the cmpset above, so it
+                    // MUST be released here — nothing else ever decrements
+                    // `created`. Without this rollback every failed connect
+                    // permanently burns a slot; after `size` failures the pool
+                    // is full-but-empty forever, so pop() falls through to the
+                    // Channel->pop() below and (with timeout -1) blocks every
+                    // caller indefinitely. That ratcheting deadlock took down
+                    // production with all workers asleep in pop().
+                    $this->created->sub(1);
+                    throw $e;
+                }
             }
         }
 
@@ -150,7 +165,16 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
 
         while ($current < $this->size) {
             if ($this->created->cmpset($current, $current + 1)) {
-                $pool->push(($this->factory)());
+                // Same slot-leak guard as pop(): if the factory throws (DB not
+                // yet reachable at worker boot) release the claimed slot before
+                // propagating, so a later retry/pop() can still fill the pool
+                // instead of it being permanently short one connection.
+                try {
+                    $pool->push(($this->factory)());
+                } catch (\Throwable $e) {
+                    $this->created->sub(1);
+                    throw $e;
+                }
             }
 
             $current = $this->created->get();
