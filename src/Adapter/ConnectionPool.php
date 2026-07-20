@@ -88,23 +88,10 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
         if ($this->pool->isEmpty() && $current < $this->size) {
             if ($this->created->cmpset($current, $current + 1)) {
                 // We won the race — create and return the new connection
-                // without pushing it to the channel first.
-                try {
-                    return ($this->factory)();
-                } catch (\Throwable $e) {
-                    // The factory (a real PDO connect) can throw: a transient
-                    // network blip, MySQL momentarily refusing, an auth hiccup.
-                    // The slot was already claimed by the cmpset above, so it
-                    // MUST be released here — nothing else ever decrements
-                    // `created`. Without this rollback every failed connect
-                    // permanently burns a slot; after `size` failures the pool
-                    // is full-but-empty forever, so pop() falls through to the
-                    // Channel->pop() below and (with timeout -1) blocks every
-                    // caller indefinitely. That ratcheting deadlock took down
-                    // production with all workers asleep in pop().
-                    $this->created->sub(1);
-                    throw $e;
-                }
+                // without pushing it to the channel first. The cmpset above
+                // has claimed the slot; createForClaimedSlot() releases it if
+                // the connect fails.
+                return $this->createForClaimedSlot();
             }
         }
 
@@ -165,16 +152,11 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
 
         while ($current < $this->size) {
             if ($this->created->cmpset($current, $current + 1)) {
-                // Same slot-leak guard as pop(): if the factory throws (DB not
-                // yet reachable at worker boot) release the claimed slot before
-                // propagating, so a later retry/pop() can still fill the pool
-                // instead of it being permanently short one connection.
-                try {
-                    $pool->push(($this->factory)());
-                } catch (\Throwable $e) {
-                    $this->created->sub(1);
-                    throw $e;
-                }
+                // createForClaimedSlot() releases the slot if the factory
+                // throws (DB not yet reachable at worker boot), so a later
+                // retry/pop() can still fill the pool instead of it being
+                // permanently short one connection.
+                $pool->push($this->createForClaimedSlot());
             }
 
             $current = $this->created->get();
@@ -273,21 +255,52 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
      *
      * Only called for connections retrieved from the channel (not for freshly
      * created ones), so the overhead is limited to idle connections.
-     * The $created counter is NOT incremented on reconnect — the slot was
-     * already claimed when the connection was first opened.
+     *
+     * The slot was already claimed when the connection was first opened, so a
+     * successful reconnect leaves `created` unchanged. But the reconnect is a
+     * real PDO connect that can fail (MySQL briefly unreachable exactly when we
+     * notice the socket is dead): the stale connection is then discarded and no
+     * replacement is produced, so the slot MUST be released — otherwise it
+     * leaks identically to the pop()/fill() paths and ratchets the pool into
+     * the full-but-empty deadlock. createForClaimedSlot() does that release.
      */
     private function ensureAlive(\PDO $connection): \PDO
     {
         try {
             $stmt = $connection->query('SELECT 1');
             if ($stmt === false) {
-                return ($this->factory)();
+                return $this->createForClaimedSlot();
             }
 
             return $connection;
         } catch (\PDOException) {
             // Connection is stale — replace it with a fresh one.
+            return $this->createForClaimedSlot();
+        }
+    }
+
+    /**
+     * Open a connection for a slot already counted in `created`, releasing the
+     * slot if the factory throws.
+     *
+     * Every caller has accounted for the slot before calling: pop()/fill() via
+     * the cmpset(+1) that just claimed it, ensureAlive() via the slot the dead
+     * pooled connection still occupies. A PDO connect can fail — a transient
+     * network blip, MySQL momentarily refusing, an auth hiccup. If it does the
+     * slot must be released here, because nothing else ever decrements `created`
+     * (only close() resets it wholesale). Leaking `size` slots wedges the pool
+     * full-but-empty forever, so every pop() blocks on Channel->pop(-1): the
+     * ratcheting deadlock that took down production with all workers asleep in
+     * pop(). Releasing the slot lets a later pop() open a fresh connection
+     * instead, so transient DB unavailability degrades gracefully.
+     */
+    private function createForClaimedSlot(): \PDO
+    {
+        try {
             return ($this->factory)();
+        } catch (\Throwable $e) {
+            $this->created->sub(1);
+            throw $e;
         }
     }
 }

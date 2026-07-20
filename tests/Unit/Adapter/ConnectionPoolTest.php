@@ -191,6 +191,107 @@ final class ConnectionPoolTest extends TestCase
         });
     }
 
+    #[Test]
+    public function ensure_alive_releases_the_slot_when_the_reconnect_fails(): void
+    {
+        if (!class_exists(\Swoole\Coroutine::class)) {
+            self::markTestSkipped('Swoole extension is required.');
+        }
+
+        Coroutine\run(function () {
+            // 'stale' → a connection whose SELECT 1 throws (simulating a socket
+            // dropped by MySQL wait_timeout); 'fail' → the reconnect itself
+            // fails; 'ok' → a healthy connection.
+            $mode = 'stale';
+            $pool = new ConnectionPool(1, static function () use (&$mode): \PDO {
+                if ($mode === 'fail') {
+                    throw new \PDOException('reconnect failed');
+                }
+                if ($mode === 'stale') {
+                    return new class ('sqlite::memory:') extends \PDO {
+                        public function query(string $query, ?int $fetchMode = null, mixed ...$fetchModeArgs): \PDOStatement|false
+                        {
+                            throw new \PDOException('server has gone away');
+                        }
+                    };
+                }
+                return new \PDO('sqlite::memory:');
+            });
+
+            $ref = new \ReflectionClass($pool);
+            $createdProp = $ref->getProperty('created');
+            $createdProp->setAccessible(true);
+
+            // Seed the channel with one connection so the next pop() takes the
+            // slow path through ensureAlive() rather than the fast path.
+            $pool->push($pool->pop());
+            self::assertSame(1, $createdProp->getValue($pool)->get());
+            self::assertSame(1, $pool->getAvailable());
+
+            // pop() retrieves the seeded connection, SELECT 1 throws (stale),
+            // ensureAlive() reconnects via the factory — which now fails.
+            $mode = 'fail';
+            try {
+                $pool->pop();
+                self::fail('Expected the reconnect failure to propagate.');
+            } catch (\PDOException $e) {
+                self::assertSame('reconnect failed', $e->getMessage());
+            }
+
+            // The slot must be released, not leaked: without the fix `created`
+            // stays at 1 with an empty channel, so the pool is full-but-empty
+            // and the next pop() blocks forever on Channel->pop(-1).
+            self::assertSame(
+                0,
+                $createdProp->getValue($pool)->get(),
+                'A failed reconnect in ensureAlive() must release the slot.',
+            );
+
+            // Recovered: a healthy factory now yields a usable connection via
+            // the fast path instead of wedging.
+            $mode = 'ok';
+            $conn = $pool->pop();
+            self::assertInstanceOf(\PDO::class, $conn);
+            self::assertSame(1, $createdProp->getValue($pool)->get());
+        });
+    }
+
+    #[Test]
+    public function fill_releases_the_claimed_slot_when_the_factory_throws(): void
+    {
+        if (!class_exists(\Swoole\Coroutine::class)) {
+            self::markTestSkipped('Swoole extension is required.');
+        }
+
+        Coroutine\run(function () {
+            $calls = 0;
+            $pool = new ConnectionPool(3, static function () use (&$calls): \PDO {
+                ++$calls;
+                if ($calls === 2) {
+                    // The second connection fails to open at worker boot.
+                    throw new \PDOException('boot connect failure');
+                }
+                return new \PDO('sqlite::memory:');
+            });
+
+            try {
+                $pool->fill();
+                self::fail('Expected fill() to propagate the factory failure.');
+            } catch (\PDOException $e) {
+                self::assertSame('boot connect failure', $e->getMessage());
+            }
+
+            // The first connection was created and pushed; the failed second
+            // released its claimed slot instead of leaking it. So the counter
+            // matches what is actually in the channel (1), not 2.
+            $ref = new \ReflectionClass($pool);
+            $createdProp = $ref->getProperty('created');
+            $createdProp->setAccessible(true);
+            self::assertSame(1, $createdProp->getValue($pool)->get());
+            self::assertSame(1, $pool->getAvailable());
+        });
+    }
+
     protected function tearDown(): void
     {
         if (class_exists(\Swoole\Runtime::class)) {
