@@ -292,6 +292,57 @@ final class ConnectionPoolTest extends TestCase
         });
     }
 
+    #[Test]
+    public function a_parked_waiter_creates_a_connection_once_a_slot_frees(): void
+    {
+        if (!class_exists(\Swoole\Coroutine::class)) {
+            self::markTestSkipped('Swoole extension is required.');
+        }
+
+        Coroutine\run(function () {
+            $created = 0;
+            $pool = new ConnectionPool(1, static function () use (&$created): \PDO {
+                ++$created;
+                return new \PDO('sqlite::memory:');
+            });
+
+            $ref = new \ReflectionClass($pool);
+            $createdProp = $ref->getProperty('created');
+            $createdProp->setAccessible(true);
+
+            // Put the pool in the state a waiter parks in: the single slot is
+            // claimed (created == size) but the channel is empty. No push() will
+            // ever come, so the only way out is the pop() loop noticing a freed
+            // slot — the residual deadlock a plain slot-release does not close.
+            $createdProp->getValue($pool)->set(1);
+
+            $result = new \Swoole\Coroutine\Channel(1);
+
+            Coroutine::create(function () use ($pool, $result) {
+                try {
+                    $conn = $pool->pop(3.0);
+                    $result->push($conn instanceof \PDO ? 'ok' : 'not-pdo');
+                } catch (\Throwable $e) {
+                    $result->push('error:' . $e->getMessage());
+                }
+            });
+
+            // Let the waiter reach Channel->pop(), then release the slot exactly
+            // the way a concurrent createForClaimedSlot() failure would — by
+            // decrementing `created` without pushing anything to the channel.
+            Coroutine::sleep(0.1);
+            $createdProp->getValue($pool)->sub(1);
+
+            self::assertSame(
+                'ok',
+                $result->pop(3.0),
+                'A parked waiter must create a connection once a slot frees, not block until an unrelated push().',
+            );
+            self::assertSame(1, $created, 'The waiter opened exactly one connection via the claim path.');
+            self::assertSame(1, $createdProp->getValue($pool)->get());
+        });
+    }
+
     protected function tearDown(): void
     {
         if (class_exists(\Swoole\Runtime::class)) {
