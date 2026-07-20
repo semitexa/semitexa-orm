@@ -139,6 +139,210 @@ final class ConnectionPoolTest extends TestCase
         });
     }
 
+    #[Test]
+    public function pop_releases_the_claimed_slot_when_the_factory_throws(): void
+    {
+        if (!class_exists(\Swoole\Coroutine::class)) {
+            self::markTestSkipped('Swoole extension is required.');
+        }
+
+        Coroutine\run(function () {
+            $fail = true;
+            $pool = new ConnectionPool(1, static function () use (&$fail): \PDO {
+                if ($fail) {
+                    // Simulate a transient PDO connect failure — a network blip
+                    // or MySQL momentarily refusing the connection.
+                    throw new \PDOException('simulated connect failure');
+                }
+                return new \PDO('sqlite::memory:');
+            });
+
+            $ref = new \ReflectionClass($pool);
+            $createdProp = $ref->getProperty('created');
+            $createdProp->setAccessible(true);
+
+            // Repeated connect failures must NOT accumulate on the slot counter.
+            // Before the fix each failure leaked one slot (cmpset ran, the factory
+            // threw, nothing rolled it back); after `size` failures the pool was
+            // full-but-empty and every pop() blocked forever on the Channel — the
+            // production ratcheting deadlock this guards against.
+            for ($i = 0; $i < 5; ++$i) {
+                try {
+                    $pool->pop();
+                    self::fail('Expected the factory exception to propagate.');
+                } catch (\PDOException $e) {
+                    self::assertSame('simulated connect failure', $e->getMessage());
+                }
+
+                self::assertSame(
+                    0,
+                    $createdProp->getValue($pool)->get(),
+                    'A failed factory call must release the slot it optimistically claimed.',
+                );
+            }
+
+            // Not wedged: once the factory recovers, pop() creates a real
+            // connection via the fast path instead of blocking on an empty
+            // Channel (which, with timeout -1, would hang forever).
+            $fail = false;
+            $conn = $pool->pop();
+            self::assertInstanceOf(\PDO::class, $conn);
+            self::assertSame(1, $createdProp->getValue($pool)->get());
+        });
+    }
+
+    #[Test]
+    public function ensure_alive_releases_the_slot_when_the_reconnect_fails(): void
+    {
+        if (!class_exists(\Swoole\Coroutine::class)) {
+            self::markTestSkipped('Swoole extension is required.');
+        }
+
+        Coroutine\run(function () {
+            // 'stale' → a connection whose SELECT 1 throws (simulating a socket
+            // dropped by MySQL wait_timeout); 'fail' → the reconnect itself
+            // fails; 'ok' → a healthy connection.
+            $mode = 'stale';
+            $pool = new ConnectionPool(1, static function () use (&$mode): \PDO {
+                if ($mode === 'fail') {
+                    throw new \PDOException('reconnect failed');
+                }
+                if ($mode === 'stale') {
+                    return new class ('sqlite::memory:') extends \PDO {
+                        public function query(string $query, ?int $fetchMode = null, mixed ...$fetchModeArgs): \PDOStatement|false
+                        {
+                            throw new \PDOException('server has gone away');
+                        }
+                    };
+                }
+                return new \PDO('sqlite::memory:');
+            });
+
+            $ref = new \ReflectionClass($pool);
+            $createdProp = $ref->getProperty('created');
+            $createdProp->setAccessible(true);
+
+            // Seed the channel with one connection so the next pop() takes the
+            // slow path through ensureAlive() rather than the fast path.
+            $pool->push($pool->pop());
+            self::assertSame(1, $createdProp->getValue($pool)->get());
+            self::assertSame(1, $pool->getAvailable());
+
+            // pop() retrieves the seeded connection, SELECT 1 throws (stale),
+            // ensureAlive() reconnects via the factory — which now fails.
+            $mode = 'fail';
+            try {
+                $pool->pop();
+                self::fail('Expected the reconnect failure to propagate.');
+            } catch (\PDOException $e) {
+                self::assertSame('reconnect failed', $e->getMessage());
+            }
+
+            // The slot must be released, not leaked: without the fix `created`
+            // stays at 1 with an empty channel, so the pool is full-but-empty
+            // and the next pop() blocks forever on Channel->pop(-1).
+            self::assertSame(
+                0,
+                $createdProp->getValue($pool)->get(),
+                'A failed reconnect in ensureAlive() must release the slot.',
+            );
+
+            // Recovered: a healthy factory now yields a usable connection via
+            // the fast path instead of wedging.
+            $mode = 'ok';
+            $conn = $pool->pop();
+            self::assertInstanceOf(\PDO::class, $conn);
+            self::assertSame(1, $createdProp->getValue($pool)->get());
+        });
+    }
+
+    #[Test]
+    public function fill_releases_the_claimed_slot_when_the_factory_throws(): void
+    {
+        if (!class_exists(\Swoole\Coroutine::class)) {
+            self::markTestSkipped('Swoole extension is required.');
+        }
+
+        Coroutine\run(function () {
+            $calls = 0;
+            $pool = new ConnectionPool(3, static function () use (&$calls): \PDO {
+                ++$calls;
+                if ($calls === 2) {
+                    // The second connection fails to open at worker boot.
+                    throw new \PDOException('boot connect failure');
+                }
+                return new \PDO('sqlite::memory:');
+            });
+
+            try {
+                $pool->fill();
+                self::fail('Expected fill() to propagate the factory failure.');
+            } catch (\PDOException $e) {
+                self::assertSame('boot connect failure', $e->getMessage());
+            }
+
+            // The first connection was created and pushed; the failed second
+            // released its claimed slot instead of leaking it. So the counter
+            // matches what is actually in the channel (1), not 2.
+            $ref = new \ReflectionClass($pool);
+            $createdProp = $ref->getProperty('created');
+            $createdProp->setAccessible(true);
+            self::assertSame(1, $createdProp->getValue($pool)->get());
+            self::assertSame(1, $pool->getAvailable());
+        });
+    }
+
+    #[Test]
+    public function a_parked_waiter_creates_a_connection_once_a_slot_frees(): void
+    {
+        if (!class_exists(\Swoole\Coroutine::class)) {
+            self::markTestSkipped('Swoole extension is required.');
+        }
+
+        Coroutine\run(function () {
+            $created = 0;
+            $pool = new ConnectionPool(1, static function () use (&$created): \PDO {
+                ++$created;
+                return new \PDO('sqlite::memory:');
+            });
+
+            $ref = new \ReflectionClass($pool);
+            $createdProp = $ref->getProperty('created');
+            $createdProp->setAccessible(true);
+
+            // Put the pool in the state a waiter parks in: the single slot is
+            // claimed (created == size) but the channel is empty. No push() will
+            // ever come, so the only way out is the pop() loop noticing a freed
+            // slot — the residual deadlock a plain slot-release does not close.
+            $createdProp->getValue($pool)->set(1);
+
+            $result = new \Swoole\Coroutine\Channel(1);
+
+            Coroutine::create(function () use ($pool, $result) {
+                try {
+                    $conn = $pool->pop(3.0);
+                    $result->push($conn instanceof \PDO ? 'ok' : 'not-pdo');
+                } catch (\Throwable $e) {
+                    $result->push('error:' . $e->getMessage());
+                }
+            });
+
+            // Let the waiter reach Channel->pop(), then release the slot exactly
+            // the way a concurrent createForClaimedSlot() failure would — by
+            // decrementing `created` without pushing anything to the channel.
+            Coroutine::sleep(0.1);
+            $createdProp->getValue($pool)->sub(1);
+
+            self::assertSame(
+                'ok',
+                $result->pop(3.0),
+                'A parked waiter must create a connection once a slot frees, not block until an unrelated push().',
+            );
+            self::assertSame(1, $created, 'The waiter opened exactly one connection via the claim path.');
+            self::assertSame(1, $createdProp->getValue($pool)->get());
+        });
+    }
+
     protected function tearDown(): void
     {
         if (class_exists(\Swoole\Runtime::class)) {

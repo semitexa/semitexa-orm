@@ -31,6 +31,20 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
      private static bool $phpShuttingDown = false;
     private static bool $shutdownHookRegistered = false;
 
+    /**
+     * Maximum time a waiting pop() parks on the channel before re-checking
+     * whether a slot has freed up so it can create a replacement itself.
+     *
+     * A push() wakes Channel->pop() instantly regardless of this value, so
+     * under healthy load it costs nothing. It only bounds how long a waiter
+     * stays parked when a concurrent createForClaimedSlot() failure released a
+     * slot (which decrements `created` but cannot wake coroutines already
+     * asleep in Channel->pop()): the loop in pop() re-evaluates the create path
+     * every slice, so such a waiter self-heals within WAIT_SLICE_SECONDS
+     * instead of blocking until some unrelated later push().
+     */
+    private const WAIT_SLICE_SECONDS = 0.5;
+
     private ?Channel $pool;
 
     /**
@@ -81,27 +95,55 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
             return ($this->factory)();
         }
 
-        // Atomically claim a slot: increment only if we are still below the
-        // limit. cmpset(expected, new) returns true exactly once per slot.
-        $current = $this->created->get();
+        // Claim-or-wait loop. Each iteration first tries to claim a free slot
+        // and create a fresh connection; only if the pool is full does it wait
+        // for a returned one. The loop re-runs the claim check on every wake,
+        // so a slot freed by a concurrent createForClaimedSlot() failure — which
+        // decrements `created` but cannot wake coroutines already parked in
+        // Channel->pop() — is picked up here instead of leaving this waiter
+        // blocked until some unrelated later push(). That closes the residual
+        // deadlock window that a plain slot-release alone does not.
+        $remaining = $timeout;
 
-        if ($this->pool->isEmpty() && $current < $this->size) {
-            if ($this->created->cmpset($current, $current + 1)) {
+        while (true) {
+            // Re-read every iteration: a concurrent close() nulls $this->pool and
+            // wakes parked waiters, and we must not hand out a connection from a
+            // closed pool.
+            $pool = $this->requirePool();
+
+            // Atomically claim a slot: increment only if we are still below the
+            // limit. cmpset(expected, new) returns true exactly once per slot.
+            $current = $this->created->get();
+
+            if ($pool->isEmpty() && $current < $this->size
+                && $this->created->cmpset($current, $current + 1)) {
                 // We won the race — create and return the new connection
-                // without pushing it to the channel first.
-                return ($this->factory)();
+                // without pushing it to the channel first. The cmpset above
+                // has claimed the slot; createForClaimedSlot() releases it if
+                // the connect fails.
+                return $this->createForClaimedSlot();
+            }
+
+            // Pool is full (or another coroutine won the cmpset race) — wait for
+            // a returned connection. A push() wakes this instantly; the bounded
+            // slice only caps how long we park before re-checking the claim path
+            // above, so a freed slot never strands this waiter indefinitely.
+            $wait = $remaining < 0
+                ? self::WAIT_SLICE_SECONDS
+                : min($remaining, self::WAIT_SLICE_SECONDS);
+
+            $connection = $pool->pop($wait);
+            if ($connection !== false) {
+                return $this->ensureAlive($connection);
+            }
+
+            if ($remaining >= 0) {
+                $remaining -= $wait;
+                if ($remaining <= 0) {
+                    throw new \RuntimeException('Failed to obtain database connection from pool (timeout).');
+                }
             }
         }
-
-        // Either pool is not empty, limit is reached, or another coroutine
-        // won the cmpset race — wait for a returned connection.
-        $connection = $this->pool->pop($timeout);
-
-        if ($connection === false) {
-            throw new \RuntimeException('Failed to obtain database connection from pool (timeout).');
-        }
-
-        return $this->ensureAlive($connection);
     }
 
     public function push(\PDO $connection): void
@@ -135,6 +177,23 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
     }
 
     /**
+     * Return the live channel or fail if the pool has been closed.
+     *
+     * Read fresh from the property so that a close() on another coroutine
+     * (which sets $this->pool = null) is observed by a waiting pop() loop
+     * rather than the loop continuing to operate a torn-down pool.
+     */
+    private function requirePool(): Channel
+    {
+        $pool = $this->pool;
+        if ($pool === null) {
+            throw new \RuntimeException('Connection pool is closed.');
+        }
+
+        return $pool;
+    }
+
+    /**
      * Eagerly open all connections and push them into the channel.
      * Call this once during worker start (inside a coroutine context) to
      * avoid any lazy-creation overhead on the first requests.
@@ -150,7 +209,11 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
 
         while ($current < $this->size) {
             if ($this->created->cmpset($current, $current + 1)) {
-                $pool->push(($this->factory)());
+                // createForClaimedSlot() releases the slot if the factory
+                // throws (DB not yet reachable at worker boot), so a later
+                // retry/pop() can still fill the pool instead of it being
+                // permanently short one connection.
+                $pool->push($this->createForClaimedSlot());
             }
 
             $current = $this->created->get();
@@ -249,21 +312,52 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
      *
      * Only called for connections retrieved from the channel (not for freshly
      * created ones), so the overhead is limited to idle connections.
-     * The $created counter is NOT incremented on reconnect — the slot was
-     * already claimed when the connection was first opened.
+     *
+     * The slot was already claimed when the connection was first opened, so a
+     * successful reconnect leaves `created` unchanged. But the reconnect is a
+     * real PDO connect that can fail (MySQL briefly unreachable exactly when we
+     * notice the socket is dead): the stale connection is then discarded and no
+     * replacement is produced, so the slot MUST be released — otherwise it
+     * leaks identically to the pop()/fill() paths and ratchets the pool into
+     * the full-but-empty deadlock. createForClaimedSlot() does that release.
      */
     private function ensureAlive(\PDO $connection): \PDO
     {
         try {
             $stmt = $connection->query('SELECT 1');
             if ($stmt === false) {
-                return ($this->factory)();
+                return $this->createForClaimedSlot();
             }
 
             return $connection;
         } catch (\PDOException) {
             // Connection is stale — replace it with a fresh one.
+            return $this->createForClaimedSlot();
+        }
+    }
+
+    /**
+     * Open a connection for a slot already counted in `created`, releasing the
+     * slot if the factory throws.
+     *
+     * Every caller has accounted for the slot before calling: pop()/fill() via
+     * the cmpset(+1) that just claimed it, ensureAlive() via the slot the dead
+     * pooled connection still occupies. A PDO connect can fail — a transient
+     * network blip, MySQL momentarily refusing, an auth hiccup. If it does the
+     * slot must be released here, because nothing else ever decrements `created`
+     * (only close() resets it wholesale). Leaking `size` slots wedges the pool
+     * full-but-empty forever, so every pop() blocks on Channel->pop(-1): the
+     * ratcheting deadlock that took down production with all workers asleep in
+     * pop(). Releasing the slot lets a later pop() open a fresh connection
+     * instead, so transient DB unavailability degrades gracefully.
+     */
+    private function createForClaimedSlot(): \PDO
+    {
+        try {
             return ($this->factory)();
+        } catch (\Throwable $e) {
+            $this->created->sub(1);
+            throw $e;
         }
     }
 }
