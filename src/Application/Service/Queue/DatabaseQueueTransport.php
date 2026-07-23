@@ -133,7 +133,9 @@ final class DatabaseQueueTransport implements QueueTransportInterface
              WHERE id = :id',
             [
                 'status' => $exhausted ? 'failed' : 'queued',
-                'last_error' => mb_substr($e::class . ': ' . $e->getMessage(), 0, 512),
+                // substr, not mb_substr: byte-accurate for the VARCHAR(512)
+                // column and free of an undeclared ext-mbstring dependency.
+                'last_error' => substr($e::class . ': ' . $e->getMessage(), 0, 512),
                 'id' => (string) $claimed['id'],
             ],
         );
@@ -152,8 +154,16 @@ final class DatabaseQueueTransport implements QueueTransportInterface
     {
         if ($this->consumerId === '') {
             $hostname = gethostname();
-            $this->consumerId = ($hostname !== false ? $hostname : 'unknown-host')
+            $id = ($hostname !== false ? $hostname : 'unknown-host')
                 . ':' . getmypid() . ':' . spl_object_id($this);
+            // lease_owner is VARCHAR(128); a silently truncated id would let
+            // two consumers collide on claims. Long hostnames (POSIX allows
+            // 255 chars) get a deterministic hash-suffixed cap instead.
+            if (strlen($id) > 128) {
+                // 95 prefix + ':' + 32 hash chars = exactly 128.
+                $id = substr($id, 0, 95) . ':' . substr(hash('sha256', $id), 0, 32);
+            }
+            $this->consumerId = $id;
         }
 
         return $this->consumerId;
