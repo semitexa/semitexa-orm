@@ -62,6 +62,10 @@ class MysqlAdapter implements DatabaseAdapterInterface
 
     public function execute(string $sql, array $params = []): QueryResult
     {
+        // Native prepares reject repeated named placeholders (HY093);
+        // rewrite them deterministically before hitting the statement cache.
+        [$sql, $params] = RepeatedPlaceholderExpander::expand($sql, $params);
+
         $connection = $this->pool->pop();
 
         try {
