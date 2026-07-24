@@ -18,6 +18,7 @@ use Semitexa\Orm\Application\Service\Hydration\ResourceModelHydrator;
 use Semitexa\Orm\Application\Service\Mapping\MapperRegistry;
 use Semitexa\Orm\Metadata\RelationKind;
 use Semitexa\Orm\Metadata\RelationMetadata;
+use Semitexa\Orm\Query\DeleteQuery;
 use Semitexa\Orm\Query\InsertQuery;
 use Semitexa\Orm\Metadata\ResourceModelMetadata;
 use Semitexa\Orm\Metadata\ResourceModelMetadataRegistry;
@@ -312,13 +313,7 @@ final class AggregateWriteEngine
         $pkColumn = $metadata->column($primaryKey)->columnName;
         $pkValue = $this->propertyValue($resourceModel, $primaryKey);
 
-        $sql = sprintf(
-            'DELETE FROM `%s` WHERE `%s` = :__pk',
-            $metadata->tableName,
-            $pkColumn,
-        );
-
-        $adapter->execute($sql, ['__pk' => $pkValue]);
+        (new DeleteQuery($metadata->tableName, $adapter))->execute($pkColumn, $pkValue);
     }
 
     private function persistOwnedRelations(object $resourceModel, ResourceModelMetadata $metadata, bool $isInsert, DatabaseAdapterInterface $adapter): void
@@ -364,12 +359,7 @@ final class AggregateWriteEngine
         if (!$isInsert) {
             $targetMetadata = $this->metadata($relation->targetClass);
             $fkColumn = $targetMetadata->column($relation->foreignKey)->columnName;
-            $sql = sprintf(
-                'DELETE FROM `%s` WHERE `%s` = :__parent_fk',
-                $targetMetadata->tableName,
-                $fkColumn,
-            );
-            $adapter->execute($sql, ['__parent_fk' => $parentId]);
+            (new DeleteQuery($targetMetadata->tableName, $adapter))->execute($fkColumn, $parentId);
         }
 
         if ($value === null) {
@@ -410,13 +400,7 @@ final class AggregateWriteEngine
         $fkColumn = $targetMetadata->column($relation->foreignKey)->columnName;
         $parentId = $this->propertyValue($resourceModel, $this->requirePrimaryKey($metadata));
 
-        $sql = sprintf(
-            'DELETE FROM `%s` WHERE `%s` = :__parent_fk',
-            $targetMetadata->tableName,
-            $fkColumn,
-        );
-
-        $adapter->execute($sql, ['__parent_fk' => $parentId]);
+        (new DeleteQuery($targetMetadata->tableName, $adapter))->execute($fkColumn, $parentId);
     }
 
     private function syncPivotRelation(
@@ -427,13 +411,21 @@ final class AggregateWriteEngine
         bool                  $isInsert,
         DatabaseAdapterInterface $adapter,
     ): void {
+        // A SyncPivotOnly relation without a pivot table cannot be written. The
+        // hand-built SQL used to interpolate the null into an empty identifier
+        // and fail at the driver with an unreadable message; fail here instead,
+        // naming the relation that is misdeclared.
+        $pivotTable = $relation->pivotTable;
+        if ($pivotTable === null) {
+            throw new \LogicException(sprintf(
+                'Relation %s::$%s declares RelationWritePolicy::SyncPivotOnly but no pivotTable.',
+                $resourceModel::class,
+                $relation->propertyName,
+            ));
+        }
+
         $parentId = $this->propertyValue($resourceModel, $this->requirePrimaryKey($metadata));
-        $deleteSql = sprintf(
-            'DELETE FROM `%s` WHERE `%s` = :__pivot_fk',
-            $relation->pivotTable,
-            $relation->foreignKey,
-        );
-        $adapter->execute($deleteSql, ['__pivot_fk' => $parentId]);
+        (new DeleteQuery($pivotTable, $adapter))->execute($relation->foreignKey, $parentId);
 
         if ($value === null || (!$isInsert && $value === [])) {
             return;
@@ -453,7 +445,7 @@ final class AggregateWriteEngine
         // One multi-row INSERT per chunk instead of one round-trip per related
         // item (M INSERTs → ceil(M / CHUNK)). Chunked so a pathologically large
         // pivot set stays under the driver's bound-parameter limit.
-        $insert = new InsertQuery($relation->pivotTable, $adapter);
+        $insert = new InsertQuery($pivotTable, $adapter);
         foreach (array_chunk($rows, self::PIVOT_INSERT_CHUNK) as $chunk) {
             $insert->executeBatch($chunk);
         }
