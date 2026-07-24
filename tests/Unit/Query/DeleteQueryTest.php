@@ -75,6 +75,19 @@ final class DeleteQueryTest extends TestCase
     }
 
     #[Test]
+    public function repeated_execute_calls_on_one_instance_stay_independent(): void
+    {
+        // execute() stages an equality condition; if it kept it, the second
+        // call would read WHERE owner_id = 'alice' AND owner_id = 'bob' and
+        // delete nothing.
+        $query = new DeleteQuery('widget', $this->adapter);
+        $query->execute('owner_id', 'alice');
+        $query->execute('owner_id', 'bob');
+
+        self::assertSame([], $this->remainingIds());
+    }
+
+    #[Test]
     public function execute_where_applies_the_staged_conditions(): void
     {
         (new DeleteQuery('widget', $this->adapter))

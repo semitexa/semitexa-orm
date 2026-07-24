@@ -30,10 +30,14 @@ class DeleteQuery implements WhereCapableInterface
      * itself, so this path gets the same identifier escaping as where() —
      * previously only executeWhere() was protected. Conditions already staged
      * via where*() still apply and narrow the delete further.
+     *
+     * Runs on a clone so the equality condition is not retained: a builder may
+     * be reused (InsertQuery is, one instance across chunks), and a mutating
+     * execute() would AND every previous value into the next call.
      */
     public function execute(string $column, mixed $value): void
     {
-        $this->where($column, '=', $value)->executeWhere();
+        (clone $this)->where($column, '=', $value)->executeWhere();
     }
 
     /**
