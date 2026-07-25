@@ -72,7 +72,7 @@ final class AggregateWriteEngineTest extends TestCase
             $adapter->executed[0]['sql'],
         );
         $this->assertSame(
-            'DELETE FROM `reviews` WHERE `productId` = :__parent_fk',
+            'DELETE FROM `reviews` WHERE `productId` = :p_productId_1',
             $adapter->executed[1]['sql'],
         );
         $this->assertSame('INSERT INTO `reviews` (`id`, `productId`, `rating`) VALUES (:id, :productId, :rating)', $adapter->executed[2]['sql']);
@@ -89,8 +89,10 @@ final class AggregateWriteEngineTest extends TestCase
         $engine->delete($this->validDomainModel(), ValidProductResourceModel::class, $registry);
 
         $this->assertCount(2, $adapter->executed);
-        $this->assertSame('DELETE FROM `reviews` WHERE `productId` = :__parent_fk', $adapter->executed[0]['sql']);
-        $this->assertSame('DELETE FROM `products` WHERE `id` = :__pk', $adapter->executed[1]['sql']);
+        // Both DELETEs are built by DeleteQuery, hence its generated parameter
+        // names rather than the hand-written :__parent_fk / :__pk of before.
+        $this->assertSame('DELETE FROM `reviews` WHERE `productId` = :p_productId_1', $adapter->executed[0]['sql']);
+        $this->assertSame('DELETE FROM `products` WHERE `id` = :p_id_1', $adapter->executed[1]['sql']);
     }
 
     #[Test]
@@ -145,13 +147,13 @@ final class AggregateWriteEngineTest extends TestCase
         $this->assertSame(
             [
                 'INSERT INTO `tagged_products` (`id`, `name`) VALUES (:id, :name)',
-                'DELETE FROM `product_tags` WHERE `productId` = :__pivot_fk',
+                'DELETE FROM `product_tags` WHERE `productId` = :p_productId_1',
                 'INSERT INTO `product_tags` (`productId`, `tagId`) VALUES (:productId_0, :tagId_0), (:productId_1, :tagId_1)',
                 'UPDATE `tagged_products` SET `name` = :name WHERE `id` = :__pk',
-                'DELETE FROM `product_tags` WHERE `productId` = :__pivot_fk',
+                'DELETE FROM `product_tags` WHERE `productId` = :p_productId_1',
                 'INSERT INTO `product_tags` (`productId`, `tagId`) VALUES (:productId_0, :tagId_0), (:productId_1, :tagId_1)',
-                'DELETE FROM `product_tags` WHERE `productId` = :__pivot_fk',
-                'DELETE FROM `tagged_products` WHERE `id` = :__pk',
+                'DELETE FROM `product_tags` WHERE `productId` = :p_productId_1',
+                'DELETE FROM `tagged_products` WHERE `id` = :p_id_1',
             ],
             array_map(static fn (array $entry): string => $entry['sql'], $adapter->executed),
         );

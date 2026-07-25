@@ -24,12 +24,20 @@ class DeleteQuery implements WhereCapableInterface
     ) {}
 
     /**
-     * Delete a row by primary key value.
+     * Delete the rows whose $column equals $value.
+     *
+     * Delegates to the WHERE builder rather than interpolating the column
+     * itself, so this path gets the same identifier escaping as where() —
+     * previously only executeWhere() was protected. Conditions already staged
+     * via where*() still apply and narrow the delete further.
+     *
+     * Runs on a clone so the equality condition is not retained: a builder may
+     * be reused (InsertQuery is, one instance across chunks), and a mutating
+     * execute() would AND every previous value into the next call.
      */
-    public function execute(string $pkColumn, mixed $pkValue): void
+    public function execute(string $column, mixed $value): void
     {
-        $sql = "DELETE FROM `{$this->table}` WHERE `{$pkColumn}` = :pk_value";
-        $this->adapter->execute($sql, ['pk_value' => $pkValue]);
+        (clone $this)->where($column, '=', $value)->executeWhere();
     }
 
     /**
@@ -46,7 +54,12 @@ class DeleteQuery implements WhereCapableInterface
             );
         }
 
-        $sql = "DELETE FROM `{$this->table}`" . $this->buildWhereClause();
+        $sql = 'DELETE FROM ' . $this->quotedTable() . $this->buildWhereClause();
         $this->adapter->execute($sql, $this->params);
+    }
+
+    private function quotedTable(): string
+    {
+        return '`' . str_replace('`', '``', $this->table) . '`';
     }
 }
