@@ -440,14 +440,22 @@ class OrmManager
 
         $raw = Environment::getEnvValue('ORM_IGNORE_TABLES', '');
         if ($raw !== '') {
-            $tables = array_filter(array_map('trim', explode(',', $raw)));
+            // Filter on emptiness explicitly: a bare array_filter() would also
+            // drop a table literally named "0".
+            $tables = array_filter(
+                array_map('trim', explode(',', $raw)),
+                static fn (string $table): bool => $table !== '',
+            );
         }
 
         foreach ($this->discoverSelfManagedTables() as $table) {
             $tables[] = $table;
         }
 
-        return array_values(array_unique(array_filter($tables)));
+        return array_values(array_unique(array_filter(
+            $tables,
+            static fn (string $table): bool => $table !== '',
+        )));
     }
 
     /**
@@ -458,7 +466,12 @@ class OrmManager
         $tables = [];
 
         try {
-            $classes = (new ClassDiscovery())->findClassesWithAttribute(SelfManagedTable::class);
+            // The configured instance, not a fresh default: a caller with custom
+            // discovery roots finds its #[FromTable] resources through this one,
+            // and ownership declarations must be found the same way or the two
+            // views of the codebase disagree — silently re-exposing the bug this
+            // attribute exists to fix.
+            $classes = $this->classDiscovery->findClassesWithAttribute(SelfManagedTable::class);
         } catch (\Throwable) {
             // Discovery is a convenience here, not a correctness requirement: if
             // it cannot run, fall back to the env list rather than failing the
@@ -467,13 +480,13 @@ class OrmManager
         }
 
         foreach ($classes as $class) {
-            try {
-                $reflection = new \ReflectionClass($class);
-            } catch (\ReflectionException) {
+            // class_exists() also narrows string to class-string for static
+            // analysis, and skips anything discovery listed that cannot load.
+            if (!class_exists($class)) {
                 continue;
             }
 
-            foreach ($reflection->getAttributes(SelfManagedTable::class) as $attribute) {
+            foreach ((new \ReflectionClass($class))->getAttributes(SelfManagedTable::class) as $attribute) {
                 $table = trim($attribute->newInstance()->table);
                 if ($table !== '') {
                     $tables[] = $table;

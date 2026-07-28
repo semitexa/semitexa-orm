@@ -48,6 +48,9 @@ final class SelfManagedTableTest extends TestCase
         // Two sources, two audiences: ORM_IGNORE_TABLES is for the operator
         // pointing at something outside Semitexa; the attribute is a package
         // declaring a table it maintains itself. Neither may shadow the other.
+        // Capture and restore rather than unset: the runner may have supplied a
+        // value, and clearing it would silently alter every later test.
+        $previous = getenv('ORM_IGNORE_TABLES');
         putenv('ORM_IGNORE_TABLES=legacy_billing, ,external_audit');
 
         try {
@@ -61,7 +64,32 @@ final class SelfManagedTableTest extends TestCase
             self::assertNotContains('', $tables, 'a stray empty entry must not become a table name');
             self::assertSame(array_values(array_unique($tables)), $tables, 'no duplicates');
         } finally {
-            putenv('ORM_IGNORE_TABLES');
+            is_string($previous)
+                ? putenv('ORM_IGNORE_TABLES=' . $previous)
+                : putenv('ORM_IGNORE_TABLES');
+        }
+    }
+
+    #[Test]
+    public function a_table_named_zero_is_not_swallowed_by_the_filter(): void
+    {
+        // A bare array_filter() treats "0" as false. Legal table name, pathological
+        // but free to guard against.
+        $previous = getenv('ORM_IGNORE_TABLES');
+        putenv('ORM_IGNORE_TABLES=0,legacy');
+
+        try {
+            $resolve = new ReflectionMethod(OrmManager::class, 'resolveIgnoreTables');
+            $resolve->setAccessible(true);
+            /** @var list<string> $tables */
+            $tables = $resolve->invoke(new OrmManager());
+
+            self::assertContains('0', $tables);
+            self::assertContains('legacy', $tables);
+        } finally {
+            is_string($previous)
+                ? putenv('ORM_IGNORE_TABLES=' . $previous)
+                : putenv('ORM_IGNORE_TABLES');
         }
     }
 
