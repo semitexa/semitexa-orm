@@ -416,9 +416,6 @@ class OrmManager
     }
 
     /**
-     * @return string[]
-     */
-    /**
      * Tables sync must not consider for dropping.
      *
      * Two sources, merged. `ORM_IGNORE_TABLES` is the operator-level escape

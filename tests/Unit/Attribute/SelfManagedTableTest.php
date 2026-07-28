@@ -27,10 +27,14 @@ final class SelfManagedTableTest extends TestCase
     {
         // One repository may own more than one table, and a single class must be
         // able to say so without inventing a second declaration style.
-        $attribute = (new ReflectionClass(SelfManagedTable::class))->getAttributes()[0] ?? null;
+        //
+        // Filter by name rather than taking [0]: getAttributes() returns every
+        // attribute, so positional access would silently start reading the wrong
+        // one the day SelfManagedTable gains a second.
+        $attributes = (new ReflectionClass(SelfManagedTable::class))->getAttributes(\Attribute::class);
 
-        self::assertNotNull($attribute);
-        $flags = $attribute->getArguments()[0] ?? 0;
+        self::assertCount(1, $attributes, 'exactly one #[Attribute] declaration');
+        $flags = $attributes[0]->getArguments()[0] ?? 0;
 
         self::assertSame(\Attribute::TARGET_CLASS, $flags & \Attribute::TARGET_CLASS);
         self::assertSame(\Attribute::IS_REPEATABLE, $flags & \Attribute::IS_REPEATABLE);
