@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Orm;
 
 use Semitexa\Core\Discovery\ClassDiscovery;
+use Semitexa\Orm\Attribute\SelfManagedTable;
 use Semitexa\Core\Environment;
 use Semitexa\Core\Event\EventDispatcherInterface;
 use Semitexa\Core\Support\ProjectRoot;
@@ -415,16 +416,82 @@ class OrmManager
     }
 
     /**
-     * @return string[]
+     * Tables sync must not consider for dropping.
+     *
+     * Two sources, merged. `ORM_IGNORE_TABLES` is the operator-level escape
+     * hatch for tables belonging to something outside Semitexa. `#[SelfManagedTable]`
+     * is the package-level statement of ownership, for tables a Semitexa package
+     * creates and migrates itself and which therefore have no `#[FromTable]`
+     * resource to claim them.
+     *
+     * Without the second source, such a table is indistinguishable from one
+     * abandoned by a deleted resource, so every sync marks it deprecated and the
+     * next destructive run drops it — silently, since the marker is only a
+     * comment.
+     *
+     * @return list<string>
      */
     private function resolveIgnoreTables(): array
     {
+        $tables = [];
+
         $raw = Environment::getEnvValue('ORM_IGNORE_TABLES', '');
-        if ($raw === '') {
+        if ($raw !== '') {
+            // Filter on emptiness explicitly: a bare array_filter() would also
+            // drop a table literally named "0".
+            $tables = array_filter(
+                array_map('trim', explode(',', $raw)),
+                static fn (string $table): bool => $table !== '',
+            );
+        }
+
+        foreach ($this->discoverSelfManagedTables() as $table) {
+            $tables[] = $table;
+        }
+
+        return array_values(array_unique(array_filter(
+            $tables,
+            static fn (string $table): bool => $table !== '',
+        )));
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function discoverSelfManagedTables(): array
+    {
+        $tables = [];
+
+        try {
+            // The configured instance, not a fresh default: a caller with custom
+            // discovery roots finds its #[FromTable] resources through this one,
+            // and ownership declarations must be found the same way or the two
+            // views of the codebase disagree — silently re-exposing the bug this
+            // attribute exists to fix.
+            $classes = $this->classDiscovery->findClassesWithAttribute(SelfManagedTable::class);
+        } catch (\Throwable) {
+            // Discovery is a convenience here, not a correctness requirement: if
+            // it cannot run, fall back to the env list rather than failing the
+            // whole sync. The cost is the pre-existing behaviour, not worse.
             return [];
         }
 
-        return array_values(array_filter(array_map('trim', explode(',', $raw))));
+        foreach ($classes as $class) {
+            // class_exists() also narrows string to class-string for static
+            // analysis, and skips anything discovery listed that cannot load.
+            if (!class_exists($class)) {
+                continue;
+            }
+
+            foreach ((new \ReflectionClass($class))->getAttributes(SelfManagedTable::class) as $attribute) {
+                $table = trim($attribute->newInstance()->table);
+                if ($table !== '') {
+                    $tables[] = $table;
+                }
+            }
+        }
+
+        return $tables;
     }
 
     private function createPool(): ConnectionPoolInterface
