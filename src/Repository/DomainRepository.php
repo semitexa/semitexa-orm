@@ -6,6 +6,7 @@ namespace Semitexa\Orm\Repository;
 
 use Semitexa\Core\Event\EventDispatcherInterface;
 use Semitexa\Core\Exception\NotFoundException;
+use Semitexa\Core\Log\StaticLoggerBridge;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Exception\InvalidResourceModelException;
 use Semitexa\Orm\Application\Service\Hydration\ResourceModelHydrator;
@@ -133,19 +134,37 @@ final class DomainRepository
     }
 
     /**
+     * The bound applied when a caller does not choose one.
+     *
+     * Keeps an unsuspecting caller from loading a whole table into memory. The
+     * bound is deliberate; what was wrong was applying it in silence.
+     */
+    public const DEFAULT_LIMIT = 1000;
+
+    /**
+     * Distinguishes "did not ask for a limit" from "asked for exactly this
+     * many".
+     *
+     * The distinction decides who gets warned. A caller who passes a limit
+     * knows one exists and expects to receive it — a paginated screen asking
+     * for 50 and getting 50 is working correctly, and warning about it would
+     * be noise that eventually gets the warning ignored. The caller who never
+     * passed one is the one who does not know their results were cut.
+     *
+     * Any negative value reads as unspecified, so an explicit -1 behaves the
+     * same rather than producing a nonsensical query.
+     */
+    private const LIMIT_UNSPECIFIED = -1;
+
+    /**
      * Fetch every row (subject to $limit). Pass null for unbounded fetches
      * — use with care on large tables.
      *
      * @return list<object>
      */
-    public function findAll(?int $limit = 1000): array
+    public function findAll(?int $limit = self::LIMIT_UNSPECIFIED): array
     {
-        $query = $this->query();
-        if ($limit !== null) {
-            $query->limit($limit);
-        }
-
-        return $query->fetchAllAs($this->domainModelClass, $this->mapperRegistry);
+        return $this->fetchBounded($this->query(), $limit, 'findAll');
     }
 
     /**
@@ -159,15 +178,53 @@ final class DomainRepository
      * @param list<RelationRef> $relations
      * @return list<object>
      */
-    public function findBy(array $criteria, array $relations = [], ?int $limit = 1000): array
+    public function findBy(array $criteria, array $relations = [], ?int $limit = self::LIMIT_UNSPECIFIED): array
     {
-        $query = $this->applyCriteria($this->query(), $criteria, $relations);
+        return $this->fetchBounded(
+            $this->applyCriteria($this->query(), $criteria, $relations),
+            $limit,
+            'findBy',
+        );
+    }
 
-        if ($limit !== null) {
-            $query->limit($limit);
+    /**
+     * Run a bounded fetch and say so when the bound was probably reached.
+     *
+     * A result whose size exactly equals a limit the caller never asked for is
+     * almost certainly a truncated one. It cannot be told apart from a complete
+     * result by looking at it, which is how a silently cut list becomes wrong
+     * data on a screen rather than an error anybody sees.
+     *
+     * Detecting it costs a comparison. The one imprecision — a set that happens
+     * to hold exactly DEFAULT_LIMIT rows — reports a truncation that did not
+     * occur, and that is the right way round: the message says how to check and
+     * how to opt out, whereas silence offers nothing.
+     *
+     * @return list<object>
+     */
+    private function fetchBounded(ResourceModelQuery $query, ?int $limit, string $method): array
+    {
+        $unspecified = $limit !== null && $limit < 0;
+        $effective = $unspecified ? self::DEFAULT_LIMIT : $limit;
+
+        if ($effective !== null) {
+            $query->limit($effective);
         }
 
-        return $query->fetchAllAs($this->domainModelClass, $this->mapperRegistry);
+        /** @var list<object> $rows */
+        $rows = $query->fetchAllAs($this->domainModelClass, $this->mapperRegistry);
+
+        if ($unspecified && count($rows) === self::DEFAULT_LIMIT) {
+            StaticLoggerBridge::warning('orm', 'Result reached the default limit and was probably truncated', [
+                'model' => $this->domainModelClass,
+                'method' => $method,
+                'limit' => self::DEFAULT_LIMIT,
+                'note' => 'no limit was passed, so this bound is the default. '
+                    . 'Pass an explicit limit to accept it silently, or null for an unbounded fetch.',
+            ]);
+        }
+
+        return $rows;
     }
 
     /**
