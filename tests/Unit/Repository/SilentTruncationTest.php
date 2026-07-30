@@ -231,4 +231,17 @@ final class SilentTruncationTest extends TestCase
         self::assertCount(DomainRepository::DEFAULT_LIMIT, $rows);
         self::assertSame([], $this->truncationWarnings());
     }
+
+    #[Test]
+    public function a_negative_limit_that_is_not_the_sentinel_is_rejected_rather_than_reinterpreted(): void
+    {
+        // Omission is one specific value. Reading every negative as "omitted"
+        // turned a caller's bad argument into the default bound, and then
+        // reported that no limit had been passed — a warning contradicting what
+        // the caller can plainly see in their own call, which is how a channel
+        // stops being read at all.
+        $this->expectException(\InvalidArgumentException::class);
+
+        $this->repository(new FakeDatabaseAdapter([]))->forTenant('tenant-1')->findAll(-2);
+    }
 }

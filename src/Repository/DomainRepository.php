@@ -204,7 +204,13 @@ final class DomainRepository
      */
     private function fetchBounded(ResourceModelQuery $query, ?int $limit, string $method): array
     {
-        $unspecified = $limit !== null && $limit < 0;
+        // The sentinel exactly, not "any negative". Treating every negative as
+        // omission meant findAll(-2) silently became the default bound and could
+        // then log that no limit was passed — a warning stating something the
+        // caller can see is untrue, which is how a channel stops being read.
+        // Any other negative falls through to ResourceModelQuery::limit(), which
+        // already rejects it by name.
+        $unspecified = $limit === self::LIMIT_UNSPECIFIED;
         $effective = $unspecified ? self::DEFAULT_LIMIT : $limit;
 
         if ($effective !== null) {
