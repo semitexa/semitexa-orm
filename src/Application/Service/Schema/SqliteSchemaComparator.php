@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Application\Service\Schema;
 
-use Semitexa\Orm\Domain\Contract\SchemaComparatorInterface;
 use Semitexa\Orm\Domain\Model\ColumnDefinition;
 use Semitexa\Orm\Domain\Model\DbColumnState;
 use Semitexa\Orm\Domain\Model\DbIndexState;
@@ -35,18 +34,13 @@ use Semitexa\Orm\Adapter\SqliteType;
  * - No column comments support
  * - No table comments support
  */
-class SqliteSchemaComparator implements SchemaComparatorInterface
+class SqliteSchemaComparator extends AbstractSchemaComparator
 {
     /** @param string[] $ignoreTables Table names to exclude from DROP detection */
     public function __construct(
         private readonly DatabaseAdapterInterface $adapter,
         private readonly array $ignoreTables = [],
     ) {}
-
-    /**
-     * @var array<string, true> key: "table.index_name"
-     */
-    private array $fkIndexNames = [];
 
     /** @var array<string, true> */
     private array $newTableNames = [];
@@ -200,38 +194,11 @@ class SqliteSchemaComparator implements SchemaComparatorInterface
         };
     }
 
-    private function compareTable(TableDefinition $code, DbTableState $db, SchemaDiff $diff): void
-    {
-        $tableName = $code->name;
-        $dbColumns = $db->getColumnMap();
-        $codeColumns = $code->getColumns();
-
-        foreach ($codeColumns as $colName => $colDef) {
-            if (!isset($dbColumns[$colName])) {
-                $diff->addAddColumn($tableName, $colDef);
-                continue;
-            }
-
-            $dbCol = $dbColumns[$colName];
-            $changes = $this->compareColumn($colDef, $dbCol);
-            if ($changes !== []) {
-                $diff->addAlterColumn($tableName, $colDef, $changes);
-            }
-        }
-
-        foreach ($dbColumns as $colName => $dbCol) {
-            if (!isset($codeColumns[$colName])) {
-                $diff->addDropColumn($tableName, $colName, $dbCol->comment, $dbCol);
-            }
-        }
-
-        $this->compareIndexes($tableName, $code->getIndexes(), $db->getIndexes(), $diff);
-    }
 
     /**
      * @return string[] List of change descriptions
      */
-    private function compareColumn(ColumnDefinition $code, DbColumnState $db): array
+    protected function compareColumn(ColumnDefinition $code, DbColumnState $db): array
     {
         $changes = [];
 
@@ -325,68 +292,7 @@ class SqliteSchemaComparator implements SchemaComparatorInterface
         return $normalized;
     }
 
-    /**
-     * @param IndexDefinition[] $codeIndexes
-     * @param DbIndexState[] $dbIndexes
-     */
-    private function compareIndexes(string $tableName, array $codeIndexes, array $dbIndexes, SchemaDiff $diff): void
-    {
-        $dbIndexMap = [];
-        foreach ($dbIndexes as $idx) {
-            $dbIndexMap[$idx->name] = $idx;
-        }
 
-        $codeIndexMap = [];
-        foreach ($codeIndexes as $idx) {
-            $name = $idx->name ?? $this->generateIndexName($tableName, $idx->columns, $idx->unique);
-            $codeIndexMap[$name] = $idx;
-        }
-
-        $dbByStructure = [];
-        foreach ($dbIndexMap as $name => $dbIdx) {
-            $structKey = implode(',', $dbIdx->columns) . '|' . ($dbIdx->unique ? '1' : '0');
-            $dbByStructure[$structKey] = $name;
-        }
-
-        $matchedDbNames = [];
-
-        foreach ($codeIndexMap as $codeName => $idx) {
-            $structKey = implode(',', $idx->columns) . '|' . ($idx->unique ? '1' : '0');
-
-            if (isset($dbIndexMap[$codeName])) {
-                $dbIdx = $dbIndexMap[$codeName];
-                $matchedDbNames[$codeName] = true;
-                if ($idx->columns !== $dbIdx->columns || $idx->unique !== $dbIdx->unique) {
-                    $diff->addDropIndex($tableName, $codeName);
-                    $diff->addAddIndex($tableName, $idx, $codeName);
-                }
-            } elseif (isset($dbByStructure[$structKey])) {
-                $dbName = $dbByStructure[$structKey];
-                $matchedDbNames[$dbName] = true;
-                if ($dbName !== $codeName) {
-                    $diff->addDropIndex($tableName, $dbName);
-                    $diff->addAddIndex($tableName, $idx, $codeName);
-                }
-            } else {
-                $diff->addAddIndex($tableName, $idx, $codeName);
-            }
-        }
-
-        foreach ($dbIndexMap as $name => $dbIdx) {
-            if (!isset($matchedDbNames[$name]) && !isset($this->fkIndexNames[$tableName . '.' . $name])) {
-                $diff->addDropIndex($tableName, $name);
-            }
-        }
-    }
-
-    /**
-     * @param string[] $columns
-     */
-    private function generateIndexName(string $tableName, array $columns, bool $unique): string
-    {
-        $prefix = $unique ? 'uniq' : 'idx';
-        return $prefix . '_' . $tableName . '_' . implode('_', $columns);
-    }
 
     /**
      * Compare foreign keys.

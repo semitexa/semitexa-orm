@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Application\Service\Schema;
 
-use Semitexa\Orm\Domain\Contract\SchemaComparatorInterface;
 use Semitexa\Orm\Domain\Model\ColumnDefinition;
 use Semitexa\Orm\Domain\Model\DbColumnState;
 use Semitexa\Orm\Domain\Model\DbIndexState;
@@ -21,7 +20,7 @@ use Semitexa\Orm\Domain\Model\TableDefinition;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Adapter\MySqlType;
-class SchemaComparator implements SchemaComparatorInterface
+class SchemaComparator extends AbstractSchemaComparator
 {
     /** @param string[] $ignoreTables Table names to exclude from DROP detection */
     public function __construct(
@@ -29,13 +28,6 @@ class SchemaComparator implements SchemaComparatorInterface
         private readonly string $database,
         private readonly array $ignoreTables = [],
     ) {}
-
-    /**
-     * Index names that are required by FK constraints and must not be dropped.
-     * Populated by readFkIndexNames() from INFORMATION_SCHEMA.
-     * @var array<string, true> key: "table.index_name"
-     */
-    private array $fkIndexNames = [];
 
     /**
      * Compare code schema with actual DB state.
@@ -176,42 +168,11 @@ class SchemaComparator implements SchemaComparatorInterface
         return $tables;
     }
 
-    private function compareTable(TableDefinition $code, DbTableState $db, SchemaDiff $diff): void
-    {
-        $tableName = $code->name;
-        $dbColumns = $db->getColumnMap();
-        $codeColumns = $code->getColumns();
-
-        // Columns in code but not in DB → ADD COLUMN
-        foreach ($codeColumns as $colName => $colDef) {
-            if (!isset($dbColumns[$colName])) {
-                $diff->addAddColumn($tableName, $colDef);
-                continue;
-            }
-
-            // Column exists — compare definition
-            $dbCol = $dbColumns[$colName];
-            $changes = $this->compareColumn($colDef, $dbCol);
-            if ($changes !== []) {
-                $diff->addAlterColumn($tableName, $colDef, $changes);
-            }
-        }
-
-        // Columns in DB but not in code → DROP COLUMN
-        foreach ($dbColumns as $colName => $dbCol) {
-            if (!isset($codeColumns[$colName])) {
-                $diff->addDropColumn($tableName, $colName, $dbCol->comment, $dbCol);
-            }
-        }
-
-        // Compare indexes
-        $this->compareIndexes($tableName, $code->getIndexes(), $db->getIndexes(), $diff);
-    }
 
     /**
      * @return string[] List of change descriptions
      */
-    private function compareColumn(ColumnDefinition $code, DbColumnState $db): array
+    protected function compareColumn(ColumnDefinition $code, DbColumnState $db): array
     {
         $changes = [];
 
@@ -280,75 +241,7 @@ class SchemaComparator implements SchemaComparatorInterface
         return $type;
     }
 
-    /**
-     * @param IndexDefinition[] $codeIndexes
-     * @param DbIndexState[] $dbIndexes
-     */
-    private function compareIndexes(string $tableName, array $codeIndexes, array $dbIndexes, SchemaDiff $diff): void
-    {
-        $dbIndexMap = [];
-        foreach ($dbIndexes as $idx) {
-            $dbIndexMap[$idx->name] = $idx;
-        }
 
-        $codeIndexMap = [];
-        foreach ($codeIndexes as $idx) {
-            $name = $idx->name ?? $this->generateIndexName($tableName, $idx->columns, $idx->unique);
-            $codeIndexMap[$name] = $idx;
-        }
-
-        // Build structural lookup: "columns|unique" → db index name, for matching by structure
-        $dbByStructure = [];
-        foreach ($dbIndexMap as $name => $dbIdx) {
-            $structKey = implode(',', $dbIdx->columns) . '|' . ($dbIdx->unique ? '1' : '0');
-            $dbByStructure[$structKey] = $name;
-        }
-
-        $matchedDbNames = [];
-
-        // Indexes in code — match by name first, then by structure
-        foreach ($codeIndexMap as $codeName => $idx) {
-            $structKey = implode(',', $idx->columns) . '|' . ($idx->unique ? '1' : '0');
-
-            if (isset($dbIndexMap[$codeName])) {
-                // Exact name match — compare structure
-                $dbIdx = $dbIndexMap[$codeName];
-                $matchedDbNames[$codeName] = true;
-                if ($idx->columns !== $dbIdx->columns || $idx->unique !== $dbIdx->unique) {
-                    $diff->addDropIndex($tableName, $codeName);
-                    $diff->addAddIndex($tableName, $idx, $codeName);
-                }
-            } elseif (isset($dbByStructure[$structKey])) {
-                // Same structure exists under a different name — rename (drop old + add new)
-                $dbName = $dbByStructure[$structKey];
-                $matchedDbNames[$dbName] = true;
-                if ($dbName !== $codeName) {
-                    $diff->addDropIndex($tableName, $dbName);
-                    $diff->addAddIndex($tableName, $idx, $codeName);
-                }
-            } else {
-                // No match at all — new index
-                $diff->addAddIndex($tableName, $idx, $codeName);
-            }
-        }
-
-        // Indexes in DB that were not matched by any code index → DROP
-        // But never drop indexes required by FK constraints (MySQL error 1553)
-        foreach ($dbIndexMap as $name => $dbIdx) {
-            if (!isset($matchedDbNames[$name]) && !isset($this->fkIndexNames[$tableName . '.' . $name])) {
-                $diff->addDropIndex($tableName, $name);
-            }
-        }
-    }
-
-    /**
-     * @param string[] $columns
-     */
-    private function generateIndexName(string $tableName, array $columns, bool $unique): string
-    {
-        $prefix = $unique ? 'uniq' : 'idx';
-        return $prefix . '_' . $tableName . '_' . implode('_', $columns);
-    }
 
     /**
      * Compare FK constraints: code schema vs DB.
