@@ -64,10 +64,30 @@ final class SingleConnectionPool implements TenantSwitchingConnectionPoolInterfa
         // Re-cache only the owned connection and release ownership so the next
         // coroutine can claim it. Extra crash-avoidance connections are dropped
         // (GC-closed) rather than overwriting the cached one.
-        if ($this->connection === null || $this->connection === $connection) {
-            $this->connection = $connection;
-            $this->ownerCid   = -1;
+        if ($this->connection !== null && $this->connection !== $connection) {
+            return;
         }
+
+        // Only the owning coroutine may release ownership.
+        //
+        // Without this, a return from anywhere else — a deferred continuation, a
+        // teardown running in its own coroutine, a `finally` that outlives the
+        // request — resets ownerCid to -1 while the real owner is still mid-query.
+        // The next pop() then sees an unowned connection, reuses it, and runs
+        // ensureAlive()'s `SELECT 1` on a socket that is still bound to the
+        // original coroutine. Swoole answers that with an UNCATCHABLE fatal:
+        // "Socket#N has already been bound to another coroutine#M".
+        //
+        // Ignoring the foreign push is the safe half of the trade: the owner
+        // still holds a usable connection and will push it itself, and the worst
+        // case is one connection not returning to the cache — a leak measured in
+        // a single socket, against a crash that takes the whole worker down.
+        if ($this->ownerCid >= 0 && $this->ownerCid !== $this->currentCid()) {
+            return;
+        }
+
+        $this->connection = $connection;
+        $this->ownerCid   = -1;
     }
 
     public function close(): void
