@@ -9,6 +9,7 @@ use Semitexa\Orm\Domain\Model\ColumnDefinition;
 use Semitexa\Orm\Domain\Model\DbColumnState;
 use Semitexa\Orm\Domain\Model\DbIndexState;
 use Semitexa\Orm\Domain\Model\DbTableState;
+use Semitexa\Orm\Domain\Model\IndexDefinition;
 use Semitexa\Orm\Domain\Model\SchemaDiff;
 use Semitexa\Orm\Domain\Model\TableDefinition;
 
@@ -153,7 +154,7 @@ abstract class AbstractSchemaComparator implements SchemaComparatorInterface
      * says `integer`, SQLite reports affinities rather than declared types, and
      * each has its own idea of how a default is spelled.
      *
-     * @return array<string, mixed> The changes needed, empty when the column matches.
+     * @return list<string> The change descriptions, empty when the column matches.
      */
     abstract protected function compareColumn(ColumnDefinition $code, DbColumnState $db): array;
 }

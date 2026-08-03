@@ -106,8 +106,21 @@ final class AbstractSchemaComparatorTest extends TestCase
             $diff,
         );
 
-        self::assertCount(1, $diff->getDropIndexes(), 'the old name is dropped');
-        self::assertCount(1, $diff->getAddIndexes(), 'the new name is added');
+        // Both maps are keyed by table, so asserting on the map itself counts
+        // affected *tables* and would pass just as happily if this emitted the
+        // orders rename twice — which is the exact duplication this test exists to
+        // rule out. Assert the per-table lists, and their contents.
+        self::assertSame(
+            ['orders' => ['orders_customer_id_idx']],
+            $diff->getDropIndexes(),
+            'exactly one drop, for the auto-generated name',
+        );
+
+        $added = $diff->getAddIndexes();
+        self::assertSame(['orders'], array_keys($added));
+        self::assertCount(1, $added['orders'], 'exactly one add, not a duplicate index');
+        self::assertSame('idx_orders_by_customer', $added['orders'][0]['name']);
+        self::assertSame(['customer_id'], $added['orders'][0]['index']->columns);
     }
 
     #[Test]
