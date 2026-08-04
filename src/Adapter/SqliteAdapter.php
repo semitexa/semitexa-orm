@@ -47,6 +47,40 @@ class SqliteAdapter implements DatabaseAdapterInterface
 
     public function execute(string $sql, array $params = []): QueryResult
     {
+        // One boolean when nothing is recording, which is every production
+        // process. The measurement wraps the call rather than living inside it so
+        // the original body keeps its own early returns.
+        if (!QueryRecorder::isRecording()) {
+            return $this->executeRecorded($sql, $params);
+        }
+
+        $start = hrtime(true);
+        try {
+            return $this->executeRecorded($sql, $params);
+        } finally {
+            QueryRecorder::record($sql, $params, (hrtime(true) - $start) / 1_000_000);
+        }
+    }
+
+    public function query(string $sql): QueryResult
+    {
+        if (!QueryRecorder::isRecording()) {
+            return $this->queryRecorded($sql);
+        }
+
+        $start = hrtime(true);
+        try {
+            return $this->queryRecorded($sql);
+        } finally {
+            QueryRecorder::record($sql, [], (hrtime(true) - $start) / 1_000_000);
+        }
+    }
+
+    /**
+     * @param array<mixed> $params
+     */
+    private function executeRecorded(string $sql, array $params = []): QueryResult
+    {
         $pdo = $this->getConnection();
 
         $stmt = $pdo->prepare($sql);
@@ -65,7 +99,7 @@ class SqliteAdapter implements DatabaseAdapterInterface
         );
     }
 
-    public function query(string $sql): QueryResult
+    private function queryRecorded(string $sql): QueryResult
     {
         $pdo = $this->getConnection();
 

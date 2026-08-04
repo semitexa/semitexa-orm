@@ -14,6 +14,7 @@ use Semitexa\Orm\Adapter\ConnectionPoolInterface;
 use Semitexa\Orm\Domain\Model\ConnectionConfig;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Adapter\MysqlAdapter;
+use Semitexa\Orm\Adapter\QueryRecorder;
 use Semitexa\Orm\Adapter\NullConnectionPool;
 use Semitexa\Orm\Adapter\SingleConnectionPool;
 use Semitexa\Orm\Adapter\SqliteAdapter;
@@ -99,6 +100,45 @@ class OrmManager
         }
 
         return $this->adapter;
+    }
+
+    /**
+     * Start recording executed queries, for development tooling.
+     *
+     * Off by default and never enabled by the framework itself. The recorded log
+     * is an unbounded in-memory array, so this is only safe for the span of one
+     * request a developer is deliberately inspecting — {@see drainQueryLog()}
+     * both reads and clears it.
+     *
+     * IMPORTANT: an OrmManager lives for the whole worker, and so does this flag.
+     * Under concurrent load a trace would therefore also capture queries issued by
+     * other coroutines on the same worker. That is acceptable for the one-developer
+     * one-request case this exists for, and wrong for anything else — which is why
+     * nothing in the framework turns it on.
+     */
+    public function enableQueryLog(): void
+    {
+        QueryRecorder::start();
+    }
+
+    /**
+     * Read and clear the recorded queries. Returns an empty list when recording
+     * was never started.
+     *
+     * @return list<array{sql: string, params: array<mixed>, timeMs: float}>
+     */
+    public function drainQueryLog(): array
+    {
+        return QueryRecorder::drain();
+    }
+
+    /**
+     * Stop recording and drop the wrapper, so the unbounded log cannot keep
+     * growing once the request that asked for it has finished.
+     */
+    public function disableQueryLog(): void
+    {
+        QueryRecorder::stop();
     }
 
     public function getPool(): ConnectionPoolInterface
