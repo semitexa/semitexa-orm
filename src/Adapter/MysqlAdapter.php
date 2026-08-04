@@ -62,6 +62,40 @@ class MysqlAdapter implements DatabaseAdapterInterface
 
     public function execute(string $sql, array $params = []): QueryResult
     {
+        // One boolean when nothing is recording, which is every production
+        // process. The measurement wraps the call rather than living inside it so
+        // the original body keeps its own early returns.
+        if (!QueryRecorder::isRecording()) {
+            return $this->executeRecorded($sql, $params);
+        }
+
+        $start = hrtime(true);
+        try {
+            return $this->executeRecorded($sql, $params);
+        } finally {
+            QueryRecorder::record($sql, $params, (hrtime(true) - $start) / 1_000_000);
+        }
+    }
+
+    public function query(string $sql): QueryResult
+    {
+        if (!QueryRecorder::isRecording()) {
+            return $this->queryRecorded($sql);
+        }
+
+        $start = hrtime(true);
+        try {
+            return $this->queryRecorded($sql);
+        } finally {
+            QueryRecorder::record($sql, [], (hrtime(true) - $start) / 1_000_000);
+        }
+    }
+
+    /**
+     * @param array<mixed> $params
+     */
+    private function executeRecorded(string $sql, array $params = []): QueryResult
+    {
         // Native prepares reject repeated named placeholders (HY093);
         // rewrite them deterministically before hitting the statement cache.
         [$sql, $params] = RepeatedPlaceholderExpander::expand($sql, $params);
@@ -115,7 +149,7 @@ class MysqlAdapter implements DatabaseAdapterInterface
      * Intended primarily for trusted raw SQL and internal adapter operations
      * such as bootstrapping/version detection.
      */
-    public function query(string $sql): QueryResult
+    private function queryRecorded(string $sql): QueryResult
     {
         $connection = $this->pool->pop();
 
