@@ -62,6 +62,99 @@ final class TransactionManagerConnectionLeakTest extends TestCase
         self::assertSame(2, $pool->pushCount, 'the second, healthy connection is also returned');
         self::assertFalse($manager->isActive());
     }
+
+    #[Test]
+    public function a_transaction_never_holds_two_pooled_connections_at_once(): void
+    {
+        // A cold adapter detects the server version by running a real query,
+        // which borrows a connection of its own. Asking for it while the
+        // transaction already holds one makes a coroutine wait for a SECOND
+        // connection without releasing its first; `size` coroutines in that
+        // state hold every connection in the pool while each waits for another,
+        // and nothing can ever be returned. That deadlock reaches a user as a
+        // request that is read and never answered, with every worker idle.
+        $pool = new ConcurrencyTrackingPool(static fn (): \PDO => new \PDO('sqlite::memory:'));
+        $manager = new TransactionManager($pool, new ColdVersionAdapter($pool));
+
+        self::assertSame('done', $manager->run(static fn () => 'done'));
+
+        self::assertSame(
+            1,
+            $pool->maxOutstanding,
+            'Version detection must borrow its connection before the transaction takes one, not while it holds one.',
+        );
+    }
+}
+
+/**
+ * Counts how many connections are checked out at the same moment.
+ *
+ * The pool itself is unbounded here on purpose: a real pool would simply block,
+ * and a blocked test tells you nothing about WHY. Recording the high-water mark
+ * turns the deadlock into an assertion.
+ */
+final class ConcurrencyTrackingPool implements ConnectionPoolInterface
+{
+    public int $outstanding = 0;
+    public int $maxOutstanding = 0;
+
+    public function __construct(private \Closure $factory) {}
+
+    public function pop(?float $timeout = null): \PDO
+    {
+        $this->outstanding++;
+        $this->maxOutstanding = max($this->maxOutstanding, $this->outstanding);
+
+        return ($this->factory)();
+    }
+
+    public function push(\PDO $connection): void
+    {
+        $this->outstanding--;
+    }
+
+    public function close(): void {}
+    public function getSize(): int { return 10; }
+    public function getAvailable(): int { return 10 - $this->outstanding; }
+    public function switchTo(string $tenantId): void {}
+}
+
+/**
+ * An adapter that has not yet detected its server version, so the first call
+ * runs a query — which, like the real MysqlAdapter, borrows from the pool.
+ */
+final class ColdVersionAdapter implements DatabaseAdapterInterface
+{
+    private string $serverVersion = '';
+
+    public function __construct(private ConnectionPoolInterface $pool) {}
+
+    public function supports(ServerCapability $capability): bool { return true; }
+
+    public function getServerVersion(): string
+    {
+        if ($this->serverVersion === '') {
+            $this->query('SELECT VERSION()');
+            $this->serverVersion = '8.0.0';
+        }
+
+        return $this->serverVersion;
+    }
+
+    public function execute(string $sql, array $params = []): QueryResult { return new QueryResult(); }
+
+    public function query(string $sql): QueryResult
+    {
+        // What MysqlAdapter::queryRecorded() does: borrow, run, return.
+        $connection = $this->pool->pop();
+        try {
+            return new QueryResult();
+        } finally {
+            $this->pool->push($connection);
+        }
+    }
+
+    public function lastInsertId(): string { return '0'; }
 }
 
 final class RecordingPool implements ConnectionPoolInterface

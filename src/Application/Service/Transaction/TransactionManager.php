@@ -134,6 +134,17 @@ class TransactionManager
             return $this->runOuterSqlite($callback);
         }
 
+        // Resolve the server version BEFORE taking a connection, never while
+        // holding one. On a cold adapter this runs a real detection query, which
+        // borrows a connection of its own; asking for it after the pop means a
+        // coroutine inside a transaction waits for a SECOND connection while
+        // still holding its first. Once `size` coroutines are in that state
+        // every pooled connection is held by someone waiting for another and
+        // nothing can ever be returned — the pool deadlocks, with the workers
+        // idle and the requests simply never answered. The value is cached on
+        // the adapter, so this costs a query once and nothing after.
+        $serverVersion = $this->adapter->getServerVersion();
+
         $pdo = $this->pool->pop();
         $this->setActiveConnection($pdo);
         $this->setDepth(1);
@@ -147,7 +158,7 @@ class TransactionManager
             // corrupts every subsequent transaction into the nested-savepoint
             // branch. A pushed-back dead connection is healed by the pool's
             // ensureAlive() on the next pop().
-            $connAdapter = new SingleConnectionAdapter($pdo, $this->adapter->getServerVersion());
+            $connAdapter = new SingleConnectionAdapter($pdo, $serverVersion);
             $pdo->beginTransaction();
 
             $result = $callback($connAdapter);
