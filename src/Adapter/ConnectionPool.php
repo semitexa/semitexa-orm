@@ -96,12 +96,64 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
      */
     private \WeakMap $slotHolders;
 
+    /**
+     * The process this pool's state belongs to.
+     *
+     * A pool built during boot is inherited by every worker the server forks,
+     * and none of the state below survives that honestly — see
+     * {@see adoptForCurrentProcess()}.
+     */
+    private int $ownerPid;
+
     public function __construct(
         private readonly int $size,
         private readonly \Closure $factory,
     ) {
         self::registerShutdownHookOnce();
         $this->pool        = new Channel($size);
+        $this->created     = new Atomic(0);
+        $this->slotHolders = new \WeakMap();
+        $this->ownerPid    = getmypid();
+    }
+
+    /**
+     * Re-own the pool after a fork.
+     *
+     * A pool created before the server forks its workers is inherited by all of
+     * them, and two pieces of its state then mean the wrong thing:
+     *
+     *   - `created` is a Swoole\Atomic, which lives in SHARED memory. A counter
+     *     meant to cap ONE worker's connections instead capped every worker put
+     *     together, so DB_POOL_SIZE silently became a budget for the whole
+     *     server. Once the workers had collectively created `size` connections,
+     *     no worker was allowed to open another — while each worker's own
+     *     channel held only the handful it had made. Workers that lost the race
+     *     parked on an empty channel that nothing would ever refill: requests
+     *     read and never answered, with every worker thread idle. Observed on a
+     *     consumer as 10 connections shared by 8 workers.
+     *
+     *   - the Channel and any connections in it are inherited copies. A PDO
+     *     socket used from two processes at once corrupts both sides of the
+     *     conversation, so inherited connections must be dropped, never served.
+     *
+     * Dropping the channel is safe: nothing has been handed out in this process
+     * yet, and the parent's connections close with their last reference.
+     */
+    private function adoptForCurrentProcess(): void
+    {
+        $pid = getmypid();
+        if ($pid === $this->ownerPid) {
+            return;
+        }
+
+        $this->ownerPid = $pid;
+
+        // A pool closed before the fork stays closed — do not resurrect it.
+        if (! $this->pool instanceof Channel) {
+            return;
+        }
+
+        $this->pool        = new Channel($this->size);
         $this->created     = new Atomic(0);
         $this->slotHolders = new \WeakMap();
     }
@@ -119,6 +171,8 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
 
     public function pop(?float $timeout = null): \PDO
     {
+        $this->adoptForCurrentProcess();
+
         if ($this->pool === null) {
             throw new \RuntimeException('Connection pool is closed.');
         }
@@ -190,6 +244,8 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
 
     public function push(\PDO $connection): void
     {
+        $this->adoptForCurrentProcess();
+
         $pool = $this->pool;
         if (! $pool instanceof Channel) {
             // Pool already closed. close() resets `created` wholesale, so there
@@ -277,6 +333,8 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
      */
     public function fill(): void
     {
+        $this->adoptForCurrentProcess();
+
         $pool = $this->pool;
         if (! $pool instanceof Channel) {
             throw new \RuntimeException('Connection pool is closed.');
@@ -355,6 +413,8 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
 
     public function getAvailable(): int
     {
+        $this->adoptForCurrentProcess();
+
         if ($this->pool === null) {
             return 0;
         }

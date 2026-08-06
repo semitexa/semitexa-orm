@@ -419,6 +419,48 @@ final class ConnectionPoolTest extends TestCase
     }
 
     #[Test]
+    public function a_pool_inherited_across_a_fork_starts_its_own_accounting(): void
+    {
+        if (!class_exists(\Swoole\Coroutine::class)) {
+            self::markTestSkipped('Swoole extension is required.');
+        }
+
+        Coroutine\run(function () {
+            $pool = new ConnectionPool(2, static fn (): \PDO => new \PDO('sqlite::memory:'));
+            // Held at the same time on purpose: popping and pushing in turn
+            // would reuse the one connection and never fill the pool.
+            $first = $pool->pop();
+            $second = $pool->pop();
+            $pool->push($first);
+            $pool->push($second);
+
+            $ref = new \ReflectionClass($pool);
+            $created = $ref->getProperty('created');
+            $created->setAccessible(true);
+            $owner = $ref->getProperty('ownerPid');
+            $owner->setAccessible(true);
+
+            self::assertSame(2, $created->getValue($pool)->get(), 'Precondition: the pool is full.');
+
+            // Stand in for the fork. `created` is a Swoole\Atomic in SHARED
+            // memory, so before the fix every worker inherited one counter:
+            // DB_POOL_SIZE capped the whole server rather than each worker, and
+            // a worker that lost the race could never open a connection of its
+            // own while its inherited channel sat empty.
+            $owner->setValue($pool, $owner->getValue($pool) + 1);
+
+            $conn = $pool->pop();
+
+            self::assertInstanceOf(\PDO::class, $conn, 'A forked worker must be able to open its own connection.');
+            self::assertSame(
+                1,
+                $created->getValue($pool)->get(),
+                'The counter must restart per process, not carry the parent total.',
+            );
+        });
+    }
+
+    #[Test]
     public function pop_without_an_explicit_timeout_does_not_wait_forever(): void
     {
         $ref = new \ReflectionClass(ConnectionPool::class);
