@@ -45,6 +45,24 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
      */
     private const WAIT_SLICE_SECONDS = 0.5;
 
+    /**
+     * How long pop() waits for a connection when the caller names no timeout.
+     *
+     * The callers that matter — MysqlAdapter::executeRecorded/queryRecorded and
+     * TransactionManager::runOuter — all call pop() with no argument, so the
+     * previous default of -1 meant "park forever". That is what turned pool
+     * exhaustion into a silent hang: the request was read, no response was ever
+     * written, and every worker thread sat idle, so nothing in the logs, the
+     * process table or the socket queues said a database connection was the
+     * thing being waited on.
+     *
+     * A request that has waited this long for a connection is not going to be
+     * saved by waiting longer; the existing RuntimeException names the pool and
+     * fails the request instead of the whole worker going quiet. Callers that
+     * genuinely want to block indefinitely can still pass -1.
+     */
+    private const DEFAULT_POP_TIMEOUT_SECONDS = 10.0;
+
     private ?Channel $pool;
 
     /**
@@ -59,13 +77,33 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
      */
     private Atomic $created;
 
+    /**
+     * The connections that hold a slot counted in `created`.
+     *
+     * Exactly the ones createForClaimedSlot() produced — pop()/fill() claim a
+     * slot with cmpset before calling it, and ensureAlive() passes on the slot
+     * its dead connection held. The direct `($this->factory)()` that pop()
+     * hands out to a non-coroutine caller is deliberately absent: it never
+     * claimed a slot, so push() must not release one for it.
+     *
+     * A WeakMap, not spl_object_id: an id is reused once its object is
+     * collected, and a stale entry would then make some later, unrelated PDO
+     * look like a slot holder and release a slot that was never claimed —
+     * over-creating past `size` instead of leaking, which is the same bug
+     * pointing the other way. Entries here disappear with their connection.
+     *
+     * @var \WeakMap<\PDO, true>
+     */
+    private \WeakMap $slotHolders;
+
     public function __construct(
         private readonly int $size,
         private readonly \Closure $factory,
     ) {
         self::registerShutdownHookOnce();
-        $this->pool    = new Channel($size);
-        $this->created = new Atomic(0);
+        $this->pool        = new Channel($size);
+        $this->created     = new Atomic(0);
+        $this->slotHolders = new \WeakMap();
     }
 
     private static function registerShutdownHookOnce(): void
@@ -79,11 +117,15 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
         });
     }
 
-    public function pop(float $timeout = -1): \PDO
+    public function pop(?float $timeout = null): \PDO
     {
         if ($this->pool === null) {
             throw new \RuntimeException('Connection pool is closed.');
         }
+
+        // null means "no preference" and takes the bounded default; -1 stays
+        // available for a caller that really does mean wait forever.
+        $timeout ??= self::DEFAULT_POP_TIMEOUT_SECONDS;
 
         // Outside a coroutine the Swoole Channel cannot be operated ("API must be
         // called in the coroutine") — a fatal that bypasses try/catch. Hand out a
@@ -150,17 +192,52 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
     {
         $pool = $this->pool;
         if (! $pool instanceof Channel) {
+            // Pool already closed. close() resets `created` wholesale, so there
+            // is no slot left to give back — just forget the connection.
+            unset($this->slotHolders[$connection]);
+
             return;
         }
 
         // Outside a coroutine `Channel->push()` fatals ("API must be called in the
-        // coroutine"). The connection handed out by pop() in this state was
-        // un-pooled, so drop it (it closes on destruction) instead of crashing.
+        // coroutine"). The connection cannot go back into the channel, so it is
+        // dropped (it closes on destruction) instead of crashing.
+        //
+        // Dropping it is only half the job. pop() hands out TWO kinds of
+        // connection: an un-pooled one minted directly for a non-coroutine
+        // caller, which never claimed a slot, and a real pooled one that did.
+        // A pooled connection reaches this branch whenever pop() ran inside a
+        // coroutine but push() does not — a `finally` running during coroutine
+        // teardown, a destructor, a deferred continuation. Dropping it without
+        // releasing its slot costs the pool one slot forever, and `size` of
+        // those wedge it full-but-empty: every later pop() then parks on a
+        // channel nothing will ever push to, with the worker looking idle. That
+        // is the ratcheting deadlock described above createForClaimedSlot(),
+        // reached from the other side.
         if (! self::inCoroutine()) {
+            $this->releaseSlotOf($connection);
+
             return;
         }
 
         $pool->push($connection);
+    }
+
+    /**
+     * Give back the slot `$connection` holds, if it holds one.
+     *
+     * Only connections createForClaimedSlot() produced are counted in
+     * `created`; an un-pooled one minted for a non-coroutine caller is not, and
+     * releasing a slot for it would let the pool create past `size`.
+     */
+    private function releaseSlotOf(\PDO $connection): void
+    {
+        if (! isset($this->slotHolders[$connection])) {
+            return;
+        }
+
+        unset($this->slotHolders[$connection]);
+        $this->created->sub(1);
     }
 
     /**
@@ -326,14 +403,31 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
         try {
             $stmt = $connection->query('SELECT 1');
             if ($stmt === false) {
-                return $this->createForClaimedSlot();
+                return $this->replaceDeadConnection($connection);
             }
 
             return $connection;
         } catch (\PDOException) {
             // Connection is stale — replace it with a fresh one.
-            return $this->createForClaimedSlot();
+            return $this->replaceDeadConnection($connection);
         }
+    }
+
+    /**
+     * Hand the dead connection's slot to its replacement.
+     *
+     * The slot stays claimed across the swap, so `created` is untouched here;
+     * createForClaimedSlot() releases it only if the reconnect itself fails.
+     * The dead connection is deregistered first so it can never release the
+     * slot a second time — a WeakMap entry outlives the object only until the
+     * next collection, and a stray push() of a discarded connection in that
+     * window would otherwise hand back a slot its replacement is still using.
+     */
+    private function replaceDeadConnection(\PDO $dead): \PDO
+    {
+        unset($this->slotHolders[$dead]);
+
+        return $this->createForClaimedSlot();
     }
 
     /**
@@ -354,10 +448,16 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
     private function createForClaimedSlot(): \PDO
     {
         try {
-            return ($this->factory)();
+            $connection = ($this->factory)();
         } catch (\Throwable $e) {
             $this->created->sub(1);
             throw $e;
         }
+
+        // Remember that this one carries the slot, so push() can tell it apart
+        // from an un-pooled connection when it has to drop rather than return it.
+        $this->slotHolders[$connection] = true;
+
+        return $connection;
     }
 }

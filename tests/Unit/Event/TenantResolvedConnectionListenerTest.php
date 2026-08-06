@@ -23,7 +23,7 @@ final class TenantResolvedConnectionListenerTest extends TestCase
 
         $listener = new TenantResolvedConnectionListener();
         $this->injectPool($listener, new class implements TenantSwitchingConnectionPoolInterface {
-            public function pop(float $timeout = -1): \PDO
+            public function pop(?float $timeout = null): \PDO
             {
                 throw new \BadMethodCallException('Not used in this test.');
             }
@@ -67,7 +67,7 @@ final class TenantResolvedConnectionListenerTest extends TestCase
         $pool = new class implements TenantSwitchingConnectionPoolInterface {
             public ?string $switchedTenant = null;
 
-            public function pop(float $timeout = -1): \PDO
+            public function pop(?float $timeout = null): \PDO
             {
                 throw new \BadMethodCallException('Not used in this test.');
             }
@@ -114,7 +114,7 @@ final class TenantResolvedConnectionListenerTest extends TestCase
         $pool = new class implements ConnectionPoolInterface {
             public ?string $switchedTenant = null;
 
-            public function pop(float $timeout = -1): \PDO
+            public function pop(?float $timeout = null): \PDO
             {
                 throw new \BadMethodCallException('Not used in this test.');
             }
@@ -158,7 +158,7 @@ final class TenantResolvedConnectionListenerTest extends TestCase
         // data. Fail closed: abort.
         $listener = new TenantResolvedConnectionListener();
         $pool = new class implements TenantSwitchingConnectionPoolInterface {
-            public function pop(float $timeout = -1): \PDO
+            public function pop(?float $timeout = null): \PDO
             {
                 throw new \BadMethodCallException('Not used in this test.');
             }
@@ -267,7 +267,7 @@ final class TenantResolvedConnectionListenerTest extends TestCase
     private function failingPool(): ConnectionPoolInterface
     {
         return new class implements ConnectionPoolInterface {
-            public function pop(float $timeout = -1): \PDO
+            public function pop(?float $timeout = null): \PDO
             {
                 throw new \BadMethodCallException('Not used in this test.');
             }

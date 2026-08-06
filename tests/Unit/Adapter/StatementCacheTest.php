@@ -175,7 +175,7 @@ final class FixedConnectionPool implements ConnectionPoolInterface
 {
     public function __construct(private readonly \PDO $pdo) {}
 
-    public function pop(float $timeout = -1): \PDO
+    public function pop(?float $timeout = null): \PDO
     {
         return $this->pdo;
     }

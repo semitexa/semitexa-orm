@@ -14,7 +14,7 @@ namespace Semitexa\Orm\Adapter;
  */
 final class NullConnectionPool implements TenantSwitchingConnectionPoolInterface
 {
-    public function pop(float $timeout = -1): \PDO
+    public function pop(?float $timeout = null): \PDO
     {
         throw new \LogicException(
             'NullConnectionPool::pop() was called — the active adapter does not need pooling.',
