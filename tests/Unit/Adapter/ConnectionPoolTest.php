@@ -343,6 +343,115 @@ final class ConnectionPoolTest extends TestCase
         });
     }
 
+    #[Test]
+    public function push_outside_a_coroutine_releases_the_slot_a_pooled_connection_holds(): void
+    {
+        if (!class_exists(\Swoole\Coroutine::class)) {
+            self::markTestSkipped('Swoole extension is required.');
+        }
+
+        $pool = null;
+        $borrowed = null;
+
+        // pop() INSIDE a coroutine claims a slot; push() OUTSIDE one cannot put
+        // the connection back on the channel and drops it. That asymmetry is
+        // reached in production by a `finally` running during coroutine
+        // teardown, a destructor, or a deferred continuation — the connection
+        // goes, and before the fix its slot went with it, permanently.
+        Coroutine\run(function () use (&$pool, &$borrowed) {
+            $pool = new ConnectionPool(2, static fn (): \PDO => new \PDO('sqlite::memory:'));
+            $borrowed = $pool->pop();
+        });
+
+        $ref = new \ReflectionClass($pool);
+        $createdProp = $ref->getProperty('created');
+        $createdProp->setAccessible(true);
+        self::assertSame(1, $createdProp->getValue($pool)->get(), 'Precondition: the pop claimed a slot.');
+        self::assertSame(-1, Coroutine::getCid(), 'Precondition: this push runs outside a coroutine.');
+
+        $pool->push($borrowed);
+
+        self::assertSame(
+            0,
+            $createdProp->getValue($pool)->get(),
+            'Dropping a pooled connection must give its slot back, or the pool ratchets shut one slot at a time.',
+        );
+
+        // The real symptom was not the counter but the silence: once `created`
+        // reached `size` the channel was empty, no replacement could be created,
+        // and every later pop() parked with nothing left to wake it.
+        Coroutine\run(function () use ($pool) {
+            self::assertInstanceOf(\PDO::class, $pool->pop(3.0));
+            self::assertInstanceOf(\PDO::class, $pool->pop(3.0));
+        });
+    }
+
+    #[Test]
+    public function push_outside_a_coroutine_keeps_the_count_for_a_connection_that_never_claimed_a_slot(): void
+    {
+        if (!class_exists(\Swoole\Coroutine::class)) {
+            self::markTestSkipped('Swoole extension is required.');
+        }
+
+        $pool = null;
+
+        Coroutine\run(function () use (&$pool) {
+            $pool = new ConnectionPool(2, static fn (): \PDO => new \PDO('sqlite::memory:'));
+            $pool->push($pool->pop()); // one real slot, parked on the channel
+        });
+
+        $ref = new \ReflectionClass($pool);
+        $createdProp = $ref->getProperty('created');
+        $createdProp->setAccessible(true);
+        self::assertSame(1, $createdProp->getValue($pool)->get());
+
+        // Outside a coroutine pop() mints an un-pooled connection and never
+        // claims a slot. Releasing one for it on the way back would let the pool
+        // create past `size` — the same accounting bug pointing the other way.
+        $unpooled = $pool->pop();
+        $pool->push($unpooled);
+
+        self::assertSame(
+            1,
+            $createdProp->getValue($pool)->get(),
+            'An un-pooled connection must not hand back a slot it never took.',
+        );
+    }
+
+    #[Test]
+    public function pop_without_an_explicit_timeout_does_not_wait_forever(): void
+    {
+        $ref = new \ReflectionClass(ConnectionPool::class);
+        $default = $ref->getConstant('DEFAULT_POP_TIMEOUT_SECONDS');
+
+        // The callers that matter pass no timeout at all, so this default is
+        // what stands between a saturated pool and a request that never answers.
+        self::assertIsFloat($default);
+        self::assertGreaterThan(0.0, $default);
+    }
+
+    #[Test]
+    public function an_exhausted_pool_raises_instead_of_parking(): void
+    {
+        if (!class_exists(\Swoole\Coroutine::class)) {
+            self::markTestSkipped('Swoole extension is required.');
+        }
+
+        Coroutine\run(function () {
+            $pool = new ConnectionPool(1, static fn (): \PDO => new \PDO('sqlite::memory:'));
+            $pool->pop(); // the only slot, never returned
+
+            // A short explicit timeout keeps the test fast; the default takes
+            // this same path, just later.
+            try {
+                $pool->pop(0.05);
+                self::fail('Expected the exhausted pool to raise.');
+            } catch (\RuntimeException $e) {
+                self::assertStringContainsString('timeout', $e->getMessage());
+            }
+        });
+    }
+
     protected function tearDown(): void
     {
         if (class_exists(\Swoole\Runtime::class)) {

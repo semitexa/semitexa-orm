@@ -76,7 +76,7 @@ final class RecordingPool implements ConnectionPoolInterface
         $this->connection = $connection;
     }
 
-    public function pop(float $timeout = -1): \PDO
+    public function pop(?float $timeout = null): \PDO
     {
         $this->popCount++;
         return $this->connection;

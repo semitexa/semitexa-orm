@@ -112,7 +112,7 @@ final class PerPopConnectionPool implements ConnectionPoolInterface
     /** @var \PDO[] */
     public array $popped = [];
 
-    public function pop(float $timeout = -1): \PDO
+    public function pop(?float $timeout = null): \PDO
     {
         $this->popCount++;
         $pdo = new \PDO('sqlite::memory:');

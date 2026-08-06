@@ -32,8 +32,10 @@ final class SingleConnectionPool implements TenantSwitchingConnectionPoolInterfa
         private readonly \Closure $factory,
     ) {}
 
-    public function pop(float $timeout = -1): \PDO
+    public function pop(?float $timeout = null): \PDO
     {
+        // One connection, never a queue: nothing here ever waits, so the
+        // timeout is accepted for contract shape only.
         $cid = $this->currentCid();
 
         // Hot path: true single-threaded CLI — one connection, reused. Unchanged.

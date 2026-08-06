@@ -10,7 +10,15 @@ namespace Semitexa\Orm\Adapter;
  */
 interface ConnectionPoolInterface
 {
-    public function pop(float $timeout = -1): \PDO;
+    /**
+     * Take a connection, waiting up to `$timeout` seconds for a free one.
+     *
+     * `null` leaves the wait to the implementation, which is what every caller
+     * that has no opinion should pass — a pooled implementation is expected to
+     * bound it, so a pool that cannot serve anyone fails the request loudly
+     * rather than parking it forever. `-1` explicitly means wait indefinitely.
+     */
+    public function pop(?float $timeout = null): \PDO;
 
     public function push(\PDO $connection): void;
 
