@@ -75,6 +75,24 @@ final class QueryRecorderTest extends TestCase
     }
 
     #[Test]
+    public function an_observer_registered_outside_a_session_is_refused(): void
+    {
+        // A stale callback surviving into the NEXT session would receive
+        // another request's SQL and bindings — the registration must be part
+        // of opening a session, never a standing hook.
+        $seen = 0;
+        QueryRecorder::observe(function () use (&$seen): void {
+            $seen++;
+        });
+
+        QueryRecorder::start();
+        QueryRecorder::record('SELECT 1', [], 1.0);
+        QueryRecorder::stop();
+
+        self::assertSame(0, $seen, 'an out-of-session observer must never see a later session\'s queries');
+    }
+
+    #[Test]
     public function a_throwing_observer_detaches_and_the_query_still_logs(): void
     {
         QueryRecorder::start();

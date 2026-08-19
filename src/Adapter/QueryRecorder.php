@@ -91,11 +91,19 @@ final class QueryRecorder
 
     /**
      * Attach a live observer, letting a tracer place each query on its timeline
-     * as it happens instead of draining a positionless list at the end. Only
-     * effective while recording; cleared when the last session stops.
+     * as it happens instead of draining a positionless list at the end.
+     *
+     * Refused outside an active session: an observer registered after the last
+     * stop() would survive into the NEXT session and receive another request's
+     * SQL and bindings — cross-request leakage through a stale callback.
+     * Registration is part of opening a session, never a standing hook.
      */
     public static function observe(?\Closure $observer): void
     {
+        if (!self::$recording) {
+            return;
+        }
+
         self::$observer = $observer;
     }
 
