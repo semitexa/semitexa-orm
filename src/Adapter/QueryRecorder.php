@@ -41,27 +41,62 @@ final class QueryRecorder
 {
     private static bool $recording = false;
 
+    /**
+     * How many traces currently want the log. Counted rather than boolean:
+     * two requests traced side by side on one worker share this switch, and
+     * without the count the first one to finish turned recording off underneath
+     * the other, silently ending its query capture mid-trace.
+     */
+    private static int $sessions = 0;
+
     /** @var list<array{sql: string, params: array<mixed>, timeMs: float}> */
     private static array $log = [];
 
     /**
-     * Begin recording, discarding anything left behind, so a trace cannot inherit
-     * queries from an earlier request.
+     * Called with (sql, params, timeMs) as each query completes, while recording
+     * is on. One slot, not a list: the only registered observer is stateless
+     * (it resolves the current coroutine's trace buffer at call time), so which
+     * trace registered it is irrelevant. See {@see observe()}.
+     */
+    private static ?\Closure $observer = null;
+
+    /**
+     * Begin recording. The leftover log is discarded only when no other session
+     * is live, so a trace cannot inherit queries from an earlier request but
+     * also cannot wipe a concurrent one's capture.
      */
     public static function start(): void
     {
-        self::$log = [];
+        if (self::$sessions === 0) {
+            self::$log = [];
+        }
+        self::$sessions++;
         self::$recording = true;
     }
 
     /**
-     * Stop and discard. Called at the end of a traced request so the unbounded
-     * log does not survive in a worker that lives for days.
+     * Release one session; recording stops and the log is discarded when the
+     * last session ends, so the unbounded log does not survive in a worker that
+     * lives for days.
      */
     public static function stop(): void
     {
-        self::$recording = false;
-        self::$log = [];
+        self::$sessions = max(0, self::$sessions - 1);
+        if (self::$sessions === 0) {
+            self::$recording = false;
+            self::$log = [];
+            self::$observer = null;
+        }
+    }
+
+    /**
+     * Attach a live observer, letting a tracer place each query on its timeline
+     * as it happens instead of draining a positionless list at the end. Only
+     * effective while recording; cleared when the last session stops.
+     */
+    public static function observe(?\Closure $observer): void
+    {
+        self::$observer = $observer;
     }
 
     public static function isRecording(): bool
@@ -82,6 +117,16 @@ final class QueryRecorder
         }
 
         self::$log[] = ['sql' => $sql, 'params' => $params, 'timeMs' => $timeMs];
+
+        if (self::$observer !== null) {
+            try {
+                (self::$observer)($sql, $params, $timeMs);
+            } catch (\Throwable) {
+                // An observer that throws must not break the query it observes;
+                // detach it so the failure cannot repeat on every statement.
+                self::$observer = null;
+            }
+        }
     }
 
     /**
