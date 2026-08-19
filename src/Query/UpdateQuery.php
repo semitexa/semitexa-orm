@@ -42,8 +42,9 @@ class UpdateQuery implements WhereCapableInterface
             if ($col === $pkColumn) {
                 continue;
             }
-            $setClauses[] = "`{$col}` = :set_{$col}";
-            $params["set_{$col}"] = $value;
+            $paramName = $this->nextParam('set_' . $col);
+            $setClauses[] = $this->quoteIdentifier($col) . " = :{$paramName}";
+            $params[$paramName] = $value;
         }
 
         if ($setClauses === []) {
@@ -53,7 +54,8 @@ class UpdateQuery implements WhereCapableInterface
         $params['pk_value'] = $pkValue;
         $setString = implode(', ', $setClauses);
 
-        $sql = "UPDATE `{$this->table}` SET {$setString} WHERE `{$pkColumn}` = :pk_value";
+        $sql = 'UPDATE ' . $this->quoteIdentifier($this->table) . " SET {$setString}"
+            . ' WHERE ' . $this->quoteIdentifier($pkColumn) . ' = :pk_value';
         $this->adapter->execute($sql, $params);
     }
 
@@ -80,13 +82,23 @@ class UpdateQuery implements WhereCapableInterface
         $setClauses = [];
         foreach ($data as $col => $value) {
             $paramName = $this->nextParam($col);
-            $setClauses[] = "`{$col}` = :{$paramName}";
+            $setClauses[] = $this->quoteIdentifier($col) . " = :{$paramName}";
             $this->params[$paramName] = $value instanceof \BackedEnum ? $value->value : $value;
         }
 
         $setString = implode(', ', $setClauses);
-        $sql = "UPDATE `{$this->table}` SET {$setString}" . $this->buildWhereClause();
+        $sql = 'UPDATE ' . $this->quoteIdentifier($this->table) . " SET {$setString}" . $this->buildWhereClause();
 
         $this->adapter->execute($sql, $this->params);
+    }
+
+    /**
+     * Same identifier escaping as WhereTrait::buildWhereCondition and
+     * DeleteQuery::quotedTable — identifiers here are metadata-derived today,
+     * but the builder must not trust its caller for that.
+     */
+    private function quoteIdentifier(string $identifier): string
+    {
+        return '`' . str_replace('`', '``', $identifier) . '`';
     }
 }
