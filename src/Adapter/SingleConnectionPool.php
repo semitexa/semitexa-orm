@@ -21,7 +21,7 @@ namespace Semitexa\Orm\Adapter;
  * short-lived connection instead of returning the bound one. The hot CLI path
  * (no coroutine) is unchanged.
  */
-final class SingleConnectionPool implements TenantSwitchingConnectionPoolInterface
+final class SingleConnectionPool implements TenantSwitchingConnectionPoolInterface, EphemeralConnectionAwareInterface
 {
     private ?\PDO $connection = null;
 
@@ -88,6 +88,25 @@ final class SingleConnectionPool implements TenantSwitchingConnectionPoolInterfa
             return;
         }
 
+        // Never re-cache a connection mid-transaction: the next caller would
+        // inherit the open transaction and its writes would ride someone
+        // else's commit/rollback. (Tracks PDO::beginTransaction() only — same
+        // limitation as ConnectionPool::push().)
+        if (self::hasOpenTransaction($connection)) {
+            try {
+                $connection->rollBack();
+            } catch (\Throwable) {
+                // Dead mid-transaction connection: drop it so the next pop()
+                // mints a fresh one instead of reusing poisoned state.
+                if ($this->connection === $connection) {
+                    $this->connection = null;
+                }
+                $this->ownerCid = -1;
+
+                return;
+            }
+        }
+
         $this->connection = $connection;
         $this->ownerCid   = -1;
     }
@@ -96,6 +115,16 @@ final class SingleConnectionPool implements TenantSwitchingConnectionPoolInterfa
     {
         $this->connection = null;
         $this->ownerCid   = -1;
+    }
+
+    /**
+     * Everything except the one cached connection is a crash-avoidance mint
+     * (the contended-coroutine path in pop()) that push() drops — caching a
+     * statement for it would pin its socket in a GC cycle.
+     */
+    public function isEphemeralConnection(\PDO $connection): bool
+    {
+        return $connection !== $this->connection;
     }
 
     public function getSize(): int
@@ -142,6 +171,20 @@ final class SingleConnectionPool implements TenantSwitchingConnectionPoolInterfa
         }
 
         return \Swoole\Coroutine::getCid();
+    }
+
+    /**
+     * inTransaction() on a healthy connection is a local flag read (no IO),
+     * but an uninitialized or torn-down PDO raises \Error — treat any failure
+     * to answer as "no transaction" and let the normal path proceed.
+     */
+    private static function hasOpenTransaction(\PDO $connection): bool
+    {
+        try {
+            return $connection->inTransaction();
+        } catch (\Throwable) {
+            return false;
+        }
     }
 
     private function ensureAlive(\PDO $connection): \PDO

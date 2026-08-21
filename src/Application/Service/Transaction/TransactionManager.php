@@ -9,6 +9,9 @@ use Semitexa\Core\Event\EventDispatcherInterface;
 use Semitexa\Orm\Adapter\ConnectionPoolInterface;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Adapter\SqliteAdapter;
+use Semitexa\Orm\Exception\ConnectionLostException;
+use Semitexa\Orm\Exception\DeadlockException;
+use Semitexa\Orm\Exception\LockWaitTimeoutException;
 
 class TransactionManager
 {
@@ -26,49 +29,62 @@ class TransactionManager
      * transaction resets in its finally. Within ONE coroutine, run() → nested
      * run() still share state (correct nesting). $eventDispatcher stays an
      * instance field — it is boot config, identical for every request.
+     *
+     * The keys are namespaced by CONNECTION NAME: each named connection has its
+     * own TransactionManager (one per OrmManager, see ConnectionRegistry), and
+     * were the keys shared, a transaction opened on connection B while A's is
+     * active in the same coroutine would read A's depth, take the nested-
+     * savepoint branch, and run B's writes on A's PDO — the wrong database.
      */
-    private const KEY_ACTIVE_CONNECTION = 'orm.tx.activeConnection';
-    private const KEY_DEPTH = 'orm.tx.depth';
-    private const KEY_PENDING_EVENTS = 'orm.tx.pendingEvents';
+    private const KEY_ACTIVE_CONNECTION = 'orm.tx.%s.activeConnection';
+    private const KEY_ACTIVE_ADAPTER = 'orm.tx.%s.activeAdapter';
+    private const KEY_DEPTH = 'orm.tx.%s.depth';
+    private const KEY_PENDING_EVENTS = 'orm.tx.%s.pendingEvents';
 
     public function __construct(
         private readonly ConnectionPoolInterface $pool,
         private readonly DatabaseAdapterInterface $adapter,
         private ?EventDispatcherInterface $eventDispatcher = null,
+        private readonly string $connectionName = 'default',
     ) {}
+
+    private function key(string $template): string
+    {
+        return sprintf($template, $this->connectionName);
+    }
 
     /** Active PDO connection for the current coroutine's (outermost) transaction, null when idle. */
     private function activeConnection(): ?\PDO
     {
-        return CoroutineLocal::get(self::KEY_ACTIVE_CONNECTION);
+        return CoroutineLocal::get($this->key(self::KEY_ACTIVE_CONNECTION));
     }
 
     private function setActiveConnection(?\PDO $pdo): void
     {
-        CoroutineLocal::set(self::KEY_ACTIVE_CONNECTION, $pdo);
+        CoroutineLocal::set($this->key(self::KEY_ACTIVE_CONNECTION), $pdo);
     }
 
     /** Nesting depth for the current coroutine: 0 = no transaction, 1 = outer BEGIN, 2+ = savepoints. */
     private function depth(): int
     {
-        return (int) CoroutineLocal::get(self::KEY_DEPTH, 0);
+        return (int) CoroutineLocal::get($this->key(self::KEY_DEPTH), 0);
     }
 
     private function setDepth(int $depth): void
     {
-        CoroutineLocal::set(self::KEY_DEPTH, $depth);
+        CoroutineLocal::set($this->key(self::KEY_DEPTH), $depth);
     }
 
     /** @return object[] Buffered events for the current coroutine, dispatched after successful outer commit. */
     private function pendingEvents(): array
     {
-        return CoroutineLocal::get(self::KEY_PENDING_EVENTS, []);
+        return CoroutineLocal::get($this->key(self::KEY_PENDING_EVENTS), []);
     }
 
     /** @param object[] $events */
     private function setPendingEvents(array $events): void
     {
-        CoroutineLocal::set(self::KEY_PENDING_EVENTS, $events);
+        CoroutineLocal::set($this->key(self::KEY_PENDING_EVENTS), $events);
     }
 
     public function setEventDispatcher(EventDispatcherInterface $eventDispatcher): void
@@ -86,6 +102,26 @@ class TransactionManager
     public function isActive(): bool
     {
         return $this->depth() > 0;
+    }
+
+    /**
+     * The adapter bound to the current coroutine's open transaction on THIS
+     * connection, or null when no transaction is active. Read paths route
+     * through it (see TransactionAwareAdapter) so queries inside a transaction
+     * see their own uncommitted writes instead of reading pre-commit state on
+     * an unrelated pooled connection — and so a coroutine holding the
+     * transaction connection never pops a second one (the pool-exhaustion
+     * shape: `size` such coroutines each hold one connection while waiting for
+     * another).
+     */
+    public function currentAdapter(): ?DatabaseAdapterInterface
+    {
+        return CoroutineLocal::get($this->key(self::KEY_ACTIVE_ADAPTER));
+    }
+
+    private function setCurrentAdapter(?DatabaseAdapterInterface $adapter): void
+    {
+        CoroutineLocal::set($this->key(self::KEY_ACTIVE_ADAPTER), $adapter);
     }
 
     /** @return object[] */
@@ -124,6 +160,63 @@ class TransactionManager
     }
 
     /**
+     * run() with automatic replay on transient transactional failures:
+     * deadlock (the server already rolled the victim back), lock-wait timeout,
+     * and a connection lost mid-transaction. The retry unit is the WHOLE
+     * transaction — the callback re-executes from the top on a clean
+     * connection, which is the only correct granularity (replaying a single
+     * statement of a rolled-back transaction silently applies a partial
+     * write). Consequence for callers: the callback must be safe to run more
+     * than once — pure DB work is, side effects outside the transaction
+     * (HTTP calls, file writes) are not, and belong outside runWithRetry().
+     *
+     * A NESTED call is never retried here: the server rolled back the OUTER
+     * transaction, so only the outermost caller can meaningfully replay.
+     *
+     * @template T
+     * @param callable(DatabaseAdapterInterface): T $callback
+     * @param int $attempts Total tries, including the first (minimum 1)
+     * @return T
+     */
+    public function runWithRetry(callable $callback, int $attempts = 3): mixed
+    {
+        $attempt = 0;
+
+        while (true) {
+            try {
+                return $this->run($callback);
+            } catch (DeadlockException | LockWaitTimeoutException | ConnectionLostException $e) {
+                // depth > 0 after the throw means we were the NESTED call of a
+                // still-open outer transaction — its replay is the outer's job.
+                if ($this->isActive() || ++$attempt >= max(1, $attempts)) {
+                    throw $e;
+                }
+
+                self::backoff($attempt);
+            }
+        }
+    }
+
+    /**
+     * Short jittered pause between transaction replays, so two coroutines
+     * that deadlocked against each other do not immediately deadlock again in
+     * lockstep. Coroutine-aware: inside Swoole it yields instead of blocking
+     * the worker.
+     */
+    private static function backoff(int $attempt): void
+    {
+        $milliseconds = random_int(5, 15) * $attempt;
+
+        if (class_exists(\Swoole\Coroutine::class, false) && \Swoole\Coroutine::getCid() >= 0) {
+            \Swoole\Coroutine::sleep($milliseconds / 1000);
+
+            return;
+        }
+
+        usleep($milliseconds * 1000);
+    }
+
+    /**
      * @template T
      * @param callable(DatabaseAdapterInterface): T $callback
      * @return T
@@ -159,25 +252,40 @@ class TransactionManager
             // branch. A pushed-back dead connection is healed by the pool's
             // ensureAlive() on the next pop().
             $connAdapter = new SingleConnectionAdapter($pdo, $serverVersion);
+            $this->setCurrentAdapter($connAdapter);
             $pdo->beginTransaction();
 
             $result = $callback($connAdapter);
             $pdo->commit();
-
-            $this->flushPendingEvents();
-
-            return $result;
         } catch (\Throwable $e) {
             $this->setPendingEvents([]);
             if ($pdo->inTransaction()) {
-                $pdo->rollBack();
+                try {
+                    $pdo->rollBack();
+                } catch (\Throwable) {
+                    // A rollback that fails (dead connection) must not mask
+                    // the ORIGINAL exception — that one names the real cause.
+                    // The connection is cleaned or discarded by the pool's
+                    // push() transaction hygiene.
+                }
             }
             throw $e;
         } finally {
             $this->pool->push($pdo);
             $this->setActiveConnection(null);
+            $this->setCurrentAdapter(null);
             $this->setDepth(0);
         }
+
+        // Flush OUTSIDE the try/catch: once commit() has returned, the
+        // transaction is durable — a throwing post-commit listener must not
+        // surface as a failed write (the caller would retry an already-committed
+        // transaction and duplicate it). Flushing after the finally also returns
+        // the connection to the pool before listeners run, so slow subscribers
+        // never extend the connection hold time.
+        $this->flushPendingEvents();
+
+        return $result;
     }
 
     /**
@@ -198,25 +306,36 @@ class TransactionManager
         $this->setDepth(1);
 
         $connAdapter = new SingleConnectionAdapter($pdo, $this->adapter->getServerVersion());
+        $this->setCurrentAdapter($connAdapter);
         $pdo->beginTransaction();
 
         try {
             $result = $callback($connAdapter);
             $pdo->commit();
-
-            $this->flushPendingEvents();
-
-            return $result;
         } catch (\Throwable $e) {
             $this->setPendingEvents([]);
             if ($pdo->inTransaction()) {
-                $pdo->rollBack();
+                try {
+                    $pdo->rollBack();
+                } catch (\Throwable) {
+                    // A rollback that fails (dead connection) must not mask
+                    // the ORIGINAL exception — that one names the real cause.
+                    // The connection is cleaned or discarded by the pool's
+                    // push() transaction hygiene.
+                }
             }
             throw $e;
         } finally {
             $this->setActiveConnection(null);
+            $this->setCurrentAdapter(null);
             $this->setDepth(0);
         }
+
+        // See runOuter(): post-commit flush must never report a committed
+        // transaction as failed.
+        $this->flushPendingEvents();
+
+        return $result;
     }
 
     /**
@@ -243,7 +362,16 @@ class TransactionManager
             $pdo->exec("RELEASE SAVEPOINT {$savepointName}");
             return $result;
         } catch (\Throwable $e) {
+            // ROLLBACK TO leaves the savepoint itself in place; RELEASE it so
+            // a long-lived outer transaction with many failed nested attempts
+            // does not accumulate savepoints on the server.
             $pdo->exec("ROLLBACK TO SAVEPOINT {$savepointName}");
+            try {
+                $pdo->exec("RELEASE SAVEPOINT {$savepointName}");
+            } catch (\Throwable) {
+                // Nothing actionable: the rollback already succeeded and the
+                // savepoint dies with the transaction.
+            }
             throw $e;
         } finally {
             $this->setDepth($this->depth() - 1);
@@ -252,14 +380,23 @@ class TransactionManager
 
     private function flushPendingEvents(): void
     {
-        if ($this->eventDispatcher !== null) {
-            $events = $this->pendingEvents();
-            $this->setPendingEvents([]);
-            foreach ($events as $event) {
+        $events = $this->pendingEvents();
+        $this->setPendingEvents([]);
+
+        if ($this->eventDispatcher === null) {
+            return;
+        }
+
+        foreach ($events as $event) {
+            try {
                 $this->eventDispatcher->dispatch($event);
+            } catch (\Throwable) {
+                // Intentionally swallowed, per event: the transaction is already
+                // committed and these are best-effort invalidation signals (same
+                // contract as AggregateWriteEngine::dispatchResourceChanged). A
+                // throwing listener must neither fail the write nor starve the
+                // remaining buffered events.
             }
-        } else {
-            $this->setPendingEvents([]);
         }
     }
 }

@@ -33,6 +33,7 @@ use Semitexa\Orm\Domain\Contract\SchemaComparatorInterface;
 use Semitexa\Orm\Application\Service\Sync\AuditLogger;
 use Semitexa\Orm\Application\Service\Sync\SeedRunner;
 use Semitexa\Orm\Application\Service\Sync\SyncEngine;
+use Semitexa\Orm\Application\Service\Transaction\TransactionAwareAdapter;
 use Semitexa\Orm\Application\Service\Transaction\TransactionManager;
 
 class OrmManager
@@ -44,6 +45,7 @@ class OrmManager
     private ?SchemaComparatorInterface $schemaComparator = null;
     private ?SyncEngine $syncEngine = null;
     private ?TransactionManager $transactionManager = null;
+    private ?TransactionAwareAdapter $transactionAwareAdapter = null;
     private ?SeedRunner $seedRunner = null;
     private ?MapperRegistry $mapperRegistry = null;
     private ?ResourceModelMetadataRegistry $resourceModelMetadataRegistry = null;
@@ -196,13 +198,35 @@ class OrmManager
     {
         if ($this->syncEngine === null) {
             $historyDir = ProjectRoot::get() . '/var/migrations/history';
+            // The pool lets execute() pin ONE dedicated connection for a whole
+            // DDL plan (BEGIN/DDL/COMMIT must share a connection; a pooled
+            // adapter would spread them and return an open-tx connection to the
+            // pool). SQLite has no pool — its adapter already owns a single PDO.
             $this->syncEngine = new SyncEngine(
                 $this->getAdapter(),
                 new AuditLogger($historyDir),
+                $this->resolveDriver() === 'sqlite' ? null : $this->getPool(),
             );
         }
 
         return $this->syncEngine;
+    }
+
+    /**
+     * The adapter for the repository READ path: routes queries to the current
+     * coroutine's transaction connection when one is active, so reads inside
+     * TransactionManager::run() see their own uncommitted writes and never
+     * borrow a second pooled connection while holding the first. Resolves the
+     * real adapter/manager lazily per call, so pool self-heal is honored.
+     * NOT used for getAdapter() consumers — they dialect-branch on the
+     * concrete adapter class (see TransactionAwareAdapter docblock).
+     */
+    private function getTransactionAwareAdapter(): TransactionAwareAdapter
+    {
+        return $this->transactionAwareAdapter ??= new TransactionAwareAdapter(
+            fn (): DatabaseAdapterInterface => $this->getAdapter(),
+            fn (): ?TransactionManager => $this->getTransactionManager(),
+        );
     }
 
     public function getTransactionManager(): TransactionManager
@@ -231,6 +255,7 @@ class OrmManager
             $this->transactionManager = new TransactionManager(
                 $pool,
                 $this->getAdapter(),
+                connectionName: $this->connectionName,
             );
         }
 
@@ -290,7 +315,7 @@ class OrmManager
     {
         if ($this->resourceModelRelationLoader === null) {
             $this->resourceModelRelationLoader = new ResourceModelRelationLoader(
-                $this->getAdapter(),
+                $this->getTransactionAwareAdapter(),
                 $this->getResourceModelHydrator(),
                 $this->getResourceModelMetadataRegistry(),
             );
@@ -380,7 +405,7 @@ class OrmManager
         return new DomainRepository(
             resourceModelClass: $resourceModelClass,
             domainModelClass: $domainModelClass,
-            adapter: $this->getAdapter(),
+            adapter: $this->getTransactionAwareAdapter(),
             mapperRegistry: $this->getMapperRegistry(),
             hydrator: $this->getResourceModelHydrator(),
             relationLoader: $this->getResourceModelRelationLoader(),
@@ -534,6 +559,42 @@ class OrmManager
         return $tables;
     }
 
+    /**
+     * PDO options for pooled MySQL connections.
+     *
+     * ATTR_TIMEOUT is the CONNECT timeout for pdo_mysql: without it a
+     * hung/unreachable server parks the connecting coroutine indefinitely
+     * while it holds a claimed pool slot (the pop() timeout protects waiters,
+     * never the holder). The query ceiling rides an init command because
+     * pdo_mysql exposes no client-side read timeout: MySQL enforces
+     * max_execution_time server-side for SELECTs, which covers the runaway-
+     * query case; a full network black-hole mid-query remains bounded only by
+     * TCP keepalive and is the documented residual risk.
+     *
+     * @return array<int, mixed>
+     */
+    public static function pdoOptions(float $connectTimeout, float $queryTimeout): array
+    {
+        $options = [
+            \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
+            \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_ASSOC,
+            \PDO::ATTR_EMULATE_PREPARES => false,
+        ];
+
+        if ($connectTimeout > 0) {
+            $options[\PDO::ATTR_TIMEOUT] = max(1, (int) ceil($connectTimeout));
+        }
+
+        if ($queryTimeout > 0) {
+            $options[\PDO::MYSQL_ATTR_INIT_COMMAND] = sprintf(
+                'SET SESSION MAX_EXECUTION_TIME=%d',
+                (int) round($queryTimeout * 1000),
+            );
+        }
+
+        return $options;
+    }
+
     private function createPool(): ConnectionPoolInterface
     {
         // Ensure Swoole workers/coroutines resolve DB_* values from the project env files.
@@ -554,6 +615,8 @@ class OrmManager
             $password = $this->config->password;
             $charset = $this->config->charset;
             $poolSize = $this->config->poolSize;
+            $connectTimeout = $this->config->connectTimeout;
+            $queryTimeout = $this->config->queryTimeout;
         } else {
             $host = $this->resolveDbHost();
             $port = $this->resolveDbPort();
@@ -562,18 +625,15 @@ class OrmManager
             $password = Environment::getEnvValue('DB_PASSWORD', '');
             $charset = Environment::getEnvValue('DB_CHARSET', 'utf8mb4');
             $poolSize = (int) Environment::getEnvValue('DB_POOL_SIZE', '10');
+            $connectTimeout = (float) (Environment::getEnvValue('DB_CONNECT_TIMEOUT', '5') ?? '5');
+            $queryTimeout = (float) (Environment::getEnvValue('DB_QUERY_TIMEOUT', '0') ?? '0');
         }
 
         $dsn = "mysql:host={$host};port={$port};dbname={$database};charset={$charset}";
 
-        $factory = static function () use ($dsn, $username, $password): \PDO {
-            $pdo = new \PDO($dsn, $username, $password, [
-                \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
-                \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_ASSOC,
-                \PDO::ATTR_EMULATE_PREPARES => false,
-            ]);
-
-            return $pdo;
+        $options = self::pdoOptions($connectTimeout, $queryTimeout);
+        $factory = static function () use ($dsn, $username, $password, $options): \PDO {
+            return new \PDO($dsn, $username, $password, $options);
         };
 
         if ($this->shouldUseCoroutinePool()) {
@@ -682,6 +742,12 @@ class OrmManager
      * Resolve the database driver from environment configuration.
      * Defaults to 'mysql' for backward compatibility.
      */
+    /** The resolved database driver for this connection ('mysql' or 'sqlite'). */
+    public function getDriver(): string
+    {
+        return $this->resolveDriver();
+    }
+
     private function resolveDriver(): string
     {
         $driverSource = $this->config !== null

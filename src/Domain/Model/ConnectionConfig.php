@@ -17,6 +17,16 @@ final readonly class ConnectionConfig
         public string $password = '',
         public string $charset = 'utf8mb4',
         public int $poolSize = 10,
+        // Seconds PDO waits for the TCP connect before failing. Without it a
+        // hung/unreachable server parks the connecting coroutine indefinitely
+        // while it holds a pool slot — the pop() timeout only protects
+        // WAITERS, never the holder.
+        public float $connectTimeout = 5.0,
+        // Server-side ceiling for SELECT execution (MySQL max_execution_time),
+        // seconds; 0 disables. Applied at connect via an init command, so it
+        // rides every pooled connection. SELECT-only by MySQL semantics —
+        // writes are already bounded by innodb_lock_wait_timeout.
+        public float $queryTimeout = 0.0,
         public ?string $sqlitePath = null,
         public bool $sqliteMemory = false,
         public ?string $cliHost = null,
@@ -46,6 +56,8 @@ final readonly class ConnectionConfig
         $password = Environment::getEnvValue($prefix . 'PASSWORD', '') ?? '';
         $charset = Environment::getEnvValue($prefix . 'CHARSET', 'utf8mb4') ?? 'utf8mb4';
         $poolSize = (int) (Environment::getEnvValue($prefix . 'POOL_SIZE', '10') ?? '10');
+        $connectTimeout = (float) (Environment::getEnvValue($prefix . 'CONNECT_TIMEOUT', '5') ?? '5');
+        $queryTimeout = (float) (Environment::getEnvValue($prefix . 'QUERY_TIMEOUT', '0') ?? '0');
 
         return new self(
             driver: $driver,
@@ -56,6 +68,8 @@ final readonly class ConnectionConfig
             password: $password,
             charset: $charset,
             poolSize: $poolSize,
+            connectTimeout: $connectTimeout,
+            queryTimeout: $queryTimeout,
             sqlitePath: Environment::getEnvValue($prefix . 'SQLITE_PATH'),
             sqliteMemory: $sqliteMemory !== null && in_array(
                 strtolower($sqliteMemory),

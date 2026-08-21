@@ -66,8 +66,11 @@ final class StatementCacheTest extends TestCase
         try {
             $adapter->execute('INSERT INTO t (id, v) VALUES (:id, :v)', ['id' => 1, 'v' => 'dup']);
             self::fail('The duplicate-key insert must throw.');
-        } catch (\PDOException) {
-            // expected
+        } catch (\Semitexa\Orm\Exception\ConstraintViolationException $e) {
+            // SQLSTATE 23xxx now surfaces as the typed constraint exception,
+            // with the raw driver exception chained underneath.
+            self::assertInstanceOf(\PDOException::class, $e->getPrevious());
+            self::assertFalse($e->isTransient(), 'a constraint violation must never be auto-retried');
         }
 
         self::assertSame($before, $pdo->prepareCalls, 'No re-prepare (= no retry) on a non-1615 failure.');

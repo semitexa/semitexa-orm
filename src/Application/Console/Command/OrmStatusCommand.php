@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Application\Console\Command;
 
 use Semitexa\Core\Attribute\AsCommand;
+use Semitexa\Core\Attribute\InjectAsReadonly;
 use Semitexa\Core\Console\BaseCommand;
 use Semitexa\Orm\Adapter\ServerCapability;
 use Semitexa\Orm\Application\Service\Connection\ConnectionRegistry;
@@ -17,11 +18,8 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 #[AsCommand(name: 'orm:status', description: 'Show ORM status: database info, server capabilities, schema summary')]
 class OrmStatusCommand extends BaseCommand
 {
-    public function __construct(
-        private readonly ConnectionRegistry $connections,
-    ) {
-        parent::__construct();
-    }
+    #[InjectAsReadonly]
+    protected ConnectionRegistry $connections;
 
     protected function configure(): void
     {
@@ -48,7 +46,16 @@ class OrmStatusCommand extends BaseCommand
                 ['Database' => $orm->getDatabaseName()],
             ];
             if (!$isSqlite) {
-                $serverInfo[] = ['Pool Size' => (string) $orm->getPool()->getSize()];
+                $pool = $orm->getPool();
+                $serverInfo[] = ['Pool Size' => (string) $pool->getSize()];
+                if ($pool instanceof \Semitexa\Orm\Adapter\ConnectionPool) {
+                    foreach ($pool->getStats() as $key => $value) {
+                        if ($key === 'size') {
+                            continue;
+                        }
+                        $serverInfo[] = ['Pool ' . str_replace('_', ' ', $key) => (string) $value];
+                    }
+                }
             }
             $io->definitionList(...$serverInfo);
 

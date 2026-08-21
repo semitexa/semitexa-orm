@@ -110,7 +110,11 @@ final class PoolSelfHealTest extends TestCase
         // same key the manager reads — no live BEGIN, no pop(), no database.
         $tm = new TransactionManager($single, $manager->getAdapter());
         $this->setPrivate($manager, 'transactionManager', $tm);
-        $depthKey = (new \ReflectionClass(TransactionManager::class))->getConstant('KEY_DEPTH');
+        // KEY_DEPTH is a template namespaced by connection name ('orm.tx.%s.depth').
+        $depthKey = sprintf(
+            (new \ReflectionClass(TransactionManager::class))->getConstant('KEY_DEPTH'),
+            'default',
+        );
         CoroutineLocal::set($depthKey, 1);
 
         try {

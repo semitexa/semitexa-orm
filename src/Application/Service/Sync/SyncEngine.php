@@ -11,8 +11,10 @@ use Semitexa\Orm\Domain\Model\ExecutionPlan;
 
 
 
+use Semitexa\Orm\Adapter\ConnectionPoolInterface;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Adapter\DatabaseType;
+use Semitexa\Orm\Application\Service\Transaction\SingleConnectionAdapter;
 use Semitexa\Orm\Adapter\MySqlType;
 use Semitexa\Orm\Adapter\SqliteType;
 use Semitexa\Orm\Domain\Model\ColumnDefinition;
@@ -29,6 +31,7 @@ class SyncEngine
     public function __construct(
         private readonly DatabaseAdapterInterface $adapter,
         private readonly ?AuditLogger $auditLogger = null,
+        private readonly ?ConnectionPoolInterface $pool = null,
     ) {}
 
     public function buildPlan(SchemaDiff $diff): ExecutionPlan
@@ -315,10 +318,61 @@ class SyncEngine
         $useTransaction = $this->adapter->supports(\Semitexa\Orm\Adapter\ServerCapability::AtomicDdl);
         $isSqlite = $this->isSqlite();
 
+        // The whole plan must run on ONE connection. Through a pooled adapter,
+        // every query()/execute() pops a DIFFERENT connection: BEGIN, each DDL,
+        // and COMMIT would land on unrelated connections — the "transaction" is
+        // a fiction, and worse, the connection that received BEGIN goes back to
+        // the pool with an OPEN transaction, so an unrelated coroutine inherits
+        // it and its writes get committed/rolled back by whoever holds that
+        // connection next. With a pool present, pin a single dedicated
+        // connection for the plan's whole lifetime.
+        if ($this->pool !== null && !$isSqlite) {
+            // Resolve the version BEFORE holding a connection (a cold adapter
+            // runs a detection query that borrows its own connection — holding
+            // one while waiting for a second is the pool-deadlock shape).
+            $serverVersion = $this->adapter->getServerVersion();
+            $pdo = $this->pool->pop();
+            try {
+                return $this->executeOperationsOn(
+                    new SingleConnectionAdapter($pdo, $serverVersion),
+                    $operations,
+                    $useTransaction,
+                    $isSqlite,
+                );
+            } finally {
+                // Never return a connection to the pool mid-transaction: the
+                // rollback below is the last line of defense if the body threw
+                // between BEGIN and its own ROLLBACK (e.g. the ROLLBACK itself
+                // failed on a dead connection).
+                if ($pdo->inTransaction()) {
+                    try {
+                        $pdo->rollBack();
+                    } catch (\Throwable) {
+                        // A dead connection cannot be cleaned — the pool's
+                        // health check replaces it on the next pop().
+                    }
+                }
+                $this->pool->push($pdo);
+            }
+        }
+
+        return $this->executeOperationsOn($this->adapter, $operations, $useTransaction, $isSqlite);
+    }
+
+    /**
+     * @param DdlOperation[] $operations
+     * @return DdlOperation[] Executed operations
+     */
+    private function executeOperationsOn(
+        DatabaseAdapterInterface $adapter,
+        array $operations,
+        bool $useTransaction,
+        bool $isSqlite,
+    ): array {
         $executed = [];
         try {
             if ($useTransaction) {
-                $this->adapter->query($isSqlite ? 'BEGIN' : 'START TRANSACTION');
+                $adapter->query($isSqlite ? 'BEGIN' : 'START TRANSACTION');
             }
 
             foreach ($operations as $operation) {
@@ -328,16 +382,21 @@ class SyncEngine
                     );
                 }
 
-                $this->adapter->execute($operation->sql);
+                $adapter->execute($operation->sql);
                 $executed[] = $operation;
             }
 
             if ($useTransaction) {
-                $this->adapter->query($isSqlite ? 'COMMIT' : 'COMMIT');
+                $adapter->query('COMMIT');
             }
         } catch (\Throwable $e) {
             if ($useTransaction) {
-                $this->adapter->query($isSqlite ? 'ROLLBACK' : 'ROLLBACK');
+                try {
+                    $adapter->query('ROLLBACK');
+                } catch (\Throwable) {
+                    // A failed ROLLBACK (dead connection) must not mask the
+                    // original failure — that is the exception worth seeing.
+                }
             }
             throw $e;
         }
