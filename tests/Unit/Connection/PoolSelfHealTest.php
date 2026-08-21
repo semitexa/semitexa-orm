@@ -132,6 +132,45 @@ final class PoolSelfHealTest extends TestCase
         }
     }
 
+    #[Test]
+    public function the_sync_path_heals_too_when_it_never_touches_get_pool(): void
+    {
+        // The sync/migration flows (orm:sync, the update-system migration
+        // gateway) reach the engine through getSchemaCollector() and
+        // getSchemaComparator() — neither of which touches getPool()/
+        // getAdapter(). A SyncEngine memoized during pre-fork warmup would
+        // therefore keep its SingleConnectionPool forever and run DDL on it
+        // inside coroutine context, unless these getters re-check themselves.
+        Runtime::enableCoroutine(0); // master-side / pre-fork: hooks OFF
+        $manager = $this->mysqlManager();
+
+        $staleEngine = $manager->getSyncEngine();
+        $staleComparator = $manager->getSchemaComparator();
+        self::assertInstanceOf(
+            SingleConnectionPool::class,
+            $manager->getPool(),
+            'Precondition: the bootstrap-era pool is the single-connection fallback.',
+        );
+
+        Runtime::enableCoroutine(SWOOLE_HOOK_ALL); // worker: hooks live
+
+        self::assertNotSame(
+            $staleEngine,
+            $manager->getSyncEngine(),
+            'getSyncEngine() must rebuild over the healed pool instead of serving the stale engine.',
+        );
+        self::assertNotSame(
+            $staleComparator,
+            $manager->getSchemaComparator(),
+            'getSchemaComparator() captures an adapter, so it must rebuild on the swap too.',
+        );
+        self::assertInstanceOf(
+            ConnectionPool::class,
+            $manager->getPool(),
+            'The swap must have installed the coroutine-safe pool.',
+        );
+    }
+
     private function mysqlManager(): OrmManager
     {
         // Force the mysql driver so getPool()/getAdapter() never take the sqlite branch,

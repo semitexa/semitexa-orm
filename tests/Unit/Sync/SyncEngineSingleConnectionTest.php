@@ -69,6 +69,37 @@ final class SyncEngineSingleConnectionTest extends TestCase
     }
 
     #[Test]
+    public function a_mysql_plan_never_opens_a_transaction_on_the_pooled_connection(): void
+    {
+        // MySQL performs an implicit commit around every DDL statement, so a
+        // START TRANSACTION/COMMIT wrapper there is a fiction: the first DDL
+        // already committed, and the closing COMMIT has nothing to commit
+        // (PDO answers "There is no active transaction"). Worse, between the
+        // BEGIN and the first DDL the pooled connection carries an untracked
+        // open transaction that push() cannot see. Pin the honest behavior:
+        // no transaction control statements on the MySQL path at all.
+        $pool = new FreshPdoPerPopPool();
+        $engine = new SyncEngine(new AtomicDdlCapableAdapter(), null, $pool);
+
+        $plan = new ExecutionPlan();
+        $plan->addOperation(new DdlOperation(
+            sql: 'CREATE TABLE mysql_path_probe (id INTEGER PRIMARY KEY)',
+            type: DdlOperationType::CreateTable,
+            tableName: 'mysql_path_probe',
+            isDestructive: false,
+            description: 'create probe table',
+        ));
+
+        $executed = $engine->execute($plan);
+
+        self::assertCount(1, $executed);
+        self::assertFalse(
+            $pool->pushed[0]->inTransaction(),
+            'the connection must go back to the pool with no transaction of any kind',
+        );
+    }
+
+    #[Test]
     public function a_failing_plan_still_returns_the_connection_to_the_pool(): void
     {
         $pool = new FreshPdoPerPopPool();
@@ -139,6 +170,35 @@ final class RecordingNonTransactionalAdapter implements DatabaseAdapterInterface
 
     public function supports(ServerCapability $capability): bool { return false; }
     public function getServerVersion(): string { return '8.0.0'; }
+
+    public function execute(string $sql, array $params = []): QueryResult
+    {
+        $this->statements[] = $sql;
+
+        return new QueryResult();
+    }
+
+    public function query(string $sql): QueryResult
+    {
+        $this->statements[] = $sql;
+
+        return new QueryResult();
+    }
+
+    public function lastInsertId(): string { return '0'; }
+}
+
+/**
+ * A non-SQLite adapter that DOES advertise AtomicDdl (MySQL 8.0+ shape).
+ * The engine must still issue no transaction control on this path.
+ */
+final class AtomicDdlCapableAdapter implements DatabaseAdapterInterface
+{
+    /** @var string[] */
+    public array $statements = [];
+
+    public function supports(ServerCapability $capability): bool { return true; }
+    public function getServerVersion(): string { return '8.0.35'; }
 
     public function execute(string $sql, array $params = []): QueryResult
     {

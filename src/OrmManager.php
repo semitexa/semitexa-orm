@@ -8,6 +8,7 @@ use Semitexa\Core\Discovery\ClassDiscovery;
 use Semitexa\Orm\Attribute\SelfManagedTable;
 use Semitexa\Core\Environment;
 use Semitexa\Core\Event\EventDispatcherInterface;
+use Semitexa\Core\Log\StaticLoggerBridge;
 use Semitexa\Core\Support\ProjectRoot;
 use Semitexa\Orm\Adapter\ConnectionPool;
 use Semitexa\Orm\Adapter\ConnectionPoolInterface;
@@ -176,6 +177,16 @@ class OrmManager
 
     public function getSchemaComparator(): SchemaComparatorInterface
     {
+        // Like getTransactionManager(): a comparator memoized at bootstrap
+        // captured an adapter over a possibly-stale SingleConnectionPool, and
+        // the sync/migration path reaches it without ever passing through
+        // getPool()/getAdapter() — so re-check here or the self-heal never
+        // fires for it. The swap nulls $this->schemaComparator, and the block
+        // below rebuilds it over the healed adapter.
+        if ($this->schemaComparator !== null && $this->pool !== null) {
+            $this->ensureCoroutineSafePool();
+        }
+
         if ($this->schemaComparator === null) {
             if ($this->resolveDriver() === 'sqlite') {
                 $this->schemaComparator = new SqliteSchemaComparator(
@@ -196,6 +207,18 @@ class OrmManager
 
     public function getSyncEngine(): SyncEngine
     {
+        // Same self-heal re-check as getTransactionManager(): the sync flows
+        // (orm:sync, the update-system migration gateway) reach this engine
+        // via getSchemaCollector()/getSchemaComparator() and never touch
+        // getPool()/getAdapter() after memoization, so an engine built during
+        // bootstrap over a stale SingleConnectionPool would be served into
+        // coroutine context unhealed. ensureCoroutineSafePool() nulls
+        // $this->syncEngine on a swap; the block below rebuilds it over the
+        // healed pool + adapter.
+        if ($this->syncEngine !== null && $this->pool !== null) {
+            $this->ensureCoroutineSafePool();
+        }
+
         if ($this->syncEngine === null) {
             $historyDir = ProjectRoot::get() . '/var/migrations/history';
             // The pool lets execute() pin ONE dedicated connection for a whole
@@ -585,14 +608,66 @@ class OrmManager
             $options[\PDO::ATTR_TIMEOUT] = max(1, (int) ceil($connectTimeout));
         }
 
-        if ($queryTimeout > 0) {
-            $options[\PDO::MYSQL_ATTR_INIT_COMMAND] = sprintf(
-                'SET SESSION MAX_EXECUTION_TIME=%d',
-                (int) round($queryTimeout * 1000),
-            );
+        return $options;
+    }
+
+    /**
+     * Apply the per-session query ceiling to a freshly opened connection.
+     *
+     * NOT a MYSQL_ATTR_INIT_COMMAND: the variable's name differs by server
+     * flavor, and an init command naming an unknown variable fails INSIDE the
+     * PDO constructor — every pooled and warm-up connection would throw, so an
+     * opt-in timeout knob would cost a MariaDB deployment all database access.
+     * ATTR_SERVER_VERSION comes from the connection handshake, so choosing the
+     * statement here costs no extra round trip.
+     *
+     * MySQL 5.7.8+ : max_execution_time, milliseconds, SELECT-only.
+     * MariaDB 10.1+: max_statement_time, SECONDS (fractional allowed).
+     *
+     * Failure is logged and swallowed: an unusable ceiling is a degraded
+     * safeguard, not a reason to refuse the connection.
+     */
+    public static function applyQueryTimeout(\PDO $pdo, float $queryTimeout): void
+    {
+        if ($queryTimeout <= 0) {
+            return;
         }
 
-        return $options;
+        try {
+            $version = (string) $pdo->getAttribute(\PDO::ATTR_SERVER_VERSION);
+        } catch (\Throwable) {
+            return;
+        }
+
+        $isMariaDb = stripos($version, 'mariadb') !== false;
+
+        if ($isMariaDb) {
+            $statement = sprintf('SET SESSION max_statement_time=%F', $queryTimeout);
+        } else {
+            // MySQL below 5.7.8 has no equivalent — leave it unset rather than
+            // failing the connection.
+            if (version_compare(self::numericServerVersion($version), '5.7.8', '<')) {
+                return;
+            }
+
+            $statement = sprintf('SET SESSION max_execution_time=%d', (int) round($queryTimeout * 1000));
+        }
+
+        try {
+            $pdo->exec($statement);
+        } catch (\Throwable $e) {
+            StaticLoggerBridge::warning('orm', 'Could not apply the query timeout for this connection.', [
+                'server_version' => $version,
+                'statement' => $statement,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /** Leading dotted version from a server version string ("8.0.35-log" -> "8.0.35"). */
+    private static function numericServerVersion(string $version): string
+    {
+        return preg_match('/^(\d+\.\d+\.\d+)/', $version, $m) === 1 ? $m[1] : '0.0.0';
     }
 
     private function createPool(): ConnectionPoolInterface
@@ -632,8 +707,11 @@ class OrmManager
         $dsn = "mysql:host={$host};port={$port};dbname={$database};charset={$charset}";
 
         $options = self::pdoOptions($connectTimeout, $queryTimeout);
-        $factory = static function () use ($dsn, $username, $password, $options): \PDO {
-            return new \PDO($dsn, $username, $password, $options);
+        $factory = static function () use ($dsn, $username, $password, $options, $queryTimeout): \PDO {
+            $pdo = new \PDO($dsn, $username, $password, $options);
+            self::applyQueryTimeout($pdo, $queryTimeout);
+
+            return $pdo;
         };
 
         if ($this->shouldUseCoroutinePool()) {

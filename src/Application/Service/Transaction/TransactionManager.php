@@ -6,8 +6,10 @@ namespace Semitexa\Orm\Application\Service\Transaction;
 
 use Semitexa\Core\Support\CoroutineLocal;
 use Semitexa\Core\Event\EventDispatcherInterface;
+use Semitexa\Core\Log\StaticLoggerBridge;
 use Semitexa\Orm\Adapter\ConnectionPoolInterface;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
+use Semitexa\Orm\Adapter\DriverErrorClassifier;
 use Semitexa\Orm\Adapter\SqliteAdapter;
 use Semitexa\Orm\Exception\ConnectionLostException;
 use Semitexa\Orm\Exception\DeadlockException;
@@ -253,7 +255,18 @@ class TransactionManager
             // ensureAlive() on the next pop().
             $connAdapter = new SingleConnectionAdapter($pdo, $serverVersion);
             $this->setCurrentAdapter($connAdapter);
-            $pdo->beginTransaction();
+            try {
+                // beginTransaction() runs on the raw PDO, so it bypasses the
+                // adapters' classification: without this, a connection that
+                // died while idle surfaces as an unclassified \PDOException
+                // (2006) that runWithRetry() cannot match, and the request
+                // fails instead of replaying on a healthy connection. The
+                // pool's idle-ping gate makes this reachable by design — a
+                // connection idle under the threshold is served unpinged.
+                $pdo->beginTransaction();
+            } catch (\PDOException $beginFailure) {
+                throw DriverErrorClassifier::classify($beginFailure) ?? $beginFailure;
+            }
 
             $result = $callback($connAdapter);
             $pdo->commit();
@@ -362,15 +375,21 @@ class TransactionManager
             $pdo->exec("RELEASE SAVEPOINT {$savepointName}");
             return $result;
         } catch (\Throwable $e) {
-            // ROLLBACK TO leaves the savepoint itself in place; RELEASE it so
-            // a long-lived outer transaction with many failed nested attempts
-            // does not accumulate savepoints on the server.
-            $pdo->exec("ROLLBACK TO SAVEPOINT {$savepointName}");
+            // Both statements are guarded: on a deadlock (1213) InnoDB has
+            // already rolled the WHOLE transaction back and destroyed every
+            // savepoint, so ROLLBACK TO throws 1305 "SAVEPOINT does not exist"
+            // — from inside this catch, replacing the DeadlockException that
+            // runWithRetry() matches on. An unguarded rollback here silently
+            // disables the entire retry machinery. ROLLBACK TO also leaves the
+            // savepoint in place, so RELEASE keeps a long outer transaction
+            // from accumulating them.
             try {
+                $pdo->exec("ROLLBACK TO SAVEPOINT {$savepointName}");
                 $pdo->exec("RELEASE SAVEPOINT {$savepointName}");
             } catch (\Throwable) {
-                // Nothing actionable: the rollback already succeeded and the
-                // savepoint dies with the transaction.
+                // Nothing actionable: either the transaction is already gone
+                // (the original exception says why) or the connection died —
+                // the pool's push() hygiene handles the connection.
             }
             throw $e;
         } finally {
@@ -390,12 +409,21 @@ class TransactionManager
         foreach ($events as $event) {
             try {
                 $this->eventDispatcher->dispatch($event);
-            } catch (\Throwable) {
-                // Intentionally swallowed, per event: the transaction is already
-                // committed and these are best-effort invalidation signals (same
-                // contract as AggregateWriteEngine::dispatchResourceChanged). A
-                // throwing listener must neither fail the write nor starve the
-                // remaining buffered events.
+            } catch (\Throwable $e) {
+                // Swallowed per event, but never silently: the transaction is
+                // already committed and these are best-effort invalidation
+                // signals (same contract as
+                // AggregateWriteEngine::dispatchResourceChanged), so a throwing
+                // listener must neither fail the write nor starve the remaining
+                // events. It must still be visible — before the commit-gating
+                // buffer existed these errors propagated, and a broken
+                // ui.invalidate/SSE chain that vanishes without a trace is a
+                // debugging dead end.
+                StaticLoggerBridge::error('orm', 'A post-commit event listener failed; the transaction is committed and the signal is lost.', [
+                    'event' => $event::class,
+                    'connection' => $this->connectionName,
+                    'error' => $e->getMessage(),
+                ]);
             }
         }
     }

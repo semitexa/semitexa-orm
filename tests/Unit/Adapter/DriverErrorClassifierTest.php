@@ -57,11 +57,29 @@ final class DriverErrorClassifierTest extends TestCase
         self::assertTrue(DriverErrorClassifier::isReadOnlyStatement("  \n select 1"));
         self::assertTrue(DriverErrorClassifier::isReadOnlyStatement('SHOW TABLES'));
         self::assertTrue(DriverErrorClassifier::isReadOnlyStatement('EXPLAIN SELECT 1'));
+        self::assertTrue(DriverErrorClassifier::isReadOnlyStatement('WITH cte AS (SELECT 1) SELECT * FROM cte'));
+        self::assertTrue(DriverErrorClassifier::isReadOnlyStatement('(SELECT a FROM t) UNION (SELECT b FROM u)'));
 
         self::assertFalse(DriverErrorClassifier::isReadOnlyStatement('INSERT INTO t (id) VALUES (1)'));
         self::assertFalse(DriverErrorClassifier::isReadOnlyStatement('UPDATE t SET x = 1'));
         self::assertFalse(DriverErrorClassifier::isReadOnlyStatement('DELETE FROM t'));
         // WITH can prefix UPDATE/DELETE in MySQL 8 — excluded on purpose.
         self::assertFalse(DriverErrorClassifier::isReadOnlyStatement('WITH cte AS (SELECT 1) DELETE FROM t'));
+    }
+
+    #[Test]
+    public function reads_that_lock_or_have_side_effects_are_not_replayable(): void
+    {
+        // The locks died with the connection: a replay would acquire DIFFERENT
+        // locks than the caller believes it holds.
+        self::assertFalse(DriverErrorClassifier::isReadOnlyStatement('SELECT * FROM t WHERE id = 1 FOR UPDATE'));
+        self::assertFalse(DriverErrorClassifier::isReadOnlyStatement('SELECT * FROM t FOR SHARE'));
+        self::assertFalse(DriverErrorClassifier::isReadOnlyStatement('SELECT * FROM t LOCK IN SHARE MODE'));
+
+        // Side effects outside the result set.
+        self::assertFalse(DriverErrorClassifier::isReadOnlyStatement("SELECT GET_LOCK('job', 10)"));
+        self::assertFalse(DriverErrorClassifier::isReadOnlyStatement("SELECT RELEASE_LOCK('job')"));
+        self::assertFalse(DriverErrorClassifier::isReadOnlyStatement("SELECT * FROM t INTO OUTFILE '/tmp/dump.csv'"));
+        self::assertFalse(DriverErrorClassifier::isReadOnlyStatement('SELECT SLEEP(5)'));
     }
 }

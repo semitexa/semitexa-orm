@@ -68,13 +68,36 @@ final class DriverErrorClassifier
 
     /**
      * Statements that are safe to transparently retry on a fresh connection
-     * after the previous one died: they change nothing, so "did the server
-     * apply it before dropping?" has no wrong answer. A write is never
-     * auto-retried — a 2013 can arrive AFTER the server committed the write,
-     * and replaying it would duplicate the effect.
+     * after the previous one died: they change nothing and hold nothing, so
+     * "did the server apply it before dropping?" has no wrong answer. A write
+     * is never auto-retried — a 2013 can arrive AFTER the server committed the
+     * write, and replaying it would duplicate the effect.
+     *
+     * Two families of SELECT are deliberately excluded even though they read:
+     * locking reads (FOR UPDATE / FOR SHARE / LOCK IN SHARE MODE), whose locks
+     * died with the connection so a replay silently acquires DIFFERENT locks
+     * than the caller believes it holds; and SELECTs with side effects
+     * (INTO OUTFILE/DUMPFILE writes a file, GET_LOCK/RELEASE_LOCK/SLEEP change
+     * server state). When in doubt the answer is "not replayable": the cost of
+     * a false negative is one surfaced ConnectionLostException, the cost of a
+     * false positive is a silent duplicate effect.
      */
     public static function isReadOnlyStatement(string $sql): bool
     {
-        return (bool) preg_match('/^\s*(SELECT|SHOW|DESCRIBE|DESC|EXPLAIN)\b/i', $sql);
+        // Leading CTEs and parenthesised reads are read-only only when the CTE
+        // body is a SELECT — MySQL 8 also allows `WITH ... UPDATE/DELETE`.
+        if (!preg_match('/^[\s(]*(WITH\b.*?\bSELECT|SELECT|SHOW|DESCRIBE|DESC|EXPLAIN)\b/is', $sql)) {
+            return false;
+        }
+
+        if (preg_match('/\b(UPDATE|DELETE|INSERT|REPLACE|MERGE)\b/i', $sql)
+            && !preg_match('/^[\s(]*(SELECT|SHOW|DESCRIBE|DESC|EXPLAIN)\b/i', $sql)) {
+            return false;
+        }
+
+        return !preg_match(
+            '/\b(FOR\s+UPDATE|FOR\s+SHARE|LOCK\s+IN\s+SHARE\s+MODE|INTO\s+(OUTFILE|DUMPFILE)|GET_LOCK|RELEASE_LOCK|SLEEP)\b/i',
+            $sql,
+        );
     }
 }

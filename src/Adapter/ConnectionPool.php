@@ -336,7 +336,11 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface, Ephemera
             } catch (\Throwable) {
                 // The connection died mid-transaction and cannot be cleaned —
                 // discard it and give back its slot so the pool mints a fresh
-                // replacement instead of recycling poisoned state.
+                // replacement instead of recycling poisoned state. Counted like
+                // any other discard: orm:status reporting discards=0 during a
+                // poisoned-connection incident sends the operator hunting the
+                // wrong thing.
+                $this->stats['discards']++;
                 $this->releaseSlotOf($connection);
 
                 return;

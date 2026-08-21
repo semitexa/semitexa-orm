@@ -34,16 +34,60 @@ final class PdoOptionsTimeoutTest extends TestCase
     }
 
     #[Test]
-    public function a_query_timeout_becomes_a_server_side_execution_ceiling(): void
+    public function the_query_ceiling_is_never_an_init_command(): void
     {
+        // An init command naming an unknown variable fails INSIDE the PDO
+        // constructor, so a MariaDB deployment would lose every connection the
+        // moment DB_QUERY_TIMEOUT is set. The ceiling is applied after connect,
+        // where the server flavor is known from the handshake.
         $options = OrmManager::pdoOptions(connectTimeout: 3.5, queryTimeout: 2.5);
 
         self::assertSame(4, $options[\PDO::ATTR_TIMEOUT], 'sub-second connect timeouts round UP, never to zero');
-        self::assertSame(
-            'SET SESSION MAX_EXECUTION_TIME=2500',
-            $options[\PDO::MYSQL_ATTR_INIT_COMMAND],
-            'seconds must translate to MySQL milliseconds',
+        self::assertArrayNotHasKey(
+            \PDO::MYSQL_ATTR_INIT_COMMAND,
+            $options,
+            'the query ceiling must not ride an init command — it fails at connect on the wrong flavor',
         );
+    }
+
+    #[Test]
+    public function applying_the_ceiling_picks_the_statement_by_server_flavor(): void
+    {
+        $mysql = new ServerVersionRecordingPdo('8.0.35-log');
+        OrmManager::applyQueryTimeout($mysql, 2.5);
+        self::assertSame(
+            ['SET SESSION max_execution_time=2500'],
+            $mysql->executed,
+            'MySQL takes max_execution_time in milliseconds',
+        );
+
+        $mariadb = new ServerVersionRecordingPdo('10.11.2-MariaDB');
+        OrmManager::applyQueryTimeout($mariadb, 2.5);
+        self::assertSame(
+            ['SET SESSION max_statement_time=2.500000'],
+            $mariadb->executed,
+            'MariaDB takes max_statement_time in seconds',
+        );
+
+        $ancient = new ServerVersionRecordingPdo('5.6.51');
+        OrmManager::applyQueryTimeout($ancient, 2.5);
+        self::assertSame([], $ancient->executed, 'a server without the variable must not be sent the statement');
+
+        $off = new ServerVersionRecordingPdo('8.0.35');
+        OrmManager::applyQueryTimeout($off, 0.0);
+        self::assertSame([], $off->executed, 'a disabled ceiling issues nothing');
+    }
+
+    #[Test]
+    public function a_server_that_rejects_the_ceiling_still_yields_a_usable_connection(): void
+    {
+        $refusing = new ServerVersionRecordingPdo('8.0.35', refuse: true);
+
+        OrmManager::applyQueryTimeout($refusing, 2.5);
+
+        // No exception: a ceiling that cannot be installed is a degraded
+        // safeguard, not a reason to fail the connection.
+        self::assertSame(['SET SESSION max_execution_time=2500'], $refusing->attempted);
     }
 
     #[Test]
@@ -69,5 +113,44 @@ final class PdoOptionsTimeoutTest extends TestCase
         self::assertInstanceOf(QueryTimeoutException::class, $classified);
         self::assertSame(3024, $classified->driverCode);
         self::assertTrue($classified->isTransient());
+    }
+}
+
+/** A PDO that reports a chosen server version and records the statements it is asked to run. */
+final class ServerVersionRecordingPdo extends \PDO
+{
+    /** @var string[] */
+    public array $executed = [];
+
+    /** @var string[] */
+    public array $attempted = [];
+
+    public function __construct(
+        private readonly string $serverVersion,
+        private readonly bool $refuse = false,
+    ) {
+        parent::__construct('sqlite::memory:');
+    }
+
+    public function getAttribute(int $attribute): mixed
+    {
+        if ($attribute === \PDO::ATTR_SERVER_VERSION) {
+            return $this->serverVersion;
+        }
+
+        return parent::getAttribute($attribute);
+    }
+
+    public function exec(string $statement): int|false
+    {
+        $this->attempted[] = $statement;
+
+        if ($this->refuse) {
+            throw new \PDOException('Unknown system variable');
+        }
+
+        $this->executed[] = $statement;
+
+        return 0;
     }
 }

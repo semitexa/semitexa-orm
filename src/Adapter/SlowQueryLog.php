@@ -27,7 +27,14 @@ final class SlowQueryLog
 
     public static function maybeLog(string $sql, float $milliseconds): void
     {
-        if ($milliseconds < self::thresholdMs()) {
+        $threshold = self::thresholdMs();
+
+        // Disabled is disabled: with the threshold at 0 no duration is < 0,
+        // so a bare comparison would log EVERY query. The adapters' fast path
+        // already skips the timing when nothing observes, but QueryRecorder
+        // (ai:observe, profiling, tests) also takes the measured branch — and
+        // then this method is reached with logging switched off.
+        if ($threshold <= 0 || $milliseconds < $threshold) {
             return;
         }
 

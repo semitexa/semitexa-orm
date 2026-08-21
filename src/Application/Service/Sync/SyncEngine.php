@@ -298,9 +298,18 @@ class SyncEngine
     /**
      * Execute a plan against the database.
      *
-     * When the server supports atomic DDL (MySQL 8.0+), all operations are
-     * wrapped in a single transaction so a mid-plan failure rolls back cleanly.
-     * On older MySQL/MariaDB, operations are applied one by one (no rollback on failure).
+     * On SQLite the whole plan runs inside one transaction, so a mid-plan
+     * failure rolls back cleanly. On MySQL/MariaDB it does NOT: every DDL
+     * statement carries an implicit commit, so operations are applied one by
+     * one and a mid-plan failure leaves the earlier operations in place. Plans
+     * are ordered (tables, columns, foreign keys, indexes) so that a partial
+     * application is re-runnable — the next sync diffs from the real schema
+     * and continues where this one stopped.
+     *
+     * With a pool present the plan still pins ONE connection for its whole
+     * lifetime: statements spread across pooled connections would race with
+     * concurrent request traffic and (before this) hand back a connection
+     * carrying an untracked transaction.
      *
      * @return DdlOperation[] Executed operations
      */
@@ -315,8 +324,20 @@ class SyncEngine
             return [];
         }
 
-        $useTransaction = $this->adapter->supports(\Semitexa\Orm\Adapter\ServerCapability::AtomicDdl);
         $isSqlite = $this->isSqlite();
+
+        // Only SQLite gets a transaction around the plan, and the reason is a
+        // server fact rather than a preference: MySQL performs an IMPLICIT
+        // COMMIT before and after every DDL statement, so a plan wrapped in
+        // START TRANSACTION/COMMIT was never atomic there — the first CREATE
+        // TABLE already committed everything, and the closing COMMIT ran with
+        // no transaction left to commit. (ServerCapability::AtomicDdl is about
+        // MySQL 8.0 making a SINGLE DDL statement crash-safe; it does not make
+        // DDL transactional.) Keeping the fiction also meant a pooled
+        // connection could carry an untracked open transaction back into the
+        // pool between the BEGIN and the first DDL. SQLite genuinely does run
+        // DDL inside transactions, so it keeps the wrapper and its rollback.
+        $useTransaction = $isSqlite && $this->adapter->supports(\Semitexa\Orm\Adapter\ServerCapability::AtomicDdl);
 
         // The whole plan must run on ONE connection. Through a pooled adapter,
         // every query()/execute() pops a DIFFERENT connection: BEGIN, each DDL,
@@ -338,6 +359,12 @@ class SyncEngine
                     $operations,
                     $useTransaction,
                     $isSqlite,
+                    // Drive the transaction through PDO, not a raw
+                    // `START TRANSACTION` query: PDO::inTransaction() only
+                    // tracks beginTransaction(), so a raw statement would make
+                    // BOTH the finally guard below and ConnectionPool::push()'s
+                    // hygiene blind — and this connection goes back to the pool.
+                    $pdo,
                 );
             } finally {
                 // Never return a connection to the pool mid-transaction: the
@@ -368,11 +395,16 @@ class SyncEngine
         array $operations,
         bool $useTransaction,
         bool $isSqlite,
+        ?\PDO $txConnection = null,
     ): array {
         $executed = [];
         try {
             if ($useTransaction) {
-                $adapter->query($isSqlite ? 'BEGIN' : 'START TRANSACTION');
+                if ($txConnection !== null) {
+                    $txConnection->beginTransaction();
+                } else {
+                    $adapter->query($isSqlite ? 'BEGIN' : 'START TRANSACTION');
+                }
             }
 
             foreach ($operations as $operation) {
@@ -387,12 +419,22 @@ class SyncEngine
             }
 
             if ($useTransaction) {
-                $adapter->query('COMMIT');
+                if ($txConnection !== null) {
+                    $txConnection->commit();
+                } else {
+                    $adapter->query('COMMIT');
+                }
             }
         } catch (\Throwable $e) {
             if ($useTransaction) {
                 try {
-                    $adapter->query('ROLLBACK');
+                    if ($txConnection !== null) {
+                        if ($txConnection->inTransaction()) {
+                            $txConnection->rollBack();
+                        }
+                    } else {
+                        $adapter->query('ROLLBACK');
+                    }
                 } catch (\Throwable) {
                     // A failed ROLLBACK (dead connection) must not mask the
                     // original failure — that is the exception worth seeing.
