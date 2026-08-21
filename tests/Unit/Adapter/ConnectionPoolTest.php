@@ -224,9 +224,16 @@ final class ConnectionPoolTest extends TestCase
 
             // Seed the channel with one connection so the next pop() takes the
             // slow path through ensureAlive() rather than the fast path.
-            $pool->push($pool->pop());
+            $seeded = $pool->pop();
+            $pool->push($seeded);
             self::assertSame(1, $createdProp->getValue($pool)->get());
             self::assertSame(1, $pool->getAvailable());
+
+            // The liveness ping is idle-gated now: backdate the idle stamp so
+            // the freshly pushed connection is treated as long-idle and gets
+            // the SELECT 1 health check this scenario depends on.
+            $idleProp = $ref->getProperty('idleSince');
+            $idleProp->getValue($pool)[$seeded] = microtime(true) - 60.0;
 
             // pop() retrieves the seeded connection, SELECT 1 throws (stale),
             // ensureAlive() reconnects via the factory — which now fails.

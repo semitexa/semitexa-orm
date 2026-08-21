@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Application\Service\Transaction;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
+use Semitexa\Orm\Adapter\DriverErrorClassifier;
+use Semitexa\Orm\Adapter\QueryRecorder;
+use Semitexa\Orm\Adapter\SlowQueryLog;
 use Semitexa\Orm\Adapter\PreparesCachedStatements;
 use Semitexa\Orm\Adapter\QueryResult;
 use Semitexa\Orm\Adapter\ServerCapability;
@@ -50,6 +53,30 @@ class SingleConnectionAdapter implements DatabaseAdapterInterface
 
     public function execute(string $sql, array $params = []): QueryResult
     {
+        // Same recording seam as MysqlAdapter: without it, every query run
+        // INSIDE a transaction was invisible to traces/profiles — exactly the
+        // path you want to see when debugging a slow or deadlocking write.
+        if (!QueryRecorder::isRecording() && SlowQueryLog::thresholdMs() <= 0) {
+            return $this->executeUnrecorded($sql, $params);
+        }
+
+        $start = hrtime(true);
+        try {
+            return $this->executeUnrecorded($sql, $params);
+        } finally {
+            $milliseconds = (hrtime(true) - $start) / 1_000_000;
+            if (QueryRecorder::isRecording()) {
+                QueryRecorder::record($sql, $params, $milliseconds);
+            }
+            SlowQueryLog::maybeLog($sql, $milliseconds);
+        }
+    }
+
+    /**
+     * @param array<mixed> $params
+     */
+    private function executeUnrecorded(string $sql, array $params = []): QueryResult
+    {
         $stmt = $this->statements[$sql] ?? null;
         if ($stmt === null) {
             $stmt = $this->preparedStatement($sql);
@@ -63,8 +90,11 @@ class SingleConnectionAdapter implements DatabaseAdapterInterface
             // transaction, so a re-prepared retry is safe here. NEVER retry
             // other errors: a deadlock (1213) has already rolled the tx back,
             // and a blind re-execute would silently apply a partial write.
+            // Recognized driver errors surface as typed exceptions so the
+            // caller (TransactionManager::runWithRetry) can replay the WHOLE
+            // transaction — the only correct retry unit in here.
             if (($e->errorInfo[1] ?? null) !== 1615) {
-                throw $e;
+                throw DriverErrorClassifier::classify($e) ?? $e;
             }
             unset($this->statements[$sql]);
             $stmt = $this->preparedStatement($sql);
@@ -85,7 +115,37 @@ class SingleConnectionAdapter implements DatabaseAdapterInterface
 
     public function query(string $sql): QueryResult
     {
-        $stmt = $this->connection->query($sql);
+        if (!QueryRecorder::isRecording() && SlowQueryLog::thresholdMs() <= 0) {
+            return $this->queryUnrecorded($sql);
+        }
+
+        $start = hrtime(true);
+        try {
+            return $this->queryUnrecorded($sql);
+        } finally {
+            $milliseconds = (hrtime(true) - $start) / 1_000_000;
+            if (QueryRecorder::isRecording()) {
+                QueryRecorder::record($sql, [], $milliseconds);
+            }
+            SlowQueryLog::maybeLog($sql, $milliseconds);
+        }
+    }
+
+    private function queryUnrecorded(string $sql): QueryResult
+    {
+        try {
+            $stmt = $this->connection->query($sql);
+        } catch (\PDOException $e) {
+            throw DriverErrorClassifier::classify($e) ?? $e;
+        }
+
+        // query() returns false instead of throwing when the connection is not
+        // in ERRMODE_EXCEPTION; this adapter accepts any PDO, so without the
+        // guard the fetchAll() below fatals on a bool. Same guard as
+        // MysqlAdapter::queryOnPooledConnection().
+        if ($stmt === false) {
+            throw new \RuntimeException("Query failed: {$sql}");
+        }
         $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
         $rowCount = $stmt->rowCount();
         $stmt->closeCursor();

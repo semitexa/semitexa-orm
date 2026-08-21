@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Adapter;
 
+use Semitexa\Core\Log\StaticLoggerBridge;
+use Semitexa\Orm\Exception\PoolExhaustedException;
 use Swoole\Atomic;
 use Swoole\Coroutine\Channel;
 
-class ConnectionPool implements TenantSwitchingConnectionPoolInterface
+class ConnectionPool implements TenantSwitchingConnectionPoolInterface, EphemeralConnectionAwareInterface
 {
     /**
      * PHP shutdown phase flag.
@@ -63,6 +65,18 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
      */
     private const DEFAULT_POP_TIMEOUT_SECONDS = 10.0;
 
+    /**
+     * Only connections idle at least this long get the `SELECT 1` liveness
+     * ping on checkout. Under healthy load connections cycle in milliseconds,
+     * and pinging EVERY pop doubles the round-trips per query — the pool then
+     * sustains roughly half the throughput it is sized for. One second of
+     * idleness is far below any server-side disconnect horizon (wait_timeout
+     * defaults to hours) while skipping the ping on virtually every hot-path
+     * checkout. A connection with NO idle stamp (adopted, pre-warm) is always
+     * pinged — conservative by default.
+     */
+    private const IDLE_PING_SECONDS = 1.0;
+
     private ?Channel $pool;
 
     /**
@@ -105,6 +119,73 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
      */
     private int $ownerPid;
 
+    /**
+     * Outstanding borrows, per coroutine: cid => (spl_object_id => PDO).
+     *
+     * Deliberately STRONG references. A coroutine that dies without pushing —
+     * an uncaught throw across a yield, a killed coroutine, code that simply
+     * forgot — used to leak its slot permanently: the PDO's WeakMap entries
+     * vanish on GC without anyone calling `created->sub(1)`, so the pool
+     * ratchets toward full-but-empty and every later pop() times out. The
+     * strong reference keeps the connection recoverable until the coroutine's
+     * defer (armed on its first borrow) returns whatever is still checked out.
+     *
+     * @var array<int, array<int, \PDO>>
+     */
+    private array $borrowedByCid = [];
+
+    /**
+     * Which coroutine borrowed a connection — reverse index for push().
+     *
+     * @var \WeakMap<\PDO, int>
+     */
+    private \WeakMap $borrowerOf;
+
+    /**
+     * When a connection was last returned to the channel.
+     *
+     * @var \WeakMap<\PDO, float>
+     */
+    private \WeakMap $idleSince;
+
+    /**
+     * Coroutines that already armed their give-back defer.
+     *
+     * @var array<int, true>
+     */
+    private array $reclaimArmed = [];
+
+    /**
+     * Slots claimed by cmpset whose connection is still being opened, per
+     * coroutine.
+     *
+     * The factory can suspend — under Swoole hooks a TCP connect and auth
+     * round-trip are yield points — and the borrow registry cannot record a
+     * PDO that does not exist yet. A coroutine killed inside that window
+     * leaves `created` incremented with nothing to reclaim, which is the
+     * ratcheting leak the borrow registry exists to prevent, entered through
+     * a different door. The give-back defer therefore also releases whatever
+     * this coroutine had claimed but not yet materialized.
+     *
+     * @var array<int, int>
+     */
+    private array $pendingSlots = [];
+
+    /**
+     * Reliability counters, exposed via getStats() (orm:status). Deliberately
+     * plain ints, not Atomics: they are per-worker observability, and every
+     * mutation happens without a coroutine yield in between.
+     *
+     * @var array{reconnects: int, discards: int, exhausted_timeouts: int, reclaimed_from_dead_coroutines: int, warmed: int}
+     */
+    private array $stats = [
+        'reconnects' => 0,
+        'discards' => 0,
+        'exhausted_timeouts' => 0,
+        'reclaimed_from_dead_coroutines' => 0,
+        'warmed' => 0,
+    ];
+
     public function __construct(
         private readonly int $size,
         private readonly \Closure $factory,
@@ -113,6 +194,8 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
         $this->pool        = new Channel($size);
         $this->created     = new Atomic(0);
         $this->slotHolders = new \WeakMap();
+        $this->borrowerOf  = new \WeakMap();
+        $this->idleSince   = new \WeakMap();
         $this->ownerPid    = getmypid();
     }
 
@@ -156,6 +239,11 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
         $this->pool        = new Channel($this->size);
         $this->created     = new Atomic(0);
         $this->slotHolders = new \WeakMap();
+        $this->borrowedByCid = [];
+        $this->borrowerOf    = new \WeakMap();
+        $this->idleSince     = new \WeakMap();
+        $this->reclaimArmed  = [];
+        $this->pendingSlots  = [];
     }
 
     private static function registerShutdownHookOnce(): void
@@ -217,7 +305,17 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
                 // without pushing it to the channel first. The cmpset above
                 // has claimed the slot; createForClaimedSlot() releases it if
                 // the connect fails.
-                return $this->createForClaimedSlot();
+                // Armed BEFORE createForClaimedSlot(), which can suspend:
+                // see $pendingSlots.
+                $this->armReclaim();
+                $this->markPendingSlot(1);
+                try {
+                    $connection = $this->createForClaimedSlot();
+                } finally {
+                    $this->markPendingSlot(-1);
+                }
+
+                return $this->lendToCoroutine($connection);
             }
 
             // Pool is full (or another coroutine won the cmpset race) — wait for
@@ -230,13 +328,20 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
 
             $connection = $pool->pop($wait);
             if ($connection !== false) {
-                return $this->ensureAlive($connection);
+                return $this->lendToCoroutine($this->ensureAliveIfIdle($connection));
             }
 
             if ($remaining >= 0) {
                 $remaining -= $wait;
                 if ($remaining <= 0) {
-                    throw new \RuntimeException('Failed to obtain database connection from pool (timeout).');
+                    $this->stats['exhausted_timeouts']++;
+                    StaticLoggerBridge::warning('orm', 'Connection pool exhausted: pop() timed out.', [
+                        'size' => $this->size,
+                        'created' => $this->created->get(),
+                        'available' => $this->getAvailable(),
+                        'timeout_seconds' => $timeout,
+                    ]);
+                    throw new PoolExhaustedException('Failed to obtain database connection from pool (timeout).');
                 }
             }
         }
@@ -245,6 +350,7 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
     public function push(\PDO $connection): void
     {
         $this->adoptForCurrentProcess();
+        $this->unrecordBorrow($connection);
 
         $pool = $this->pool;
         if (! $pool instanceof Channel) {
@@ -253,6 +359,31 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
             unset($this->slotHolders[$connection]);
 
             return;
+        }
+
+        // A connection must NEVER re-enter the pool mid-transaction: the next
+        // coroutine would inherit an open transaction and its writes would be
+        // committed or rolled back by whoever touches the connection later —
+        // silent cross-request data corruption. inTransaction() is a local
+        // client-side flag (no IO), so this costs nothing on the clean path.
+        // Limitation: it only tracks PDO::beginTransaction(); a raw
+        // `START TRANSACTION` sent as a query is invisible to it, which is why
+        // no framework code path issues one against a pooled adapter.
+        if (self::hasOpenTransaction($connection)) {
+            try {
+                $connection->rollBack();
+            } catch (\Throwable) {
+                // The connection died mid-transaction and cannot be cleaned —
+                // discard it and give back its slot so the pool mints a fresh
+                // replacement instead of recycling poisoned state. Counted like
+                // any other discard: orm:status reporting discards=0 during a
+                // poisoned-connection incident sends the operator hunting the
+                // wrong thing.
+                $this->stats['discards']++;
+                $this->releaseSlotOf($connection);
+
+                return;
+            }
         }
 
         // Outside a coroutine `Channel->push()` fatals ("API must be called in the
@@ -276,7 +407,139 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
             return;
         }
 
+        $this->idleSince[$connection] = microtime(true);
         $pool->push($connection);
+    }
+
+    /**
+     * Record a borrow for the current coroutine and arm (once per coroutine)
+     * a defer that gives back whatever is still checked out when the
+     * coroutine ends. The defer runs inside the ending coroutine, so Channel
+     * ops are legal there; push() applies its usual transaction hygiene, so a
+     * connection abandoned mid-transaction is rolled back or discarded, never
+     * recycled dirty. On the normal path the borrow is unrecorded by push()
+     * and the defer finds nothing — the cost is one array write per checkout.
+     */
+    private function lendToCoroutine(\PDO $connection): \PDO
+    {
+        $cid = \Swoole\Coroutine::getCid();
+        if (!is_int($cid) || $cid < 0) {
+            return $connection;
+        }
+
+        $this->borrowedByCid[$cid][spl_object_id($connection)] = $connection;
+        $this->borrowerOf[$connection] = $cid;
+        $this->armReclaim();
+
+        return $connection;
+    }
+
+    /**
+     * Arm, once per coroutine, the defer that gives back everything this
+     * coroutine still holds when it ends — both materialized connections and
+     * slots claimed for a connection that never finished opening.
+     */
+    private function armReclaim(): void
+    {
+        $cid = \Swoole\Coroutine::getCid();
+        if (!is_int($cid) || $cid < 0 || isset($this->reclaimArmed[$cid])) {
+            return;
+        }
+
+        $this->reclaimArmed[$cid] = true;
+        \Swoole\Coroutine::defer(function () use ($cid): void {
+            unset($this->reclaimArmed[$cid]);
+            $leaked = $this->borrowedByCid[$cid] ?? [];
+            $pending = $this->pendingSlots[$cid] ?? 0;
+            unset($this->borrowedByCid[$cid], $this->pendingSlots[$cid]);
+
+            if (self::$phpShuttingDown) {
+                return;
+            }
+
+            foreach ($leaked as $connection) {
+                $this->stats['reclaimed_from_dead_coroutines']++;
+                $this->push($connection);
+            }
+
+            // A slot claimed for a connection that never materialized has no
+            // PDO to push — release the count directly.
+            for ($i = 0; $i < $pending; $i++) {
+                $this->stats['reclaimed_from_dead_coroutines']++;
+                $this->created->sub(1);
+            }
+
+            if ($leaked !== [] || $pending > 0) {
+                StaticLoggerBridge::warning('orm', 'Reclaimed connection(s)/slot(s) from a coroutine that ended without returning them.', [
+                    'connections' => count($leaked),
+                    'pending_slots' => $pending,
+                    'cid' => $cid,
+                ]);
+            }
+        });
+    }
+
+    private function markPendingSlot(int $delta): void
+    {
+        $cid = \Swoole\Coroutine::getCid();
+        if (!is_int($cid) || $cid < 0) {
+            return;
+        }
+
+        $pending = ($this->pendingSlots[$cid] ?? 0) + $delta;
+        if ($pending > 0) {
+            $this->pendingSlots[$cid] = $pending;
+
+            return;
+        }
+
+        unset($this->pendingSlots[$cid]);
+    }
+
+    /**
+     * Drop a connection from the pool's accounting WITHOUT re-queueing it.
+     *
+     * For a connection known to be dead (the server closed it mid-query):
+     * pushing it back would recycle a poisoned socket to the next coroutine,
+     * while silently dropping it would leak its slot. This frees the slot so
+     * pop() can mint a fresh replacement, and forgets the borrow so the
+     * coroutine-end reclaim does not resurrect it.
+     */
+    public function discard(\PDO $connection): void
+    {
+        $this->stats['discards']++;
+        $this->unrecordBorrow($connection);
+        $this->releaseSlotOf($connection);
+    }
+
+    private function unrecordBorrow(\PDO $connection): void
+    {
+        $cid = $this->borrowerOf[$connection] ?? null;
+        if (!is_int($cid)) {
+            return;
+        }
+
+        unset(
+            $this->borrowerOf[$connection],
+            $this->borrowedByCid[$cid][spl_object_id($connection)],
+        );
+        if (($this->borrowedByCid[$cid] ?? []) === []) {
+            unset($this->borrowedByCid[$cid]);
+        }
+    }
+
+    /**
+     * inTransaction() on a healthy connection is a local flag read (no IO),
+     * but an uninitialized or torn-down PDO raises \Error — treat any failure
+     * to answer as "no transaction" and let the normal path proceed.
+     */
+    private static function hasOpenTransaction(\PDO $connection): bool
+    {
+        try {
+            return $connection->inTransaction();
+        } catch (\Throwable) {
+            return false;
+        }
     }
 
     /**
@@ -331,7 +594,7 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
      * Call this once during worker start (inside a coroutine context) to
      * avoid any lazy-creation overhead on the first requests.
      */
-    public function fill(): void
+    public function fill(?int $target = null): void
     {
         $this->adoptForCurrentProcess();
 
@@ -340,15 +603,19 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
             throw new \RuntimeException('Connection pool is closed.');
         }
 
+        $target = $target === null ? $this->size : min($target, $this->size);
         $current = $this->created->get();
 
-        while ($current < $this->size) {
+        while ($current < $target) {
             if ($this->created->cmpset($current, $current + 1)) {
                 // createForClaimedSlot() releases the slot if the factory
                 // throws (DB not yet reachable at worker boot), so a later
                 // retry/pop() can still fill the pool instead of it being
                 // permanently short one connection.
-                $pool->push($this->createForClaimedSlot());
+                $connection = $this->createForClaimedSlot();
+                $this->stats['warmed']++;
+                $this->idleSince[$connection] = microtime(true);
+                $pool->push($connection);
             }
 
             $current = $this->created->get();
@@ -392,12 +659,30 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
         } finally {
             $this->pool = null;
             $this->created->set(0);
+            $this->borrowedByCid = [];
+            $this->reclaimArmed  = [];
         }
     }
 
     public function getSize(): int
     {
         return $this->size;
+    }
+
+    /**
+     * Per-worker reliability counters: reconnects, discards, exhaustion
+     * timeouts, coroutine-death reclaims, warm-up count. Consumed by
+     * orm:status; cheap enough to call anytime.
+     *
+     * @return array{size: int, created: int, available: int, reconnects: int, discards: int, exhausted_timeouts: int, reclaimed_from_dead_coroutines: int, warmed: int}
+     */
+    public function getStats(): array
+    {
+        return array_merge([
+            'size' => $this->size,
+            'created' => $this->created->get(),
+            'available' => $this->getAvailable(),
+        ], $this->stats);
     }
 
     /**
@@ -409,6 +694,16 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
     public function handsOutEphemeralConnections(): bool
     {
         return ! self::inCoroutine();
+    }
+
+    /**
+     * Precise per-connection form of the above: a connection holding a slot
+     * (createForClaimedSlot() produced it) is pooled and will come back; a
+     * direct non-coroutine mint never claimed one and is dropped on push().
+     */
+    public function isEphemeralConnection(\PDO $connection): bool
+    {
+        return ! isset($this->slotHolders[$connection]);
     }
 
     public function getAvailable(): int
@@ -458,6 +753,24 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
      * leaks identically to the pop()/fill() paths and ratchets the pool into
      * the full-but-empty deadlock. createForClaimedSlot() does that release.
      */
+    /**
+     * Health-check the connection only when it sat idle long enough to have
+     * plausibly died; a connection returned milliseconds ago is served as-is.
+     * See IDLE_PING_SECONDS for the trade-off. A dead connection that slips
+     * through unpinged still fails safe: the adapters classify the failure,
+     * discard the connection (freeing its slot) and transparently replay
+     * read-only statements on a fresh one.
+     */
+    private function ensureAliveIfIdle(\PDO $connection): \PDO
+    {
+        $idleSince = $this->idleSince[$connection] ?? null;
+        if (is_float($idleSince) && (microtime(true) - $idleSince) < self::IDLE_PING_SECONDS) {
+            return $connection;
+        }
+
+        return $this->ensureAlive($connection);
+    }
+
     private function ensureAlive(\PDO $connection): \PDO
     {
         try {
@@ -485,6 +798,11 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface
      */
     private function replaceDeadConnection(\PDO $dead): \PDO
     {
+        $this->stats['reconnects']++;
+        StaticLoggerBridge::debug('orm', 'Replaced a dead pooled connection.', [
+            'created' => $this->created->get(),
+            'size' => $this->size,
+        ]);
         unset($this->slotHolders[$dead]);
 
         return $this->createForClaimedSlot();

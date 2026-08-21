@@ -11,8 +11,10 @@ use Semitexa\Orm\Domain\Model\ExecutionPlan;
 
 
 
+use Semitexa\Orm\Adapter\ConnectionPoolInterface;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Adapter\DatabaseType;
+use Semitexa\Orm\Application\Service\Transaction\SingleConnectionAdapter;
 use Semitexa\Orm\Adapter\MySqlType;
 use Semitexa\Orm\Adapter\SqliteType;
 use Semitexa\Orm\Domain\Model\ColumnDefinition;
@@ -29,6 +31,7 @@ class SyncEngine
     public function __construct(
         private readonly DatabaseAdapterInterface $adapter,
         private readonly ?AuditLogger $auditLogger = null,
+        private readonly ?ConnectionPoolInterface $pool = null,
     ) {}
 
     public function buildPlan(SchemaDiff $diff): ExecutionPlan
@@ -295,9 +298,18 @@ class SyncEngine
     /**
      * Execute a plan against the database.
      *
-     * When the server supports atomic DDL (MySQL 8.0+), all operations are
-     * wrapped in a single transaction so a mid-plan failure rolls back cleanly.
-     * On older MySQL/MariaDB, operations are applied one by one (no rollback on failure).
+     * On SQLite the whole plan runs inside one transaction, so a mid-plan
+     * failure rolls back cleanly. On MySQL/MariaDB it does NOT: every DDL
+     * statement carries an implicit commit, so operations are applied one by
+     * one and a mid-plan failure leaves the earlier operations in place. Plans
+     * are ordered (tables, columns, foreign keys, indexes) so that a partial
+     * application is re-runnable — the next sync diffs from the real schema
+     * and continues where this one stopped.
+     *
+     * With a pool present the plan still pins ONE connection for its whole
+     * lifetime: statements spread across pooled connections would race with
+     * concurrent request traffic and (before this) hand back a connection
+     * carrying an untracked transaction.
      *
      * @return DdlOperation[] Executed operations
      */
@@ -312,13 +324,94 @@ class SyncEngine
             return [];
         }
 
-        $useTransaction = $this->adapter->supports(\Semitexa\Orm\Adapter\ServerCapability::AtomicDdl);
         $isSqlite = $this->isSqlite();
 
+        // Only SQLite gets a transaction around the plan, and the reason is a
+        // server fact rather than a preference: MySQL performs an IMPLICIT
+        // COMMIT before and after every DDL statement, so a plan wrapped in
+        // START TRANSACTION/COMMIT was never atomic there — the first CREATE
+        // TABLE already committed everything, and the closing COMMIT ran with
+        // no transaction left to commit. (ServerCapability::AtomicDdl is about
+        // MySQL 8.0 making a SINGLE DDL statement crash-safe; it does not make
+        // DDL transactional.) Keeping the fiction also meant a pooled
+        // connection could carry an untracked open transaction back into the
+        // pool between the BEGIN and the first DDL. SQLite genuinely does run
+        // DDL inside transactions, so it keeps the wrapper and its rollback.
+        $useTransaction = $isSqlite && $this->adapter->supports(\Semitexa\Orm\Adapter\ServerCapability::AtomicDdl);
+
+        // The whole plan must run on ONE connection. Through a pooled adapter,
+        // every query()/execute() pops a DIFFERENT connection: BEGIN, each DDL,
+        // and COMMIT would land on unrelated connections — the "transaction" is
+        // a fiction, and worse, the connection that received BEGIN goes back to
+        // the pool with an OPEN transaction, so an unrelated coroutine inherits
+        // it and its writes get committed/rolled back by whoever holds that
+        // connection next. With a pool present, pin a single dedicated
+        // connection for the plan's whole lifetime.
+        if ($this->pool !== null && !$isSqlite) {
+            // Resolve the version BEFORE holding a connection (a cold adapter
+            // runs a detection query that borrows its own connection — holding
+            // one while waiting for a second is the pool-deadlock shape).
+            $serverVersion = $this->adapter->getServerVersion();
+            $pdo = $this->pool->pop();
+            try {
+                return $this->executeOperationsOn(
+                    new SingleConnectionAdapter($pdo, $serverVersion),
+                    $operations,
+                    $useTransaction,
+                    $isSqlite,
+                    // Drive the transaction through PDO, not a raw
+                    // `START TRANSACTION` query: PDO::inTransaction() only
+                    // tracks beginTransaction(), so a raw statement would make
+                    // BOTH the finally guard below and ConnectionPool::push()'s
+                    // hygiene blind — and this connection goes back to the pool.
+                    $pdo,
+                );
+            } finally {
+                // Never return a connection to the pool mid-transaction: this
+                // is the last line of defense if the body threw between BEGIN
+                // and its own ROLLBACK (e.g. the ROLLBACK itself failed on a
+                // dead connection).
+                //
+                // inTransaction() is inside the try as well — on a severed
+                // connection the status check itself throws, and an unguarded
+                // one here would both mask the original DDL error and skip the
+                // push below, leaking the connection. The push therefore lives
+                // in its own finally so it runs no matter what cleanup does.
+                try {
+                    if ($pdo->inTransaction()) {
+                        $pdo->rollBack();
+                    }
+                } catch (\Throwable) {
+                    // A dead connection cannot be cleaned — the pool's push()
+                    // hygiene discards it and frees its slot.
+                } finally {
+                    $this->pool->push($pdo);
+                }
+            }
+        }
+
+        return $this->executeOperationsOn($this->adapter, $operations, $useTransaction, $isSqlite);
+    }
+
+    /**
+     * @param DdlOperation[] $operations
+     * @return DdlOperation[] Executed operations
+     */
+    private function executeOperationsOn(
+        DatabaseAdapterInterface $adapter,
+        array $operations,
+        bool $useTransaction,
+        bool $isSqlite,
+        ?\PDO $txConnection = null,
+    ): array {
         $executed = [];
         try {
             if ($useTransaction) {
-                $this->adapter->query($isSqlite ? 'BEGIN' : 'START TRANSACTION');
+                if ($txConnection !== null) {
+                    $txConnection->beginTransaction();
+                } else {
+                    $adapter->query($isSqlite ? 'BEGIN' : 'START TRANSACTION');
+                }
             }
 
             foreach ($operations as $operation) {
@@ -328,16 +421,31 @@ class SyncEngine
                     );
                 }
 
-                $this->adapter->execute($operation->sql);
+                $adapter->execute($operation->sql);
                 $executed[] = $operation;
             }
 
             if ($useTransaction) {
-                $this->adapter->query($isSqlite ? 'COMMIT' : 'COMMIT');
+                if ($txConnection !== null) {
+                    $txConnection->commit();
+                } else {
+                    $adapter->query('COMMIT');
+                }
             }
         } catch (\Throwable $e) {
             if ($useTransaction) {
-                $this->adapter->query($isSqlite ? 'ROLLBACK' : 'ROLLBACK');
+                try {
+                    if ($txConnection !== null) {
+                        if ($txConnection->inTransaction()) {
+                            $txConnection->rollBack();
+                        }
+                    } else {
+                        $adapter->query('ROLLBACK');
+                    }
+                } catch (\Throwable) {
+                    // A failed ROLLBACK (dead connection) must not mask the
+                    // original failure — that is the exception worth seeing.
+                }
             }
             throw $e;
         }

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Adapter;
 
+use Semitexa\Orm\Exception\ConnectionLostException;
+
 class MysqlAdapter implements DatabaseAdapterInterface
 {
     use PreparesCachedStatements;
@@ -62,10 +64,11 @@ class MysqlAdapter implements DatabaseAdapterInterface
 
     public function execute(string $sql, array $params = []): QueryResult
     {
-        // One boolean when nothing is recording, which is every production
-        // process. The measurement wraps the call rather than living inside it so
-        // the original body keeps its own early returns.
-        if (!QueryRecorder::isRecording()) {
+        // Two boolean checks when nothing observes, which is every production
+        // process with slow-query logging off. The measurement wraps the call
+        // rather than living inside it so the original body keeps its own
+        // early returns.
+        if (!QueryRecorder::isRecording() && SlowQueryLog::thresholdMs() <= 0) {
             return $this->executeRecorded($sql, $params);
         }
 
@@ -73,13 +76,17 @@ class MysqlAdapter implements DatabaseAdapterInterface
         try {
             return $this->executeRecorded($sql, $params);
         } finally {
-            QueryRecorder::record($sql, $params, (hrtime(true) - $start) / 1_000_000);
+            $milliseconds = (hrtime(true) - $start) / 1_000_000;
+            if (QueryRecorder::isRecording()) {
+                QueryRecorder::record($sql, $params, $milliseconds);
+            }
+            SlowQueryLog::maybeLog($sql, $milliseconds);
         }
     }
 
     public function query(string $sql): QueryResult
     {
-        if (!QueryRecorder::isRecording()) {
+        if (!QueryRecorder::isRecording() && SlowQueryLog::thresholdMs() <= 0) {
             return $this->queryRecorded($sql);
         }
 
@@ -87,7 +94,11 @@ class MysqlAdapter implements DatabaseAdapterInterface
         try {
             return $this->queryRecorded($sql);
         } finally {
-            QueryRecorder::record($sql, [], (hrtime(true) - $start) / 1_000_000);
+            $milliseconds = (hrtime(true) - $start) / 1_000_000;
+            if (QueryRecorder::isRecording()) {
+                QueryRecorder::record($sql, [], $milliseconds);
+            }
+            SlowQueryLog::maybeLog($sql, $milliseconds);
         }
     }
 
@@ -100,42 +111,83 @@ class MysqlAdapter implements DatabaseAdapterInterface
         // rewrite them deterministically before hitting the statement cache.
         [$sql, $params] = RepeatedPlaceholderExpander::expand($sql, $params);
 
-        $connection = $this->pool->pop();
-
         try {
-            $stmt = $this->preparedStatement($connection, $sql);
-            try {
-                $stmt->execute($params);
-            } catch (\PDOException $e) {
-                // Defensive re-prepare, gated to MySQL 1615 ("statement needs
-                // to be re-prepared" — DDL invalidated the cached statement).
-                // NEVER retry other errors: a deadlock (1213) or lock-wait
-                // rollback inside an open transaction destroys the tx, and a
-                // blind re-execute would silently succeed in autocommit —
-                // partial writes with no error trail.
-                if (($e->errorInfo[1] ?? null) !== 1615) {
-                    throw $e;
-                }
-                $this->forgetStatement($connection, $sql);
-                $stmt = $this->preparedStatement($connection, $sql);
-                $stmt->execute($params);
+            return $this->executeOnPooledConnection($sql, $params);
+        } catch (ConnectionLostException $e) {
+            // The dead connection was discarded (not re-queued). A READ-ONLY
+            // statement is safe to replay once on a fresh connection: it
+            // changes nothing, so it does not matter whether the server had
+            // processed it before dropping. A write is NEVER auto-retried —
+            // the drop can arrive after the server applied the write, and a
+            // replay would duplicate it. This adapter is the POOLED path, so
+            // no transaction can be open here (transactions run on
+            // SingleConnectionAdapter), making the single retry safe.
+            if (!DriverErrorClassifier::isReadOnlyStatement($sql)) {
+                throw $e;
             }
 
-            // Materialize ALL data before returning connection to pool.
-            // This is critical for coroutine safety — after push(), another
-            // coroutine may reuse this PDO and invalidate the PDOStatement.
-            $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
-            $rowCount = $stmt->rowCount();
-            $lastInsertId = $connection->lastInsertId() ?: '0';
-            $stmt->closeCursor();
+            return $this->executeOnPooledConnection($sql, $params);
+        }
+    }
 
-            return new QueryResult(
-                rows: $rows,
-                rowCount: $rowCount,
-                lastInsertId: $lastInsertId,
-            );
+    /**
+     * @param array<mixed> $params
+     */
+    private function executeOnPooledConnection(string $sql, array $params): QueryResult
+    {
+        $connection = $this->pool->pop();
+        $discard = false;
+
+        try {
+            try {
+                $stmt = $this->preparedStatement($connection, $sql);
+                try {
+                    $stmt->execute($params);
+                } catch (\PDOException $e) {
+                    // Defensive re-prepare, gated to MySQL 1615 ("statement needs
+                    // to be re-prepared" — DDL invalidated the cached statement).
+                    // NEVER retry other errors: a deadlock (1213) or lock-wait
+                    // rollback inside an open transaction destroys the tx, and a
+                    // blind re-execute would silently succeed in autocommit —
+                    // partial writes with no error trail.
+                    if (($e->errorInfo[1] ?? null) !== 1615) {
+                        throw $e;
+                    }
+                    $this->forgetStatement($connection, $sql);
+                    $stmt = $this->preparedStatement($connection, $sql);
+                    $stmt->execute($params);
+                }
+
+                // Materialize ALL data before returning connection to pool.
+                // This is critical for coroutine safety — after push(), another
+                // coroutine may reuse this PDO and invalidate the PDOStatement.
+                $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+                $rowCount = $stmt->rowCount();
+                $lastInsertId = $connection->lastInsertId() ?: '0';
+                $stmt->closeCursor();
+
+                return new QueryResult(
+                    rows: $rows,
+                    rowCount: $rowCount,
+                    lastInsertId: $lastInsertId,
+                );
+            } catch (\PDOException $e) {
+                // Classify AFTER the 1615 path above: recognized errors become
+                // typed exceptions callers can branch on; anything else is
+                // rethrown untouched. A dead connection must not go back to
+                // the channel — the pool discards it and frees its slot.
+                $classified = DriverErrorClassifier::classify($e);
+                if ($classified instanceof ConnectionLostException) {
+                    $discard = true;
+                }
+                throw $classified ?? $e;
+            }
         } finally {
-            $this->pool->push($connection);
+            if ($discard) {
+                $this->discardFromPool($connection);
+            } else {
+                $this->pool->push($connection);
+            }
         }
     }
 
@@ -151,25 +203,66 @@ class MysqlAdapter implements DatabaseAdapterInterface
      */
     private function queryRecorded(string $sql): QueryResult
     {
+        try {
+            return $this->queryOnPooledConnection($sql);
+        } catch (ConnectionLostException $e) {
+            // Same policy as executeRecorded(): one replay on a fresh
+            // connection, read-only statements only.
+            if (!DriverErrorClassifier::isReadOnlyStatement($sql)) {
+                throw $e;
+            }
+
+            return $this->queryOnPooledConnection($sql);
+        }
+    }
+
+    private function queryOnPooledConnection(string $sql): QueryResult
+    {
         $connection = $this->pool->pop();
+        $discard = false;
 
         try {
-            $stmt = $connection->query($sql);
-            if ($stmt === false) {
-                throw new \RuntimeException("Query failed: {$sql}");
-            }
-            $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
-            $rowCount = $stmt->rowCount();
-            $lastInsertId = $connection->lastInsertId() ?: '0';
-            $stmt->closeCursor();
+            try {
+                $stmt = $connection->query($sql);
+                if ($stmt === false) {
+                    throw new \RuntimeException("Query failed: {$sql}");
+                }
+                $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+                $rowCount = $stmt->rowCount();
+                $lastInsertId = $connection->lastInsertId() ?: '0';
+                $stmt->closeCursor();
 
-            return new QueryResult(
-                rows: $rows,
-                rowCount: $rowCount,
-                lastInsertId: $lastInsertId,
-            );
+                return new QueryResult(
+                    rows: $rows,
+                    rowCount: $rowCount,
+                    lastInsertId: $lastInsertId,
+                );
+            } catch (\PDOException $e) {
+                $classified = DriverErrorClassifier::classify($e);
+                if ($classified instanceof ConnectionLostException) {
+                    $discard = true;
+                }
+                throw $classified ?? $e;
+            }
         } finally {
-            $this->pool->push($connection);
+            if ($discard) {
+                $this->discardFromPool($connection);
+            } else {
+                $this->pool->push($connection);
+            }
+        }
+    }
+
+    /**
+     * Drop a dead connection instead of re-queueing it. ConnectionPool frees
+     * the slot so a replacement can be minted; other pools simply lose the
+     * reference — SingleConnectionPool's next pop() health-checks its cached
+     * connection and re-mints anyway.
+     */
+    private function discardFromPool(\PDO $connection): void
+    {
+        if ($this->pool instanceof ConnectionPool) {
+            $this->pool->discard($connection);
         }
     }
 
@@ -207,7 +300,8 @@ class MysqlAdapter implements DatabaseAdapterInterface
         // query-dense CLI/phpunit stretches hold every socket open until the
         // next sweep (observed: MySQL max_connections exhausted mid-suite).
         // Cache only connections that will actually come back.
-        if ($this->pool instanceof ConnectionPool && $this->pool->handsOutEphemeralConnections()) {
+        if ($this->pool instanceof EphemeralConnectionAwareInterface
+            && $this->pool->isEphemeralConnection($connection)) {
             $stmt = $connection->prepare($sql);
             if ($stmt === false) {
                 throw new \RuntimeException('PDO::prepare returned false for: ' . $sql);
