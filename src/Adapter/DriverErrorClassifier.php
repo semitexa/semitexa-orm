@@ -54,7 +54,11 @@ final class DriverErrorClassifier
             return new LockWaitTimeoutException($e->getMessage(), $sqlState, $driverCode, $e);
         }
 
-        if ($driverCode === 3024) {
+        // 3024 = MySQL max_execution_time; 1969 = MariaDB max_statement_time.
+        // Both are the ceiling OrmManager::applyQueryTimeout() installs, so
+        // both must land in the same typed exception or the taxonomy has a
+        // hole on exactly the flavor that needed the special handling.
+        if ($driverCode === 3024 || $driverCode === 1969) {
             return new QueryTimeoutException($e->getMessage(), $sqlState, $driverCode, $e);
         }
 
@@ -90,6 +94,14 @@ final class DriverErrorClassifier
      */
     public static function isReadOnlyStatement(string $sql): bool
     {
+        // Multi-statement SQL is never replayable: only the FIRST statement is
+        // inspected below, so `SELECT 1; UPDATE ...` would otherwise pass the
+        // read-only check and let a lost connection replay the write. A
+        // trailing semicolon is fine.
+        if (str_contains(rtrim(rtrim($sql), ';'), ';')) {
+            return false;
+        }
+
         // Leading CTEs and parenthesised reads are read-only only when the CTE
         // body is a SELECT — MySQL 8 also allows `WITH ... UPDATE/DELETE`.
         if (!preg_match('/^[\s(]*(WITH\b.*?\bSELECT|SELECT|SHOW|DESCRIBE|DESC|EXPLAIN)\b/is', $sql)) {

@@ -794,7 +794,18 @@ class OrmManager
             return;
         }
 
+        // TransactionManager::isActive() is COROUTINE-LOCAL: it answers for
+        // the coroutine asking for the swap, not for the worker. Coroutine A
+        // can be mid-query on the old pool while coroutine B reaches this
+        // getter, sees no transaction of its own, and closes A's connection
+        // out from under it. The pool itself is the only worker-wide witness,
+        // so ask it whether anyone still holds the connection; the swap is
+        // simply deferred to whoever asks next once the pool is quiescent.
         if ($this->transactionManager !== null && $this->transactionManager->isActive()) {
+            return;
+        }
+
+        if ($this->pool->hasOutstandingBorrow()) {
             return;
         }
 

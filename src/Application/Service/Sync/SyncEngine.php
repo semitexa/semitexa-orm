@@ -367,19 +367,26 @@ class SyncEngine
                     $pdo,
                 );
             } finally {
-                // Never return a connection to the pool mid-transaction: the
-                // rollback below is the last line of defense if the body threw
-                // between BEGIN and its own ROLLBACK (e.g. the ROLLBACK itself
-                // failed on a dead connection).
-                if ($pdo->inTransaction()) {
-                    try {
+                // Never return a connection to the pool mid-transaction: this
+                // is the last line of defense if the body threw between BEGIN
+                // and its own ROLLBACK (e.g. the ROLLBACK itself failed on a
+                // dead connection).
+                //
+                // inTransaction() is inside the try as well — on a severed
+                // connection the status check itself throws, and an unguarded
+                // one here would both mask the original DDL error and skip the
+                // push below, leaking the connection. The push therefore lives
+                // in its own finally so it runs no matter what cleanup does.
+                try {
+                    if ($pdo->inTransaction()) {
                         $pdo->rollBack();
-                    } catch (\Throwable) {
-                        // A dead connection cannot be cleaned — the pool's
-                        // health check replaces it on the next pop().
                     }
+                } catch (\Throwable) {
+                    // A dead connection cannot be cleaned — the pool's push()
+                    // hygiene discards it and frees its slot.
+                } finally {
+                    $this->pool->push($pdo);
                 }
-                $this->pool->push($pdo);
             }
         }
 

@@ -47,32 +47,60 @@ class SqliteAdapter implements DatabaseAdapterInterface
 
     public function execute(string $sql, array $params = []): QueryResult
     {
-        // One boolean when nothing is recording, which is every production
-        // process. The measurement wraps the call rather than living inside it so
-        // the original body keeps its own early returns.
-        if (!QueryRecorder::isRecording()) {
-            return $this->executeRecorded($sql, $params);
+        // Two boolean checks when nothing observes, which is every production
+        // process with slow-query logging off. The measurement wraps the call
+        // rather than living inside it so the original body keeps its own
+        // early returns.
+        if (!QueryRecorder::isRecording() && SlowQueryLog::thresholdMs() <= 0) {
+            return $this->classified(fn (): QueryResult => $this->executeRecorded($sql, $params));
         }
 
         $start = hrtime(true);
         try {
-            return $this->executeRecorded($sql, $params);
+            return $this->classified(fn (): QueryResult => $this->executeRecorded($sql, $params));
         } finally {
-            QueryRecorder::record($sql, $params, (hrtime(true) - $start) / 1_000_000);
+            $milliseconds = (hrtime(true) - $start) / 1_000_000;
+            if (QueryRecorder::isRecording()) {
+                QueryRecorder::record($sql, $params, $milliseconds);
+            }
+            SlowQueryLog::maybeLog($sql, $milliseconds);
         }
     }
 
     public function query(string $sql): QueryResult
     {
-        if (!QueryRecorder::isRecording()) {
-            return $this->queryRecorded($sql);
+        if (!QueryRecorder::isRecording() && SlowQueryLog::thresholdMs() <= 0) {
+            return $this->classified(fn (): QueryResult => $this->queryRecorded($sql));
         }
 
         $start = hrtime(true);
         try {
-            return $this->queryRecorded($sql);
+            return $this->classified(fn (): QueryResult => $this->queryRecorded($sql));
         } finally {
-            QueryRecorder::record($sql, [], (hrtime(true) - $start) / 1_000_000);
+            $milliseconds = (hrtime(true) - $start) / 1_000_000;
+            if (QueryRecorder::isRecording()) {
+                QueryRecorder::record($sql, [], $milliseconds);
+            }
+            SlowQueryLog::maybeLog($sql, $milliseconds);
+        }
+    }
+
+    /**
+     * Map driver failures onto the typed hierarchy, so a SQLite write that
+     * violates a constraint surfaces as ConstraintViolationException exactly
+     * like the MySQL path — the behavior change is package-wide, not
+     * MySQL-only. Unrecognized errors keep their original PDOException.
+     *
+     * @template T
+     * @param callable(): T $call
+     * @return T
+     */
+    private function classified(callable $call): mixed
+    {
+        try {
+            return $call();
+        } catch (\PDOException $e) {
+            throw DriverErrorClassifier::classify($e) ?? $e;
         }
     }
 

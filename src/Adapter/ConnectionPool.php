@@ -156,6 +156,22 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface, Ephemera
     private array $reclaimArmed = [];
 
     /**
+     * Slots claimed by cmpset whose connection is still being opened, per
+     * coroutine.
+     *
+     * The factory can suspend — under Swoole hooks a TCP connect and auth
+     * round-trip are yield points — and the borrow registry cannot record a
+     * PDO that does not exist yet. A coroutine killed inside that window
+     * leaves `created` incremented with nothing to reclaim, which is the
+     * ratcheting leak the borrow registry exists to prevent, entered through
+     * a different door. The give-back defer therefore also releases whatever
+     * this coroutine had claimed but not yet materialized.
+     *
+     * @var array<int, int>
+     */
+    private array $pendingSlots = [];
+
+    /**
      * Reliability counters, exposed via getStats() (orm:status). Deliberately
      * plain ints, not Atomics: they are per-worker observability, and every
      * mutation happens without a coroutine yield in between.
@@ -227,6 +243,7 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface, Ephemera
         $this->borrowerOf    = new \WeakMap();
         $this->idleSince     = new \WeakMap();
         $this->reclaimArmed  = [];
+        $this->pendingSlots  = [];
     }
 
     private static function registerShutdownHookOnce(): void
@@ -288,7 +305,17 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface, Ephemera
                 // without pushing it to the channel first. The cmpset above
                 // has claimed the slot; createForClaimedSlot() releases it if
                 // the connect fails.
-                return $this->lendToCoroutine($this->createForClaimedSlot());
+                // Armed BEFORE createForClaimedSlot(), which can suspend:
+                // see $pendingSlots.
+                $this->armReclaim();
+                $this->markPendingSlot(1);
+                try {
+                    $connection = $this->createForClaimedSlot();
+                } finally {
+                    $this->markPendingSlot(-1);
+                }
+
+                return $this->lendToCoroutine($connection);
             }
 
             // Pool is full (or another coroutine won the cmpset race) — wait for
@@ -402,32 +429,71 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface, Ephemera
 
         $this->borrowedByCid[$cid][spl_object_id($connection)] = $connection;
         $this->borrowerOf[$connection] = $cid;
-
-        if (! isset($this->reclaimArmed[$cid])) {
-            $this->reclaimArmed[$cid] = true;
-            \Swoole\Coroutine::defer(function () use ($cid): void {
-                unset($this->reclaimArmed[$cid]);
-                $leaked = $this->borrowedByCid[$cid] ?? [];
-                unset($this->borrowedByCid[$cid]);
-
-                if (self::$phpShuttingDown) {
-                    return;
-                }
-
-                foreach ($leaked as $connection) {
-                    $this->stats['reclaimed_from_dead_coroutines']++;
-                    $this->push($connection);
-                }
-                if ($leaked !== []) {
-                    StaticLoggerBridge::warning('orm', 'Reclaimed connection(s) from a coroutine that ended without returning them.', [
-                        'count' => count($leaked),
-                        'cid' => $cid,
-                    ]);
-                }
-            });
-        }
+        $this->armReclaim();
 
         return $connection;
+    }
+
+    /**
+     * Arm, once per coroutine, the defer that gives back everything this
+     * coroutine still holds when it ends — both materialized connections and
+     * slots claimed for a connection that never finished opening.
+     */
+    private function armReclaim(): void
+    {
+        $cid = \Swoole\Coroutine::getCid();
+        if (!is_int($cid) || $cid < 0 || isset($this->reclaimArmed[$cid])) {
+            return;
+        }
+
+        $this->reclaimArmed[$cid] = true;
+        \Swoole\Coroutine::defer(function () use ($cid): void {
+            unset($this->reclaimArmed[$cid]);
+            $leaked = $this->borrowedByCid[$cid] ?? [];
+            $pending = $this->pendingSlots[$cid] ?? 0;
+            unset($this->borrowedByCid[$cid], $this->pendingSlots[$cid]);
+
+            if (self::$phpShuttingDown) {
+                return;
+            }
+
+            foreach ($leaked as $connection) {
+                $this->stats['reclaimed_from_dead_coroutines']++;
+                $this->push($connection);
+            }
+
+            // A slot claimed for a connection that never materialized has no
+            // PDO to push — release the count directly.
+            for ($i = 0; $i < $pending; $i++) {
+                $this->stats['reclaimed_from_dead_coroutines']++;
+                $this->created->sub(1);
+            }
+
+            if ($leaked !== [] || $pending > 0) {
+                StaticLoggerBridge::warning('orm', 'Reclaimed connection(s)/slot(s) from a coroutine that ended without returning them.', [
+                    'connections' => count($leaked),
+                    'pending_slots' => $pending,
+                    'cid' => $cid,
+                ]);
+            }
+        });
+    }
+
+    private function markPendingSlot(int $delta): void
+    {
+        $cid = \Swoole\Coroutine::getCid();
+        if (!is_int($cid) || $cid < 0) {
+            return;
+        }
+
+        $pending = ($this->pendingSlots[$cid] ?? 0) + $delta;
+        if ($pending > 0) {
+            $this->pendingSlots[$cid] = $pending;
+
+            return;
+        }
+
+        unset($this->pendingSlots[$cid]);
     }
 
     /**

@@ -207,6 +207,24 @@ class TransactionManager
      * lockstep. Coroutine-aware: inside Swoole it yields instead of blocking
      * the worker.
      */
+    /**
+     * Run a raw PDO transaction-control call, mapping a driver failure onto
+     * the typed hierarchy so callers keep the same retry semantics they get
+     * from the adapters.
+     *
+     * @template T
+     * @param callable(): T $call
+     * @return T
+     */
+    private static function classified(callable $call): mixed
+    {
+        try {
+            return $call();
+        } catch (\PDOException $e) {
+            throw DriverErrorClassifier::classify($e) ?? $e;
+        }
+    }
+
     private static function backoff(int $attempt): void
     {
         $milliseconds = random_int(5, 15) * $attempt;
@@ -274,15 +292,17 @@ class TransactionManager
             $pdo->commit();
         } catch (\Throwable $e) {
             $this->setPendingEvents([]);
-            if ($pdo->inTransaction()) {
-                try {
+            // inTransaction() is INSIDE the try as well: on a severed
+            // connection the status check itself throws, and an unguarded one
+            // would replace the original callback/commit failure with a
+            // cleanup error that says nothing about the real cause.
+            try {
+                if ($pdo->inTransaction()) {
                     $pdo->rollBack();
-                } catch (\Throwable) {
-                    // A rollback that fails (dead connection) must not mask
-                    // the ORIGINAL exception — that one names the real cause.
-                    // The connection is cleaned or discarded by the pool's
-                    // push() transaction hygiene.
                 }
+            } catch (\Throwable) {
+                // The connection is cleaned or discarded by the pool's push()
+                // transaction hygiene.
             }
             throw $e;
         } finally {
@@ -305,6 +325,17 @@ class TransactionManager
 
     /**
      * Handle outer transaction for SQLite adapter.
+     *
+     * KNOWN LIMITATION (pre-existing, not introduced by the reliability work):
+     * SqliteAdapter owns ONE PDO for the whole worker, and only the depth /
+     * active-connection state here is coroutine-local. If a transaction
+     * callback yields, another coroutine can begin or commit on that same
+     * connection and interleave with this transaction. Closing it properly
+     * means either a PDO per coroutine or serializing SQLite transactions
+     * behind a lock — a design change, not a guard. In practice the SQLite
+     * driver backs CLI tooling, tests and single-writer dev setups, where
+     * concurrent transactional writes do not occur; MySQL is the concurrent
+     * path and takes runOuter() above.
      *
      * @template T
      * @param callable(DatabaseAdapterInterface): T $callback
@@ -339,15 +370,14 @@ class TransactionManager
             $pdo->commit();
         } catch (\Throwable $e) {
             $this->setPendingEvents([]);
-            if ($pdo->inTransaction()) {
-                try {
+            // See runOuter(): the status check is guarded too, so a severed
+            // connection cannot mask the original failure.
+            try {
+                if ($pdo->inTransaction()) {
                     $pdo->rollBack();
-                } catch (\Throwable) {
-                    // A rollback that fails (dead connection) must not mask
-                    // the ORIGINAL exception — that one names the real cause.
-                    // The connection is cleaned or discarded by the pool's
-                    // push() transaction hygiene.
                 }
+            } catch (\Throwable) {
+                // Nothing actionable here.
             }
             throw $e;
         } finally {
@@ -380,11 +410,18 @@ class TransactionManager
         $savepointName = 'sp_' . $depth;
 
         $connAdapter = new SingleConnectionAdapter($pdo, $this->adapter->getServerVersion());
-        $pdo->exec("SAVEPOINT {$savepointName}");
+
+        // Transaction-control statements go through the classifier too. They
+        // run as raw PDO calls, so without this a connection lost while
+        // opening or releasing a savepoint would surface as an untyped
+        // PDOException that runWithRetry() cannot match — the retry taxonomy
+        // would have a hole exactly on the nesting path.
+        self::classified(fn () => $pdo->exec("SAVEPOINT {$savepointName}"));
 
         try {
             $result = $callback($connAdapter);
-            $pdo->exec("RELEASE SAVEPOINT {$savepointName}");
+            self::classified(fn () => $pdo->exec("RELEASE SAVEPOINT {$savepointName}"));
+
             return $result;
         } catch (\Throwable $e) {
             // Both statements are guarded: on a deadlock (1213) InnoDB has

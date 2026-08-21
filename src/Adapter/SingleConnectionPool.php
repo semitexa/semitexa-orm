@@ -118,6 +118,22 @@ final class SingleConnectionPool implements TenantSwitchingConnectionPoolInterfa
     }
 
     /**
+     * Whether some coroutine currently holds this pool's connection.
+     *
+     * Worker-wide, unlike a coroutine-local transaction flag: the self-heal
+     * swap in OrmManager must not close a pool another coroutine is still
+     * reading from, and "is a transaction active" only ever answers for the
+     * asking coroutine.
+     */
+    public function hasOutstandingBorrow(): bool
+    {
+        return $this->connection !== null
+            && $this->ownerCid >= 0
+            && class_exists(\Swoole\Coroutine::class, false)
+            && \Swoole\Coroutine::exists($this->ownerCid);
+    }
+
+    /**
      * Everything except the one cached connection is a crash-avoidance mint
      * (the contended-coroutine path in pop()) that push() drops — caching a
      * statement for it would pin its socket in a GC cycle.

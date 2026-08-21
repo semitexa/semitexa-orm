@@ -11,6 +11,7 @@ use Semitexa\Orm\Exception\ConnectionLostException;
 use Semitexa\Orm\Exception\ConstraintViolationException;
 use Semitexa\Orm\Exception\DeadlockException;
 use Semitexa\Orm\Exception\LockWaitTimeoutException;
+use Semitexa\Orm\Exception\QueryTimeoutException;
 
 final class DriverErrorClassifierTest extends TestCase
 {
@@ -20,6 +21,10 @@ final class DriverErrorClassifierTest extends TestCase
         $cases = [
             [['40001', 1213, 'Deadlock found when trying to get lock'], DeadlockException::class, true],
             [['HY000', 1205, 'Lock wait timeout exceeded'], LockWaitTimeoutException::class, true],
+            // 3024 = MySQL max_execution_time, 1969 = MariaDB max_statement_time:
+            // both are the ceiling applyQueryTimeout() installs.
+            [['HY000', 3024, 'maximum statement execution time exceeded'], QueryTimeoutException::class, true],
+            [['70100', 1969, 'Query execution was interrupted (max_statement_time exceeded)'], QueryTimeoutException::class, true],
             [['HY000', 2006, 'MySQL server has gone away'], ConnectionLostException::class, true],
             [['HY000', 2013, 'Lost connection to MySQL server during query'], ConnectionLostException::class, true],
             [['08S01', 0, 'Communication link failure'], ConnectionLostException::class, true],
@@ -65,6 +70,20 @@ final class DriverErrorClassifierTest extends TestCase
         self::assertFalse(DriverErrorClassifier::isReadOnlyStatement('DELETE FROM t'));
         // WITH can prefix UPDATE/DELETE in MySQL 8 — excluded on purpose.
         self::assertFalse(DriverErrorClassifier::isReadOnlyStatement('WITH cte AS (SELECT 1) DELETE FROM t'));
+    }
+
+    #[Test]
+    public function multi_statement_sql_is_never_replayable(): void
+    {
+        // Only the first statement is inspected, so a leading SELECT must not
+        // vouch for whatever follows it — replaying that UPDATE after a lost
+        // connection would duplicate its effect.
+        self::assertFalse(DriverErrorClassifier::isReadOnlyStatement('SELECT 1; UPDATE t SET x = 1'));
+        self::assertFalse(DriverErrorClassifier::isReadOnlyStatement('SELECT 1; SELECT 2'));
+
+        // A single statement with a trailing semicolon is still fine.
+        self::assertTrue(DriverErrorClassifier::isReadOnlyStatement('SELECT * FROM t;'));
+        self::assertTrue(DriverErrorClassifier::isReadOnlyStatement("SELECT * FROM t;  \n"));
     }
 
     #[Test]
