@@ -40,7 +40,10 @@ final class SlowQueryLog
 
         StaticLoggerBridge::warning('orm', 'Slow query.', [
             'ms' => round($milliseconds, 1),
-            'sql' => \strlen($sql) > 500 ? substr($sql, 0, 500) . '…' : $sql,
+            // mb_* so the cut never lands inside a multi-byte sequence:
+            // invalid UTF-8 makes the logger's json_encode() fail and the
+            // whole entry disappear — losing the slow query it reports.
+            'sql' => mb_strlen($sql) > 500 ? mb_substr($sql, 0, 500) . '…' : $sql,
         ]);
     }
 

@@ -51,7 +51,12 @@ final class ConnectionPoolSlotReclaimTest extends TestCase
 
             // The abandoned connection must be back: a size-1 pool can only
             // serve this pop() if the dead coroutine's slot was reclaimed.
-            self::assertSame(1, $pool->getAvailable(), 'the abandoned connection must be back in the channel');
+            //
+            // Asserted through pop(1.0), never through getAvailable() first:
+            // the child's WaitGroup::done() runs in its `finally`, which is
+            // BEFORE coroutine termination, and Coroutine::defer() callbacks
+            // run at termination — so the parent can resume before the reclaim
+            // has pushed, and a bare getAvailable() would flake on 0.
             $conn = $pool->pop(1.0);
             self::assertInstanceOf(\PDO::class, $conn);
             self::assertSame(1, $minted, 'the reclaimed connection is reused — no replacement was minted');

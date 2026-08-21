@@ -134,13 +134,25 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface, Ephemera
      */
     private array $borrowedByCid = [];
 
-    /** Which coroutine borrowed a connection — reverse index for push(). @var \WeakMap<\PDO, int> */
+    /**
+     * Which coroutine borrowed a connection — reverse index for push().
+     *
+     * @var \WeakMap<\PDO, int>
+     */
     private \WeakMap $borrowerOf;
 
-    /** When a connection was last returned to the channel. @var \WeakMap<\PDO, float> */
+    /**
+     * When a connection was last returned to the channel.
+     *
+     * @var \WeakMap<\PDO, float>
+     */
     private \WeakMap $idleSince;
 
-    /** Coroutines that already armed their give-back defer. @var array<int, true> */
+    /**
+     * Coroutines that already armed their give-back defer.
+     *
+     * @var array<int, true>
+     */
     private array $reclaimArmed = [];
 
     /**
@@ -384,7 +396,7 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface, Ephemera
     private function lendToCoroutine(\PDO $connection): \PDO
     {
         $cid = \Swoole\Coroutine::getCid();
-        if ($cid < 0) {
+        if (!is_int($cid) || $cid < 0) {
             return $connection;
         }
 
@@ -437,7 +449,7 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface, Ephemera
     private function unrecordBorrow(\PDO $connection): void
     {
         $cid = $this->borrowerOf[$connection] ?? null;
-        if ($cid === null) {
+        if (!is_int($cid)) {
             return;
         }
 
@@ -686,7 +698,7 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface, Ephemera
     private function ensureAliveIfIdle(\PDO $connection): \PDO
     {
         $idleSince = $this->idleSince[$connection] ?? null;
-        if ($idleSince !== null && (microtime(true) - $idleSince) < self::IDLE_PING_SECONDS) {
+        if (is_float($idleSince) && (microtime(true) - $idleSince) < self::IDLE_PING_SECONDS) {
             return $connection;
         }
 

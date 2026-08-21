@@ -37,8 +37,14 @@ final class DriverErrorClassifier
 
     public static function classify(\PDOException $e): ?DatabaseException
     {
-        $sqlState = isset($e->errorInfo[0]) ? (string) $e->errorInfo[0] : null;
-        $driverCode = isset($e->errorInfo[1]) ? (int) $e->errorInfo[1] : null;
+        // errorInfo is an untyped array: read defensively rather than casting
+        // blind, so a driver that fills it with something unexpected degrades
+        // to "unrecognized" instead of tripping over a conversion.
+        $rawSqlState = $e->errorInfo[0] ?? null;
+        $rawDriverCode = $e->errorInfo[1] ?? null;
+
+        $sqlState = is_scalar($rawSqlState) ? (string) $rawSqlState : null;
+        $driverCode = is_numeric($rawDriverCode) ? (int) $rawDriverCode : null;
 
         if ($driverCode === 1213 || $sqlState === '40001') {
             return new DeadlockException($e->getMessage(), $sqlState, $driverCode, $e);

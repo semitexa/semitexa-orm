@@ -138,6 +138,14 @@ class SingleConnectionAdapter implements DatabaseAdapterInterface
         } catch (\PDOException $e) {
             throw DriverErrorClassifier::classify($e) ?? $e;
         }
+
+        // query() returns false instead of throwing when the connection is not
+        // in ERRMODE_EXCEPTION; this adapter accepts any PDO, so without the
+        // guard the fetchAll() below fatals on a bool. Same guard as
+        // MysqlAdapter::queryOnPooledConnection().
+        if ($stmt === false) {
+            throw new \RuntimeException("Query failed: {$sql}");
+        }
         $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
         $rowCount = $stmt->rowCount();
         $stmt->closeCursor();

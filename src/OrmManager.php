@@ -248,7 +248,7 @@ class OrmManager
     {
         return $this->transactionAwareAdapter ??= new TransactionAwareAdapter(
             fn (): DatabaseAdapterInterface => $this->getAdapter(),
-            fn (): ?TransactionManager => $this->getTransactionManager(),
+            fn (): TransactionManager => $this->getTransactionManager(),
         );
     }
 
@@ -588,11 +588,21 @@ class OrmManager
      * ATTR_TIMEOUT is the CONNECT timeout for pdo_mysql: without it a
      * hung/unreachable server parks the connecting coroutine indefinitely
      * while it holds a claimed pool slot (the pop() timeout protects waiters,
-     * never the holder). The query ceiling rides an init command because
-     * pdo_mysql exposes no client-side read timeout: MySQL enforces
-     * max_execution_time server-side for SELECTs, which covers the runaway-
-     * query case; a full network black-hole mid-query remains bounded only by
-     * TCP keepalive and is the documented residual risk.
+     * never the holder).
+     *
+     * The query ceiling is deliberately NOT here. It cannot ride
+     * MYSQL_ATTR_INIT_COMMAND: the session variable's name is flavor-specific,
+     * and an init command naming an unknown one fails inside the PDO
+     * constructor, so every pooled and warm-up connection would throw. It is
+     * applied after connect instead — see {@see applyQueryTimeout()}.
+     * $queryTimeout is still accepted so both halves of the timeout contract
+     * read as one call signature, and so this docblock is where the next
+     * reader looks before re-adding the init command.
+     *
+     * Residual risk either way: pdo_mysql has no client-side READ timeout, so
+     * a network black-hole mid-query is bounded only by TCP keepalive.
+     *
+     * @param float $queryTimeout Intentionally unused — see above.
      *
      * @return array<int, mixed>
      */
@@ -634,10 +644,16 @@ class OrmManager
         }
 
         try {
-            $version = (string) $pdo->getAttribute(\PDO::ATTR_SERVER_VERSION);
+            $rawVersion = $pdo->getAttribute(\PDO::ATTR_SERVER_VERSION);
         } catch (\Throwable) {
             return;
         }
+
+        if (!is_scalar($rawVersion)) {
+            return;
+        }
+
+        $version = (string) $rawVersion;
 
         $isMariaDb = stripos($version, 'mariadb') !== false;
 
@@ -650,7 +666,10 @@ class OrmManager
                 return;
             }
 
-            $statement = sprintf('SET SESSION max_execution_time=%d', (int) round($queryTimeout * 1000));
+            // Never round down to 0: MySQL reads max_execution_time=0 as
+            // "no limit", so a sub-millisecond ceiling would silently mean
+            // none at all. Same rule as ATTR_TIMEOUT's max(1, ceil(...)).
+            $statement = sprintf('SET SESSION max_execution_time=%d', max(1, (int) round($queryTimeout * 1000)));
         }
 
         try {
@@ -700,8 +719,12 @@ class OrmManager
             $password = Environment::getEnvValue('DB_PASSWORD', '');
             $charset = Environment::getEnvValue('DB_CHARSET', 'utf8mb4');
             $poolSize = (int) Environment::getEnvValue('DB_POOL_SIZE', '10');
-            $connectTimeout = (float) (Environment::getEnvValue('DB_CONNECT_TIMEOUT', '5') ?? '5');
-            $queryTimeout = (float) (Environment::getEnvValue('DB_QUERY_TIMEOUT', '0') ?? '0');
+            // Via ConnectionConfig's parser: a present-but-empty
+            // DB_CONNECT_TIMEOUT returns '' (so ?? never fires) and casts to
+            // 0.0, which PDO reads as "wait forever" — silently restoring the
+            // hung-server failure the timeout exists to prevent.
+            $connectTimeout = ConnectionConfig::parseTimeoutValue(Environment::getEnvValue('DB_CONNECT_TIMEOUT'), 5.0);
+            $queryTimeout = ConnectionConfig::parseTimeoutValue(Environment::getEnvValue('DB_QUERY_TIMEOUT'), 0.0);
         }
 
         $dsn = "mysql:host={$host};port={$port};dbname={$database};charset={$charset}";

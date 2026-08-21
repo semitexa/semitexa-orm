@@ -93,8 +93,16 @@ final class SyncEngineSingleConnectionTest extends TestCase
         $executed = $engine->execute($plan);
 
         self::assertCount(1, $executed);
+
+        // inTransaction() alone would also pass for begin+commit, which is the
+        // very fiction being removed — count the control calls instead.
+        $connection = $pool->pushed[0];
+        self::assertInstanceOf(TransactionRecordingPdo::class, $connection);
+        self::assertSame(0, $connection->beginCalls, 'no BEGIN may be issued on the MySQL DDL path');
+        self::assertSame(0, $connection->commitCalls, 'no COMMIT may be issued on the MySQL DDL path');
+        self::assertSame(0, $connection->rollbackCalls, 'no ROLLBACK may be issued on the MySQL DDL path');
         self::assertFalse(
-            $pool->pushed[0]->inTransaction(),
+            $connection->inTransaction(),
             'the connection must go back to the pool with no transaction of any kind',
         );
     }
@@ -114,13 +122,17 @@ final class SyncEngineSingleConnectionTest extends TestCase
             description: 'invalid statement',
         ));
 
+        // The flag, not self::fail() inside the try: fail() throws, so the
+        // catch below would swallow it and a silently succeeding execute()
+        // would read as the expected failure.
+        $threw = false;
         try {
             $engine->execute($plan);
-            self::fail('the invalid statement must propagate');
         } catch (\Throwable) {
-            // expected
+            $threw = true;
         }
 
+        self::assertTrue($threw, 'the invalid statement must propagate');
         self::assertSame(1, $pool->popCount);
         self::assertSame(1, $pool->pushCount, 'the connection must be returned even when the plan fails');
         self::assertFalse($pool->pushed[0]->inTransaction());
@@ -140,7 +152,7 @@ final class FreshPdoPerPopPool implements ConnectionPoolInterface
     {
         $this->popCount++;
 
-        $pdo = new \PDO('sqlite::memory:');
+        $pdo = new TransactionRecordingPdo();
         $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
 
         return $pdo;
@@ -215,4 +227,38 @@ final class AtomicDdlCapableAdapter implements DatabaseAdapterInterface
     }
 
     public function lastInsertId(): string { return '0'; }
+}
+
+/** A sqlite PDO that counts transaction-control calls. */
+final class TransactionRecordingPdo extends \PDO
+{
+    public int $beginCalls = 0;
+    public int $commitCalls = 0;
+    public int $rollbackCalls = 0;
+
+    public function __construct()
+    {
+        parent::__construct('sqlite::memory:');
+    }
+
+    public function beginTransaction(): bool
+    {
+        $this->beginCalls++;
+
+        return parent::beginTransaction();
+    }
+
+    public function commit(): bool
+    {
+        $this->commitCalls++;
+
+        return parent::commit();
+    }
+
+    public function rollBack(): bool
+    {
+        $this->rollbackCalls++;
+
+        return parent::rollBack();
+    }
 }

@@ -118,7 +118,9 @@ class TransactionManager
      */
     public function currentAdapter(): ?DatabaseAdapterInterface
     {
-        return CoroutineLocal::get($this->key(self::KEY_ACTIVE_ADAPTER));
+        $adapter = CoroutineLocal::get($this->key(self::KEY_ACTIVE_ADAPTER));
+
+        return $adapter instanceof DatabaseAdapterInterface ? $adapter : null;
     }
 
     private function setCurrentAdapter(?DatabaseAdapterInterface $adapter): void
@@ -320,9 +322,19 @@ class TransactionManager
 
         $connAdapter = new SingleConnectionAdapter($pdo, $this->adapter->getServerVersion());
         $this->setCurrentAdapter($connAdapter);
-        $pdo->beginTransaction();
 
         try {
+            // INSIDE the try, like the pooled path: a beginTransaction() that
+            // throws out here would skip the finally, leaving depth=1 and an
+            // active connection behind, so the NEXT run() on this coroutine
+            // would take the nested-savepoint branch against a transaction
+            // that was never opened.
+            try {
+                $pdo->beginTransaction();
+            } catch (\PDOException $beginFailure) {
+                throw DriverErrorClassifier::classify($beginFailure) ?? $beginFailure;
+            }
+
             $result = $callback($connAdapter);
             $pdo->commit();
         } catch (\Throwable $e) {

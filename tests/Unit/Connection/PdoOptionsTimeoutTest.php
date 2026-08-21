@@ -91,6 +91,37 @@ final class PdoOptionsTimeoutTest extends TestCase
     }
 
     #[Test]
+    public function a_blank_or_malformed_timeout_falls_back_to_the_default(): void
+    {
+        // PDO reads a timeout of 0 as "wait forever", so a typo or a
+        // present-but-empty DB_CONNECT_TIMEOUT must not silently disable the
+        // connect timeout — that is exactly the hung-server failure it exists
+        // to prevent.
+        self::assertSame(5.0, ConnectionConfig::parseTimeoutValue(null, 5.0));
+        self::assertSame(5.0, ConnectionConfig::parseTimeoutValue('', 5.0));
+        self::assertSame(5.0, ConnectionConfig::parseTimeoutValue('   ', 5.0));
+        self::assertSame(5.0, ConnectionConfig::parseTimeoutValue('abc', 5.0));
+        self::assertSame(5.0, ConnectionConfig::parseTimeoutValue('-1', 5.0));
+
+        // A deliberate, numeric value is honored — including an explicit zero.
+        self::assertSame(2.5, ConnectionConfig::parseTimeoutValue('2.5', 5.0));
+        self::assertSame(0.0, ConnectionConfig::parseTimeoutValue('0', 5.0));
+        self::assertSame(3.0, ConnectionConfig::parseTimeoutValue(' 3 ', 5.0));
+    }
+
+    #[Test]
+    public function a_sub_millisecond_ceiling_never_rounds_down_to_no_limit(): void
+    {
+        // max_execution_time=0 means "no limit" in MySQL, so rounding a tiny
+        // ceiling to zero would hand the operator the opposite of what they
+        // configured.
+        $pdo = new ServerVersionRecordingPdo('8.0.35');
+        OrmManager::applyQueryTimeout($pdo, 0.0004);
+
+        self::assertSame(['SET SESSION max_execution_time=1'], $pdo->executed);
+    }
+
+    #[Test]
     public function connection_config_defaults_and_reads_the_timeout_envs(): void
     {
         $defaults = new ConnectionConfig();
