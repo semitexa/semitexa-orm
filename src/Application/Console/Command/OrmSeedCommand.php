@@ -40,7 +40,7 @@ class OrmSeedCommand extends BaseCommand
 
             if ($results === []) {
                 $io->note('No Resource classes with defaults() found.');
-    
+
                 return Command::SUCCESS;
             }
 

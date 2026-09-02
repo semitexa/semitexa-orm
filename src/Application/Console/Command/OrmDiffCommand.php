@@ -66,7 +66,7 @@ class OrmDiffCommand extends BaseCommand
 
             if ($diff->isEmpty()) {
                 $io->success('No differences. Database matches code schema.');
-    
+
                 return Command::SUCCESS;
             }
 
