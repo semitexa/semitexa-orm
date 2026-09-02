@@ -22,6 +22,9 @@ use Semitexa\Orm\OrmManager;
  * closure can close over an already-resolved instance. The resolver is still only
  * READ lazily at first-write-engine construction (request time); explicit injection
  * into OrmManager still wins (P2/wiring order is untouched).
+ *
+ * The CLI half of this lives in {@see WireConsoleEventDispatcherListener}: the
+ * attribute is not repeatable, and a command needs the same wiring.
  */
 #[AsServerLifecycleListener(
     phase: ServerLifecyclePhase::WorkerStartAfterContainer->value,
