@@ -18,13 +18,13 @@ final class ConnectionSwitchStrategy implements TenantScopeInterface
     public function apply(object $queryBuilder, TenantContextInterface $context): void
     {
         $organization = $context->getLayer(new OrganizationLayer());
-        
+
         if ($organization === null) {
             return;
         }
 
         $tenantId = $organization->rawValue();
-        
+
         if ($tenantId === 'default') {
             return;
         }
