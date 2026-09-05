@@ -66,7 +66,12 @@ final class MapperRegistry
             throw new MissingMapperException(sprintf(
                 'No mapper registered for resource model %s and domain model %s. '
                 . 'Create a final class implementing %s and annotate it '
-                . '#[AsMapper(resourceModel: %s::class, domainModel: %s::class)].',
+                . '#[AsMapper(resourceModel: %s::class, domainModel: %s::class)]. '
+                . 'The two classes must differ: the resource is one database\'s shape '
+                . '(snake_case columns, #[FromTable], MySqlType) and the domain model is '
+                . 'the business one, which is what lets another database carry the same '
+                . 'record. Naming the resource on both sides is rejected by '
+                . 'semitexa.noOpMapper — give the record a domain model instead.',
                 $resourceModelClass,
                 $domainModelClass,
                 ResourceModelMapperInterface::class,
