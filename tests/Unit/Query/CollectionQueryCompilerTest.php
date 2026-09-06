@@ -35,9 +35,10 @@ final class CollectionQueryCompilerTest extends TestCase
         'label'     => 'label',
         'body'      => 'body',
         'createdAt' => 'created_at',
+        'archivedAt' => 'archived_at',
     ];
 
-    private const SORT_ALLOW = ['createdAt', 'label'];
+    private const SORT_ALLOW = ['createdAt', 'label', 'archivedAt'];
     private const FILTER_ALLOW = ['label' => ['eq', 'contains'], 'id' => ['eq', 'in']];
 
     /** @param list<array<string, mixed>> $rows */
@@ -276,6 +277,194 @@ final class CollectionQueryCompilerTest extends TestCase
         $this->assertSame(
             ['raw0' => '2026-06-05 12:00:00', 'raw1' => '2026-06-05 12:00:00', 'raw2' => 'p5'],
             end($adapter->executed)['params'],
+        );
+    }
+
+    /**
+     * A cursor key must be able to name the row it came from.
+     *
+     * `format('Y-m-d H:i:s')` truncates, so two rows a fraction of a second
+     * apart in a DATETIME(3)/DATETIME(6) column share one cursor key. The
+     * keyset predicate then compares against the truncated value: on ASC the
+     * rows inside that second come back AGAIN on the next page, on DESC they
+     * are skipped. Either way the window is wrong in a way no caller can see.
+     */
+    #[Test]
+    public function a_fractional_timestamp_survives_into_the_cursor_key(): void
+    {
+        $rows = self::rows(6, stamp: '2026-06-05 12:00:00');
+        $rows[4]['created_at'] = '2026-06-05 12:00:00.500000';
+
+        $adapter = new CollectionFakeAdapter(total: 19, rows: $rows);
+        $compiled = (new CollectionQueryCompiler())->compile(
+            $this->criteria(sort: '-createdAt', policy: self::autoPolicy()),
+            $this->queryOver($adapter),
+            self::FIELD_MAP,
+        );
+
+        $cursor = (new CollectionCursorCodec())->decode(
+            (string) $compiled->cursorPage?->nextCursor,
+            '-createdAt',
+            '',
+        );
+
+        self::assertSame(
+            ['2026-06-05 12:00:00.500000'],
+            $cursor->lastSortKey,
+            'the sub-second part was dropped, so the next page cannot exclude this row',
+        );
+    }
+
+    /**
+     * A whole-second timestamp keeps its old, shorter form — existing cursors
+     * stay decodable and existing rows keep comparing the same way.
+     */
+    #[Test]
+    public function a_whole_second_timestamp_is_unchanged(): void
+    {
+        $adapter = new CollectionFakeAdapter(total: 19, rows: self::rows(6, stamp: '2026-06-05 12:00:00'));
+        $compiled = (new CollectionQueryCompiler())->compile(
+            $this->criteria(sort: '-createdAt', policy: self::autoPolicy()),
+            $this->queryOver($adapter),
+            self::FIELD_MAP,
+        );
+
+        $cursor = (new CollectionCursorCodec())->decode(
+            (string) $compiled->cursorPage?->nextCursor,
+            '-createdAt',
+            '',
+        );
+
+        self::assertSame(['2026-06-05 12:00:00'], $cursor->lastSortKey);
+    }
+
+    /**
+     * A NULL sort value cannot be expressed as a keyset key.
+     *
+     * It used to stringify to '', and `col > ''` never matches NULL in SQL —
+     * so every row sharing that NULL became unreachable and the collection
+     * silently ended early. Refusing is the honest answer: the caller learns
+     * the collection cannot be cursor-paginated on that field, instead of
+     * receiving a short list that looks complete.
+     */
+    #[Test]
+    public function a_null_sort_value_refuses_to_become_a_cursor(): void
+    {
+        $rows = self::rows(6);
+        foreach ($rows as $i => $row) {
+            $rows[$i]['archived_at'] = null;
+        }
+
+        $adapter = new CollectionFakeAdapter(total: 19, rows: $rows);
+
+        $this->expectException(InvalidPaginationException::class);
+        $this->expectExceptionMessageMatches('/archivedAt/');
+
+        (new CollectionQueryCompiler())->compile(
+            $this->criteria(sort: '-archivedAt', policy: self::autoPolicy()),
+            $this->queryOver($adapter),
+            self::FIELD_MAP,
+        );
+    }
+
+    /**
+     * A cursor carrying more or fewer sort keys than the request's sort has
+     * terms describes a different query. It used to be padded with '' and
+     * produce a window nobody asked for; it is a 400 now.
+     */
+    #[Test]
+    public function a_cursor_whose_key_arity_disagrees_with_the_sort_is_rejected(): void
+    {
+        $token = (new CollectionCursorCodec())->encode(new CollectionCursor(
+            version:         CollectionCursor::CURRENT_VERSION,
+            sortSignature:   '-createdAt',
+            filterSignature: '',
+            lastSortKey:     ['2026-06-05 12:00:00', 'ping 5'],
+            lastId:          'p5',
+        ));
+
+        $adapter = new CollectionFakeAdapter(total: 19, rows: self::rows(3));
+
+        $this->expectException(InvalidCursorException::class);
+        $this->expectExceptionMessageMatches('/sort key/i');
+
+        (new CollectionQueryCompiler())->compile(
+            $this->criteria(sort: '-createdAt', cursor: $token, policy: self::autoPolicy()),
+            $this->queryOver($adapter),
+            self::FIELD_MAP,
+        );
+    }
+
+    /**
+     * Two user sort terms plus the id tie-breaker: three branches, each one
+     * pinning every earlier term to equality. The single-term case was
+     * covered; the expansion that actually has a middle branch was not.
+     */
+    #[Test]
+    public function a_multi_term_sort_expands_into_a_full_keyset_predicate(): void
+    {
+        $token = (new CollectionCursorCodec())->encode(new CollectionCursor(
+            version:         CollectionCursor::CURRENT_VERSION,
+            sortSignature:   '-createdAt,label',
+            filterSignature: '',
+            lastSortKey:     ['2026-06-05 12:00:00', 'ping 5'],
+            lastId:          'p5',
+        ));
+
+        $adapter = new CollectionFakeAdapter(total: 19, rows: self::rows(3));
+        (new CollectionQueryCompiler())->compile(
+            $this->criteria(sort: '-createdAt,label', cursor: $token, policy: self::autoPolicy()),
+            $this->queryOver($adapter),
+            self::FIELD_MAP,
+        );
+
+        $windowSql = end($adapter->executed)['sql'];
+
+        self::assertStringContainsString(
+            '(`created_at` < :raw0'
+            . ' OR (`created_at` = :raw1 AND `label` > :raw2)'
+            . ' OR (`created_at` = :raw3 AND `label` = :raw4 AND `id` > :raw5))',
+            $windowSql,
+        );
+        self::assertSame(
+            [
+                'raw0' => '2026-06-05 12:00:00',
+                'raw1' => '2026-06-05 12:00:00',
+                'raw2' => 'ping 5',
+                'raw3' => '2026-06-05 12:00:00',
+                'raw4' => 'ping 5',
+                'raw5' => 'p5',
+            ],
+            end($adapter->executed)['params'],
+        );
+    }
+
+    /**
+     * Auto mode counts to decide the mode, then page mode counted again for
+     * the envelope — the same COUNT over the same filtered set, twice per
+     * request. Query counts are how this project measures collection
+     * performance, so this is a budget, not a micro-optimisation.
+     */
+    #[Test]
+    public function auto_mode_page_requests_count_once(): void
+    {
+        $adapter = new CollectionFakeAdapter(total: 4, rows: self::rows(4));
+        (new CollectionQueryCompiler())->compile(
+            $this->criteria(policy: self::autoPolicy()),
+            $this->queryOver($adapter),
+            self::FIELD_MAP,
+        );
+
+        $counts = array_values(array_filter(
+            $adapter->executed,
+            static fn (array $q): bool => str_starts_with($q['sql'], 'SELECT COUNT(*)'),
+        ));
+
+        self::assertCount(
+            1,
+            $counts,
+            "auto mode decided on a count and then page mode repeated it. Statements:\n  - "
+            . implode("\n  - ", array_column($adapter->executed, 'sql')),
         );
     }
 
