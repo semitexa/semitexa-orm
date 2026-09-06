@@ -13,6 +13,7 @@ use Semitexa\Core\Resource\CompiledCollection;
 use Semitexa\Core\Resource\Cursor\CollectionCursor;
 use Semitexa\Core\Resource\Cursor\CollectionCursorCodec;
 use Semitexa\Core\Resource\Cursor\CollectionCursorPage;
+use Semitexa\Core\Resource\Exception\InvalidCursorException;
 use Semitexa\Core\Resource\Exception\InvalidPaginationException;
 use Semitexa\Core\Resource\Filter\FilterOperator;
 use Semitexa\Core\Resource\Pagination\CollectionPage;
@@ -98,10 +99,13 @@ final class CollectionQueryCompiler implements CollectionQueryCompilerInterface
             $filtered->whereAnyLike($columns, '%' . self::escapeLikePattern((string) $criteria->q) . '%');
         }
 
-        $mode = $this->resolveMode($criteria, $filtered);
+        // resolveMode() counts to decide; page mode needs the same number for
+        // its envelope. Carried across rather than counted twice.
+        $knownTotal = null;
+        $mode = $this->resolveMode($criteria, $filtered, $knownTotal);
 
         return match ($mode) {
-            CollectionPaginationPolicy::MODE_PAGE   => $this->executePage($criteria, $filtered, $modelClass, $fieldMap),
+            CollectionPaginationPolicy::MODE_PAGE   => $this->executePage($criteria, $filtered, $modelClass, $fieldMap, $knownTotal),
             CollectionPaginationPolicy::MODE_CURSOR => $this->executeCursor($criteria, $filtered, $modelClass, $fieldMap),
             CollectionPaginationPolicy::MODE_SINGLE => $this->executeSingle($criteria, $filtered, $modelClass, $fieldMap),
             default => throw new \LogicException('Unreachable pagination mode: ' . $mode),
@@ -112,8 +116,15 @@ final class CollectionQueryCompiler implements CollectionQueryCompilerInterface
     // Mode policy
     // ------------------------------------------------------------------
 
-    private function resolveMode(CollectionCriteria $criteria, ResourceModelQuery $filtered): string
-    {
+    /**
+     * @param int|null $knownTotal set to the post-filter total when this method
+     *        had to count, so the caller does not repeat the same query
+     */
+    private function resolveMode(
+        CollectionCriteria $criteria,
+        ResourceModelQuery $filtered,
+        ?int &$knownTotal = null,
+    ): string {
         if ($criteria->isCursorRequest()) {
             return CollectionPaginationPolicy::MODE_CURSOR;
         }
@@ -124,6 +135,7 @@ final class CollectionQueryCompiler implements CollectionQueryCompilerInterface
         }
 
         $total = (clone $filtered)->count();
+        $knownTotal = $total;
         if ($total <= $policy->countThreshold) {
             return CollectionPaginationPolicy::MODE_PAGE;
         }
@@ -152,8 +164,9 @@ final class CollectionQueryCompiler implements CollectionQueryCompilerInterface
         ResourceModelQuery $filtered,
         string $modelClass,
         array $fieldMap,
+        ?int $knownTotal = null,
     ): CompiledCollection {
-        $total = (clone $filtered)->count();
+        $total = $knownTotal ?? (clone $filtered)->count();
 
         $windowed = clone $filtered;
         foreach ($this->effectiveSortTerms($criteria->sort) as $term) {
@@ -295,20 +308,32 @@ final class CollectionQueryCompiler implements CollectionQueryCompilerInterface
     ): void {
         $cursorValues = [...$cursor->lastSortKey, $cursor->lastId];
 
+        // One value per effective term, or the branches below pad with '' and
+        // build a window nobody asked for — a silently wrong page rather than
+        // a refused request. The tie-breaker is why the cursor carries one
+        // fewer sort key than there are terms.
+        if (count($cursorValues) !== count($effectiveTerms)) {
+            throw new InvalidCursorException(sprintf(
+                'the cursor carries %d sort key value(s) but this request sorts on %d term(s)',
+                count($cursor->lastSortKey),
+                count($effectiveTerms) - 1,
+            ));
+        }
+
         $branches = [];
         $bindings = [];
         foreach ($effectiveTerms as $i => $term) {
             $parts = [];
             for ($j = 0; $j < $i; $j++) {
                 $parts[] = sprintf('`%s` = ?', $this->columnFor($modelClass, $effectiveTerms[$j]->field, $fieldMap)->columnName);
-                $bindings[] = $cursorValues[$j] ?? '';
+                $bindings[] = $cursorValues[$j];
             }
             $parts[] = sprintf(
                 '`%s` %s ?',
                 $this->columnFor($modelClass, $term->field, $fieldMap)->columnName,
                 $term->direction === SortDirection::Desc ? '<' : '>',
             );
-            $bindings[] = $cursorValues[$i] ?? '';
+            $bindings[] = $cursorValues[$i];
 
             $branches[] = count($parts) > 1 ? '(' . implode(' AND ', $parts) . ')' : $parts[0];
         }
@@ -356,7 +381,26 @@ final class CollectionQueryCompiler implements CollectionQueryCompilerInterface
     {
         $out = [];
         foreach ($userSort->terms as $term) {
-            $out[] = $this->stringifyValue($this->propertyValue($item, $fieldMap[$term->field] ?? $term->field));
+            $value = $this->propertyValue($item, $fieldMap[$term->field] ?? $term->field);
+
+            // A NULL has no keyset key. It used to stringify to '', and SQL
+            // never matches NULL against '' — so `col > ''` skipped every row
+            // sharing that NULL and the collection ended early while looking
+            // complete. Refusing tells the caller what is wrong; the silent
+            // version told them nothing and lost their rows.
+            if ($value === null) {
+                throw new InvalidPaginationException(
+                    'sort',
+                    $term->field,
+                    sprintf(
+                        'cursor pagination cannot continue past a row whose `%s` is NULL — '
+                        . 'sort by a non-nullable field, or use page mode',
+                        $term->field,
+                    ),
+                );
+            }
+
+            $out[] = $this->stringifyValue($value);
         }
 
         return $out;
@@ -375,7 +419,17 @@ final class CollectionQueryCompiler implements CollectionQueryCompilerInterface
     private function stringifyValue(mixed $value): string
     {
         if ($value instanceof \DateTimeInterface) {
-            return $value->format('Y-m-d H:i:s');
+            // Microseconds only when the value HAS them. A DATETIME(3)/(6)
+            // column holds rows a fraction of a second apart, and truncating
+            // gave them all one cursor key: the keyset predicate then compares
+            // against the truncated value, so on ASC the rows inside that
+            // second come back again on the next page and on DESC they are
+            // skipped. Emitting the fraction unconditionally would instead
+            // change every existing whole-second cursor's encoding, so the
+            // shorter form is kept where there is nothing to lose.
+            return $value->format('u') === '000000'
+                ? $value->format('Y-m-d H:i:s')
+                : $value->format('Y-m-d H:i:s.u');
         }
         if (is_bool($value)) {
             return $value ? '1' : '0';

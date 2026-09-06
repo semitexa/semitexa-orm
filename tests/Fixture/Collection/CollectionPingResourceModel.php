@@ -15,7 +15,9 @@ use Semitexa\Orm\Metadata\HasRelationReferences;
  * One Way Phase 2 fixture: a minimal un-scoped model (no tenant policy,
  * no soft delete) so collection-compiler SQL assertions read clean —
  * mirrors the live `ui_playground_pings` shape plus a second string
- * column (`body`) to exercise the multi-member search OR-group.
+ * column (`body`) to exercise the multi-member search OR-group, and a
+ * NULLABLE `archived_at` so the compiler tests can reach the one case a
+ * non-nullable fixture cannot produce: a sort value that is NULL.
  */
 #[FromTable(name: 'collection_pings')]
 final readonly class CollectionPingResourceModel
@@ -36,6 +38,11 @@ final readonly class CollectionPingResourceModel
 
         #[Column(type: MySqlType::Datetime)]
         public \DateTimeImmutable $created_at,
+
+        // Defaulted, so every existing fixture row that omits it still
+        // hydrates unchanged.
+        #[Column(type: MySqlType::Datetime, nullable: true)]
+        public ?\DateTimeImmutable $archived_at = null,
     ) {
     }
 }
