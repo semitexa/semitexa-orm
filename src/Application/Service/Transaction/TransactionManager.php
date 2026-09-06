@@ -14,6 +14,7 @@ use Semitexa\Orm\Adapter\SqliteAdapter;
 use Semitexa\Orm\Exception\ConnectionLostException;
 use Semitexa\Orm\Exception\DeadlockException;
 use Semitexa\Orm\Exception\LockWaitTimeoutException;
+use Semitexa\Orm\Exception\TransactionLockTimeoutException;
 
 class TransactionManager
 {
@@ -42,6 +43,21 @@ class TransactionManager
     private const KEY_ACTIVE_ADAPTER = 'orm.tx.%s.activeAdapter';
     private const KEY_DEPTH = 'orm.tx.%s.depth';
     private const KEY_PENDING_EVENTS = 'orm.tx.%s.pendingEvents';
+
+    /**
+     * How long a coroutine waits for the SQLite transaction lock before giving
+     * up. Matches ConnectionPool::DEFAULT_POP_TIMEOUT_SECONDS: a request that
+     * has waited this long to start a transaction is not saved by waiting more.
+     */
+    private const SQLITE_TX_LOCK_TIMEOUT_SECONDS = 10.0;
+
+    /**
+     * One-token lock serialising outer SQLite transactions across the
+     * coroutines of this worker. A plain instance field on purpose — unlike the
+     * transaction state above it is SHARED state, and that is the entire point.
+     * Null until the first transaction runs inside a coroutine.
+     */
+    private ?\Swoole\Coroutine\Channel $sqliteTxMutex = null;
 
     public function __construct(
         private readonly ConnectionPoolInterface $pool,
@@ -324,18 +340,25 @@ class TransactionManager
     }
 
     /**
-     * Handle outer transaction for SQLite adapter.
+     * Handle outer transaction for SQLite adapter, serialised per worker.
      *
-     * KNOWN LIMITATION (pre-existing, not introduced by the reliability work):
-     * SqliteAdapter owns ONE PDO for the whole worker, and only the depth /
-     * active-connection state here is coroutine-local. If a transaction
-     * callback yields, another coroutine can begin or commit on that same
-     * connection and interleave with this transaction. Closing it properly
-     * means either a PDO per coroutine or serializing SQLite transactions
-     * behind a lock — a design change, not a guard. In practice the SQLite
-     * driver backs CLI tooling, tests and single-writer dev setups, where
-     * concurrent transactional writes do not occur; MySQL is the concurrent
-     * path and takes runOuter() above.
+     * SqliteAdapter owns ONE PDO for the whole worker while the depth /
+     * active-connection state is coroutine-local, so two coroutines each see
+     * depth 0, each take this OUTER branch, and both call beginTransaction()
+     * on the SAME connection. MEASURED with five coroutines that yield
+     * mid-transaction: two failed with "There is already an active
+     * transaction", two with "There is no active transaction" (one
+     * coroutine's commit ended another's transaction), and one of five
+     * read-modify-writes survived. The pooled MySQL path in runOuter() above
+     * cannot hit this — each outer transaction pops a connection of its own.
+     *
+     * Of the two possible fixes, a PDO per coroutine is not available here: the
+     * SQLite DSN is frequently `sqlite::memory:`, where a second connection is
+     * a second, EMPTY database rather than another view of the same one. So the
+     * lock it is — one coroutine's BEGIN..COMMIT completes before the next
+     * starts. Nesting is unaffected: a nested run() on this coroutine sees
+     * depth >= 1 and takes runNested(), never this method, so the lock is
+     * never re-entered by its own holder.
      *
      * @template T
      * @param callable(DatabaseAdapterInterface): T $callback
@@ -347,14 +370,29 @@ class TransactionManager
             throw new \LogicException('SQLite transactions require the SQLite adapter.');
         }
 
-        $pdo = $this->adapter->getPdo();
-        $this->setActiveConnection($pdo);
-        $this->setDepth(1);
+        // Resolve the server version BEFORE taking the lock, never while
+        // holding it: on a cold adapter this runs a detection query, and doing
+        // it under the mutex makes every other coroutine wait for work that has
+        // nothing to do with their transaction.
+        $serverVersion = $this->adapter->getServerVersion();
 
-        $connAdapter = new SingleConnectionAdapter($pdo, $this->adapter->getServerVersion());
-        $this->setCurrentAdapter($connAdapter);
+        $mutex = $this->acquireSqliteTxMutex();
+
+        // Declared before the try so the catch below can tell "the connection
+        // never opened" from "it opened and the work failed". getPdo() lazily
+        // creates the PDO, and it has to run INSIDE the try or a failure there
+        // would skip the finally and leak the lock — permanently, since nothing
+        // else ever pushes the token back.
+        $pdo = null;
 
         try {
+            $pdo = $this->adapter->getPdo();
+            $this->setActiveConnection($pdo);
+            $this->setDepth(1);
+
+            $connAdapter = new SingleConnectionAdapter($pdo, $serverVersion);
+            $this->setCurrentAdapter($connAdapter);
+
             // INSIDE the try, like the pooled path: a beginTransaction() that
             // throws out here would skip the finally, leaving depth=1 and an
             // active connection behind, so the NEXT run() on this coroutine
@@ -373,7 +411,7 @@ class TransactionManager
             // See runOuter(): the status check is guarded too, so a severed
             // connection cannot mask the original failure.
             try {
-                if ($pdo->inTransaction()) {
+                if ($pdo instanceof \PDO && $pdo->inTransaction()) {
                     $pdo->rollBack();
                 }
             } catch (\Throwable) {
@@ -384,6 +422,11 @@ class TransactionManager
             $this->setActiveConnection(null);
             $this->setCurrentAdapter(null);
             $this->setDepth(0);
+            // Released LAST, after this coroutine's state is cleared. push()
+            // can resume a waiter immediately, and letting the next BEGIN start
+            // while this transaction's adapter and depth are still published
+            // hands it a half-torn-down transaction to reason about.
+            $mutex?->push(true);
         }
 
         // See runOuter(): post-commit flush must never report a committed
@@ -391,6 +434,53 @@ class TransactionManager
         $this->flushPendingEvents();
 
         return $result;
+    }
+
+    /**
+     * Acquire the intra-worker SQLite transaction lock, returning the Channel to
+     * release on — or null when there is no coroutine to interleave with (the
+     * CLI path, where this whole hazard cannot occur and Channel methods are
+     * illegal anyway).
+     *
+     * Lazy-created inside the coroutine: `new Channel(1)` and the seeding
+     * `push()` do not yield, so two coroutines cannot both initialise it, and
+     * the loser parks in `pop()` until the holder pushes the token back.
+     *
+     * The wait is bounded. An unbounded `pop()` would reproduce, one layer up,
+     * the defect ConnectionPool records in DEFAULT_POP_TIMEOUT_SECONDS: a
+     * coroutine parked forever answers no request and says nothing about what
+     * it is waiting for. The realistic way to exhaust this budget is a
+     * transaction opened from a coroutine spawned INSIDE another transaction,
+     * which no amount of waiting resolves — so it fails loudly, naming itself.
+     */
+    private function acquireSqliteTxMutex(): ?\Swoole\Coroutine\Channel
+    {
+        if (!self::inCoroutine()) {
+            return null;
+        }
+
+        if ($this->sqliteTxMutex === null) {
+            $this->sqliteTxMutex = new \Swoole\Coroutine\Channel(1);
+            $this->sqliteTxMutex->push(true);
+        }
+
+        if ($this->sqliteTxMutex->pop(self::SQLITE_TX_LOCK_TIMEOUT_SECONDS) === false) {
+            throw new TransactionLockTimeoutException(sprintf(
+                'Timed out after %.1fs waiting for the SQLite transaction lock on connection "%s". '
+                . 'SQLite shares one connection per worker, so outer transactions are serialised; '
+                . 'a transaction started from a coroutine spawned inside another transaction waits '
+                . 'for a lock its own caller holds and can never obtain it.',
+                self::SQLITE_TX_LOCK_TIMEOUT_SECONDS,
+                $this->connectionName,
+            ));
+        }
+
+        return $this->sqliteTxMutex;
+    }
+
+    private static function inCoroutine(): bool
+    {
+        return class_exists(\Swoole\Coroutine::class, false) && \Swoole\Coroutine::getCid() > 0;
     }
 
     /**
