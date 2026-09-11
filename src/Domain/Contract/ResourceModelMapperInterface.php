@@ -19,12 +19,20 @@ namespace Semitexa\Orm\Domain\Contract;
  * is what `semitexa.mapperTypeConversion` refuses.
  *
  * The second pass casts to the property type the RESOURCE MODEL declares, so
- * what a mapper is handed for the rest is what that model asked for. A DATETIME
- * column reaches a `DateTimeImmutable` property as a `DateTimeImmutable` and a
- * `string` property as a string — the schema validator permits both — and an
- * enum column becomes a backed case only where the property is typed as that
- * enum. So read the resource model rather than the column to know what arrives:
- * the ORM produces the declared type, and this contract does not promise one.
+ * what a mapper is handed for the rest is what that model asked for. An enum
+ * column becomes a backed case only where the property is typed as that enum,
+ * and a DATETIME column reaches a `DateTimeImmutable` property as a
+ * `DateTimeImmutable`. So read the resource model rather than the column to
+ * know what arrives: the ORM produces the declared type, and this contract
+ * does not promise one.
+ *
+ * One exception, and it is a defect rather than a rule: a DATETIME, TIMESTAMP
+ * or DATE column declared `string` is accepted by the schema validator and
+ * then fails on the first read — the column pass has already produced a
+ * `DateTimeImmutable`, which the string branch cannot cast («Object of class
+ * DateTimeImmutable could not be converted to string»). Nothing in this
+ * repository declares one, which is why it has gone unnoticed. Declare such a
+ * column `DateTimeImmutable` until the two halves agree.
  *
  * A mapper owns the storage shapes the column type cannot express: a JSON
  * string that is an array in the domain, one domain concept spread across two
