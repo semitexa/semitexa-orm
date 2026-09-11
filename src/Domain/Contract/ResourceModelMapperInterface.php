@@ -8,10 +8,23 @@ namespace Semitexa\Orm\Domain\Contract;
  * Translates between one persistence resource model and one domain model.
  *
  * **Who converts what.** The ORM owns COLUMN-TYPE conversion and a mapper must
- * not repeat it. `TypeCaster` runs on every read and every write: a BINARY(16)
- * column arrives as a canonical uuid string and goes back as 16 bytes, a
- * DATETIME arrives as a `DateTimeImmutable`, an enum column as its backed case.
- * A mapper never sees the raw column value and never has to produce one.
+ * not repeat it. `TypeCaster` runs on every read and every write, and it does so
+ * in two passes that are worth telling apart, because only one of them is the
+ * same for every resource model.
+ *
+ * The first pass reads the COLUMN type and is unconditional. A BINARY(16) value
+ * arrives as a canonical uuid string and goes back as 16 bytes whatever the
+ * resource model declares, so a mapper never sees the raw bytes and never has
+ * to produce them. This is the pass a mapper must not repeat, and repeating it
+ * is what `semitexa.mapperTypeConversion` refuses.
+ *
+ * The second pass casts to the property type the RESOURCE MODEL declares, so
+ * what a mapper is handed for the rest is what that model asked for. A DATETIME
+ * column reaches a `DateTimeImmutable` property as a `DateTimeImmutable` and a
+ * `string` property as a string — the schema validator permits both — and an
+ * enum column becomes a backed case only where the property is typed as that
+ * enum. So read the resource model rather than the column to know what arrives:
+ * the ORM produces the declared type, and this contract does not promise one.
  *
  * A mapper owns the storage shapes the column type cannot express: a JSON
  * string that is an array in the domain, one domain concept spread across two
