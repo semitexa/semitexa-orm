@@ -146,6 +146,7 @@ final class ResourceModelHydrator
         return self::$plans[$resourceModelClass] = new HydrationPlan($ref, $parameters);
     }
 
+    /** @param array<string, mixed> $row */
     private function hydrateColumnValueFromPlan(array $row, HydrationParameter $p, TypeCaster $typeCaster): mixed
     {
         $column = $p->column;
