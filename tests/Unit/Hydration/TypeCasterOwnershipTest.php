@@ -342,6 +342,36 @@ final class TypeCasterOwnershipTest extends TestCase
         self::assertSame('2026-09-13 05:41:07', $seen['datetime'] ?? null);
     }
 
+    /**
+     * A caster that delegates to ANOTHER caster's public three-argument method.
+     *
+     * That method was given no column and documents the datetime default;
+     * under one process-wide key it inherited the outer caster's DATE and
+     * dropped the time instead. The context belongs to the caster that was
+     * given it. Raised in review of orm#67.
+     */
+    #[Test]
+    public function a_delegate_caster_does_not_inherit_the_column(): void
+    {
+        $delegate = new TypeCaster();
+        $outer = new class ($delegate) extends TypeCaster {
+            public function __construct(private readonly TypeCaster $delegate) {}
+
+            public function castToPropertyType(mixed $value, string $phpType, bool $nullable): mixed
+            {
+                return $this->delegate->castToPropertyType($value, $phpType, $nullable);
+            }
+        };
+
+        $value = new \DateTimeImmutable('2026-09-13 05:41:07', new \DateTimeZone('UTC'));
+
+        self::assertSame(
+            '2026-09-13 05:41:07',
+            $outer->castToPropertyTypeForColumn($value, 'string', false, $this->column(MySqlType::Date, 'string')),
+            'the delegate was handed no column, so it owes the documented default',
+        );
+    }
+
     /** The remembered column must not outlive the call that supplied it. */
     #[Test]
     public function the_column_does_not_leak_into_the_next_cast(): void

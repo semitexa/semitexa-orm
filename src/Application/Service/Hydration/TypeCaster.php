@@ -24,8 +24,14 @@ class TypeCaster
      * dropping a time from a datetime, or adding one to a date — and the
      * interleaved finally blocks would restore each other's value. Raised in
      * review of orm#67.
+     *
+     * Per INSTANCE as well. An override may delegate to another caster's public
+     * three-argument method, which was given no column and documents the
+     * datetime default — under one process-wide key it inherited the outer
+     * caster's DATE instead and dropped the time. Two independently composed
+     * casters could read each other's context the same way.
      */
-    private const COLUMN_KEY = 'orm.type_caster.column';
+    private const COLUMN_KEY = 'orm.type_caster.column.';
 
     /**
      * Cast a raw DB value to the expected PHP type based on column definition.
@@ -90,7 +96,7 @@ class TypeCaster
                 // The format follows the column, exactly as castToDb() chooses
                 // it going the other way, so what was written comes back — to
                 // the second; see formatForColumn() on sub-second precision.
-                $value instanceof \DateTimeInterface => $this->formatForColumn($value, self::columnInPlay()),
+                $value instanceof \DateTimeInterface => $this->formatForColumn($value, $this->columnInPlay()),
                 default => (string) $value,
             },
             'array' => is_array($value) ? $value : json_decode((string) $value, true),
@@ -151,8 +157,9 @@ class TypeCaster
         bool $nullable,
         ColumnDefinition $column,
     ): mixed {
-        $previous = self::columnInPlay();
-        CoroutineLocal::set(self::COLUMN_KEY, $column);
+        $key = $this->columnKey();
+        $previous = $this->columnInPlay();
+        CoroutineLocal::set($key, $column);
 
         try {
             return $this->castToPropertyType($value, $phpType, $nullable);
@@ -160,19 +167,24 @@ class TypeCaster
             // Restored rather than cleared: casts nest, and the outer one is
             // still owed its own column.
             if ($previous === null) {
-                CoroutineLocal::remove(self::COLUMN_KEY);
+                CoroutineLocal::remove($key);
             } else {
-                CoroutineLocal::set(self::COLUMN_KEY, $previous);
+                CoroutineLocal::set($key, $previous);
             }
         }
     }
 
-    /** The column this coroutine is currently casting for, if it came through the column-aware path. */
-    private static function columnInPlay(): ?ColumnDefinition
+    /** The column THIS caster is currently casting for in THIS coroutine, if it was given one. */
+    private function columnInPlay(): ?ColumnDefinition
     {
-        $column = CoroutineLocal::get(self::COLUMN_KEY);
+        $column = CoroutineLocal::get($this->columnKey());
 
         return $column instanceof ColumnDefinition ? $column : null;
+    }
+
+    private function columnKey(): string
+    {
+        return self::COLUMN_KEY . spl_object_id($this);
     }
 
     /**
