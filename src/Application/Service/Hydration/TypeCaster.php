@@ -72,7 +72,8 @@ class TypeCaster
                 // permits, could not be hydrated at all. Formatting here is the
                 // second pass doing its job: deliver what the MODEL declared.
                 // The format follows the column, exactly as castToDb() chooses
-                // it going the other way, so what was written comes back.
+                // it going the other way, so what was written comes back — to
+                // the second; see formatForColumn() on sub-second precision.
                 $value instanceof \DateTimeInterface => $this->formatForColumn($value, $column),
                 default => (string) $value,
             },
@@ -94,6 +95,12 @@ class TypeCaster
      * Without a column (this method is public; the hydrator always passes one)
      * the datetime form is the default, because it is what castToDb() writes
      * for everything that is not a date or a time.
+     *
+     * SECOND precision, in both directions. A DATETIME(6) column read into a
+     * `string` property loses its microseconds here — and castToDb() writes the
+     * same truncated form, so a read-modify-write discards them for good. A
+     * model that needs them should declare DateTimeImmutable, which is handed
+     * the object untouched.
      */
     private function formatForColumn(\DateTimeInterface $value, ?ColumnDefinition $column): string
     {
