@@ -12,6 +12,18 @@ use Semitexa\Orm\Application\Service\Uuid7;
 class TypeCaster
 {
     /**
+     * The column the current property cast came from, for the pass that needs
+     * it — see {@see castToPropertyTypeForColumn()}.
+     *
+     * Set for the duration of ONE call and restored in a finally. Nothing
+     * between those two points suspends: the cast is arithmetic, string work
+     * and a DateTime constructor, with no I/O and no sleep, so another
+     * coroutine cannot observe the field mid-call even though an injected
+     * caster may be shared by the whole worker.
+     */
+    private ?ColumnDefinition $columnInPlay = null;
+
+    /**
      * Cast a raw DB value to the expected PHP type based on column definition.
      */
     public function castFromDb(mixed $value, ColumnDefinition $column): mixed
@@ -74,7 +86,7 @@ class TypeCaster
                 // The format follows the column, exactly as castToDb() chooses
                 // it going the other way, so what was written comes back — to
                 // the second; see formatForColumn() on sub-second precision.
-                $value instanceof \DateTimeInterface => $this->formatForColumn($value, null),
+                $value instanceof \DateTimeInterface => $this->formatForColumn($value, $this->columnInPlay),
                 default => (string) $value,
             },
             'array' => is_array($value) ? $value : json_decode((string) $value, true),
@@ -92,9 +104,10 @@ class TypeCaster
      * The string a datetime becomes for a given column — the same choice
      * castToDb() makes, kept in one place so the two directions cannot drift.
      *
-     * Without a column (this method is public; the hydrator always passes one)
-     * the datetime form is the default, because it is what castToDb() writes
-     * for everything that is not a date or a time.
+     * Without a column — castToPropertyType() is public and can be called
+     * directly, rather than through the column-aware entry point that supplies
+     * one — the datetime form is the default, because it is what castToDb()
+     * writes for everything that is not a date or a time.
      *
      * SECOND precision, in both directions. A DATETIME(6) column read into a
      * `string` property loses its microseconds here — and castToDb() writes the
@@ -119,8 +132,14 @@ class TypeCaster
      * instance, so an application's subclass may already override it with the
      * three-argument signature — adding a fourth parameter there would make
      * that declaration incompatible with its parent and fatal the class at
-     * load. The column-aware work lives here instead, and everything it does
-     * not handle goes back through the overridable method.
+     * load.
+     *
+     * It does not do the casting itself, though. It remembers the column and
+     * hands the value to the overridable method, so a subclass that overrides
+     * castToPropertyType() — to read a date in its own format, say — still
+     * sees every value and still decides. Answering datetimes here directly
+     * took that decision away from it silently, which is worse than the
+     * signature break it was avoiding. Raised in review of orm#67.
      */
     public function castToPropertyTypeForColumn(
         mixed $value,
@@ -128,11 +147,14 @@ class TypeCaster
         bool $nullable,
         ColumnDefinition $column,
     ): mixed {
-        if ($value instanceof \DateTimeInterface && ($phpType === 'string')) {
-            return $this->formatForColumn($value, $column);
-        }
+        $previous = $this->columnInPlay;
+        $this->columnInPlay = $column;
 
-        return $this->castToPropertyType($value, $phpType, $nullable);
+        try {
+            return $this->castToPropertyType($value, $phpType, $nullable);
+        } finally {
+            $this->columnInPlay = $previous;
+        }
     }
 
     /**

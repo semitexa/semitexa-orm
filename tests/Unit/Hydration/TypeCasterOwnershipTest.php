@@ -244,4 +244,68 @@ final class TypeCasterOwnershipTest extends TestCase
             'and the column-aware path still goes through it for everything it did not take over',
         );
     }
+
+    /**
+     * Including the datetime case, which is the one an application is most
+     * likely to have overridden this method for. The column-aware entry point
+     * answered it directly for a while, so a caster written to read dates in
+     * its own format silently stopped being asked — the values it existed to
+     * handle were the only ones it never saw. Raised in review of orm#67.
+     */
+    #[Test]
+    public function a_subclass_still_decides_how_a_datetime_becomes_a_string(): void
+    {
+        $caster = new class () extends TypeCaster {
+            public function castToPropertyType(mixed $value, string $phpType, bool $nullable): mixed
+            {
+                if ($value instanceof \DateTimeInterface && $phpType === 'string') {
+                    return $value->format(\DateTimeInterface::ATOM);
+                }
+
+                return parent::castToPropertyType($value, $phpType, $nullable);
+            }
+        };
+
+        $value = new \DateTimeImmutable('2026-09-13 05:41:07', new \DateTimeZone('UTC'));
+
+        self::assertSame(
+            '2026-09-13T05:41:07+00:00',
+            $caster->castToPropertyTypeForColumn($value, 'string', false, $this->column(MySqlType::Datetime, 'string')),
+            'the override is the whole reason the application wrote one',
+        );
+    }
+
+    /**
+     * And the column still reaches the built-in formatting when nobody has
+     * overridden anything — the reason the column-aware entry point exists.
+     */
+    #[Test]
+    public function the_column_still_decides_the_format_underneath(): void
+    {
+        $value = new \DateTimeImmutable('2026-09-13 05:41:07', new \DateTimeZone('UTC'));
+
+        self::assertSame(
+            '2026-09-13',
+            $this->caster->castToPropertyTypeForColumn($value, 'string', false, $this->column(MySqlType::Date, 'string')),
+        );
+        self::assertSame(
+            '2026-09-13 05:41:07',
+            $this->caster->castToPropertyTypeForColumn($value, 'string', false, $this->column(MySqlType::Datetime, 'string')),
+        );
+    }
+
+    /** The remembered column must not outlive the call that supplied it. */
+    #[Test]
+    public function the_column_does_not_leak_into_the_next_cast(): void
+    {
+        $value = new \DateTimeImmutable('2026-09-13 05:41:07', new \DateTimeZone('UTC'));
+
+        $this->caster->castToPropertyTypeForColumn($value, 'string', false, $this->column(MySqlType::Date, 'string'));
+
+        self::assertSame(
+            '2026-09-13 05:41:07',
+            $this->caster->castToPropertyType($value, 'string', false),
+            'a bare call has no column and must get the default form, not the last one seen',
+        );
+    }
 }
