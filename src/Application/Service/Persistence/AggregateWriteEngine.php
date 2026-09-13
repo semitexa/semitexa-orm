@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Application\Service\Persistence;
 
+use Semitexa\Core\Support\Row;
 use Semitexa\Core\Event\EventDispatcherInterface;
 use Semitexa\Orm\Domain\Enum\RelationWritePolicy;
 
@@ -473,9 +474,9 @@ final class AggregateWriteEngine
                     'ReferenceOnly relation %s::$%s points to %s, but foreign key %s is %s.',
                     $resourceModel::class,
                     $relation->propertyName,
-                    (string) $relationId,
+                    Row::asString($relationId),
                     $relation->foreignKey,
-                    (string) $foreignKeyValue,
+                    Row::asString($foreignKeyValue),
                 ));
             }
         }
