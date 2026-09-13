@@ -167,10 +167,11 @@ final class ResourceModelHydrator
 
         $value = $typeCaster->castFromDb($row[$column->columnName], $p->columnDef);
 
-        return $typeCaster->castToPropertyType(
+        return $typeCaster->castToPropertyTypeForColumn(
             $value,
             $column->phpType,
             $column->nullable || $p->allowsNull,
+            $p->columnDef,
         );
     }
 

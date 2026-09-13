@@ -86,25 +86,27 @@ final class TypeCasterOwnershipTest extends TestCase
     }
 
     /**
-     * A datetime column declared `string` is accepted by the schema validator
-     * and then fails on the first read. PINNED AS A DEFECT, not as a rule.
+     * A datetime column declared `string` now hydrates to a string.
      *
-     * The first version of this test called castToPropertyType() with a raw
-     * string and concluded that `string` works. It does — but the hydrator
-     * never hands it one: castFromDb() has already produced a
-     * DateTimeImmutable, and the string branch casts with `(string) $value`,
-     * which an object that is not Stringable refuses. So the test passed while
-     * describing a path that does not occur, which is worse than no test.
+     * This used to be pinned as a DEFECT: the schema validator permits the
+     * declaration, the column pass turns the value into a DateTimeImmutable
+     * before the property pass is consulted, and the string branch cast it with
+     * `(string) $value`, which an object that is not Stringable refuses. So a
+     * model the validator accepted fatalled on its first read — and only on
+     * MySQL, since the SQLite branch of castFromDb() leaves datetimes as
+     * strings and the same model worked there.
      *
-     * Nothing in this repository declares such a column, which is why the
-     * contradiction between the validator and the caster has gone unnoticed.
-     * This pins the real behaviour so the day it is fixed, it is fixed
-     * deliberately and this test is what says so.
+     * Fixed in the property pass rather than by narrowing the validator,
+     * because of what the two passes are FOR: the first reads the column, the
+     * second delivers what the model declared. It could not deliver a string,
+     * and that is a hole in the second pass — not a promise the validator
+     * should not have made. Narrowing it would also have turned working SQLite
+     * models into boot failures.
      *
      * @see \Semitexa\Orm\Application\Service\Schema\SchemaCollector — permits string/mixed here
      */
     #[Test]
-    public function a_datetime_column_declared_as_a_string_cannot_be_hydrated_today(): void
+    public function a_datetime_column_declared_as_a_string_arrives_as_a_string(): void
     {
         $column = $this->column(MySqlType::Datetime, 'string');
         $fromDb = $this->caster->castFromDb('2026-09-11 12:30:00', $column);
@@ -112,13 +114,99 @@ final class TypeCasterOwnershipTest extends TestCase
         self::assertInstanceOf(
             \DateTimeImmutable::class,
             $fromDb,
-            'the column pass converts before the property pass is ever consulted',
+            'the column pass still converts before the property pass is consulted',
         );
 
-        $this->expectException(\Error::class);
-        $this->expectExceptionMessage('DateTimeImmutable could not be converted to string');
+        self::assertSame(
+            '2026-09-11 12:30:00',
+            $this->caster->castToPropertyTypeForColumn($fromDb, 'string', false, $column),
+            'what was stored is what comes back',
+        );
+    }
 
-        $this->caster->castToPropertyType($fromDb, 'string', false);
+    /**
+     * The format follows the COLUMN, exactly as castToDb() chooses it going the
+     * other way. A date column that came back with a time on it would be a
+     * value the application never wrote.
+     */
+    #[Test]
+    public function the_string_form_follows_the_column_type(): void
+    {
+        $moment = new \DateTimeImmutable('2026-09-11 12:30:00');
+
+        self::assertSame(
+            '2026-09-11',
+            $this->caster->castToPropertyTypeForColumn($moment, 'string', false, $this->column(MySqlType::Date, 'string')),
+        );
+        self::assertSame(
+            '12:30:00',
+            $this->caster->castToPropertyTypeForColumn($moment, 'string', false, $this->column(MySqlType::Time, 'string')),
+        );
+        self::assertSame(
+            '2026-09-11 12:30:00',
+            $this->caster->castToPropertyTypeForColumn($moment, 'string', false, $this->column(MySqlType::Timestamp, 'string')),
+        );
+    }
+
+    /**
+     * Called without a column — the hydrator always passes one, but this is a
+     * public method — a datetime still has to produce a string rather than the
+     * fatal it produced before. The datetime form is the default because it is
+     * the one castToDb() writes for everything that is not a date or a time.
+     */
+    #[Test]
+    public function a_datetime_still_becomes_a_string_when_no_column_is_given(): void
+    {
+        self::assertSame(
+            '2026-09-11 12:30:00',
+            $this->caster->castToPropertyType(new \DateTimeImmutable('2026-09-11 12:30:00'), 'string', false),
+        );
+    }
+
+    /** A round trip through the database leaves the string it started as. */
+    #[Test]
+    public function a_string_survives_a_round_trip_through_a_datetime_column(): void
+    {
+        $column = $this->column(MySqlType::Datetime, 'string');
+        $stored = '2026-09-11 12:30:00';
+
+        $toDb = $this->caster->castToDb($stored, $column);
+        $back = $this->caster->castToPropertyTypeForColumn($this->caster->castFromDb($toDb, $column), 'string', $column->nullable, $column);
+
+        self::assertSame($stored, $back);
+    }
+
+    /**
+     * Only DateTimeInterface is intercepted. An object that CAN become a string
+     * says so, and casting it was never the bug.
+     */
+    #[Test]
+    public function a_stringable_object_is_still_cast_the_ordinary_way(): void
+    {
+        $stringable = new class () implements \Stringable {
+            public function __toString(): string
+            {
+                return 'i know how to do this';
+            }
+        };
+
+        self::assertSame(
+            'i know how to do this',
+            $this->caster->castToPropertyType($stringable, 'string', false),
+        );
+    }
+
+    /** `mixed` asked for anything, so it keeps the object the column produced. */
+    #[Test]
+    public function a_datetime_column_declared_mixed_keeps_the_object(): void
+    {
+        $column = $this->column(MySqlType::Datetime, 'mixed');
+        $fromDb = $this->caster->castFromDb('2026-09-11 12:30:00', $column);
+
+        self::assertInstanceOf(
+            \DateTimeImmutable::class,
+            $this->caster->castToPropertyTypeForColumn($fromDb, 'mixed', false, $column),
+        );
     }
 
     /** Same for an enum: a backed case only where the property is typed as one. */
@@ -129,6 +217,173 @@ final class TypeCasterOwnershipTest extends TestCase
             'draft',
             $this->caster->castToPropertyType('draft', 'string', false),
             'nothing turns this into an enum; no property asked for one',
+        );
+    }
+
+    /**
+     * The public three-argument signature is an extension point: TypeCaster is
+     * not final and the hydrator accepts an injected instance, so an
+     * application may already override it. Widening that method would have made
+     * such a subclass incompatible with its parent and fatalled the class at
+     * load; the column-aware work lives in its own method instead.
+     */
+    #[Test]
+    public function a_subclass_overriding_the_three_argument_method_still_loads(): void
+    {
+        $caster = new class () extends TypeCaster {
+            public function castToPropertyType(mixed $value, string $phpType, bool $nullable): mixed
+            {
+                return $phpType === 'string' ? 'from the subclass' : parent::castToPropertyType($value, $phpType, $nullable);
+            }
+        };
+
+        self::assertSame('from the subclass', $caster->castToPropertyType('x', 'string', false));
+        self::assertSame(
+            'from the subclass',
+            $caster->castToPropertyTypeForColumn('x', 'string', false, $this->column(MySqlType::Varchar, 'string')),
+            'and the column-aware path still goes through it for everything it did not take over',
+        );
+    }
+
+    /**
+     * Including the datetime case, which is the one an application is most
+     * likely to have overridden this method for. The column-aware entry point
+     * answered it directly for a while, so a caster written to read dates in
+     * its own format silently stopped being asked — the values it existed to
+     * handle were the only ones it never saw. Raised in review of orm#67.
+     */
+    #[Test]
+    public function a_subclass_still_decides_how_a_datetime_becomes_a_string(): void
+    {
+        $caster = new class () extends TypeCaster {
+            public function castToPropertyType(mixed $value, string $phpType, bool $nullable): mixed
+            {
+                if ($value instanceof \DateTimeInterface && $phpType === 'string') {
+                    return $value->format(\DateTimeInterface::ATOM);
+                }
+
+                return parent::castToPropertyType($value, $phpType, $nullable);
+            }
+        };
+
+        $value = new \DateTimeImmutable('2026-09-13 05:41:07', new \DateTimeZone('UTC'));
+
+        self::assertSame(
+            '2026-09-13T05:41:07+00:00',
+            $caster->castToPropertyTypeForColumn($value, 'string', false, $this->column(MySqlType::Datetime, 'string')),
+            'the override is the whole reason the application wrote one',
+        );
+    }
+
+    /**
+     * And the column still reaches the built-in formatting when nobody has
+     * overridden anything — the reason the column-aware entry point exists.
+     */
+    #[Test]
+    public function the_column_still_decides_the_format_underneath(): void
+    {
+        $value = new \DateTimeImmutable('2026-09-13 05:41:07', new \DateTimeZone('UTC'));
+
+        self::assertSame(
+            '2026-09-13',
+            $this->caster->castToPropertyTypeForColumn($value, 'string', false, $this->column(MySqlType::Date, 'string')),
+        );
+        self::assertSame(
+            '2026-09-13 05:41:07',
+            $this->caster->castToPropertyTypeForColumn($value, 'string', false, $this->column(MySqlType::Datetime, 'string')),
+        );
+    }
+
+    /**
+     * Two hydrations at once, on one shared caster, where the override does I/O
+     * and therefore suspends.
+     *
+     * Held on the instance, the second request's column overwrote the first's
+     * while it was parked, so the resumed call formatted by the wrong one — a
+     * date column gaining a time, or a datetime losing one — and the two
+     * finally blocks then restored each other's value. Raised in review of
+     * orm#67.
+     */
+    #[Test]
+    public function two_coroutines_do_not_share_a_column(): void
+    {
+        if (!extension_loaded('swoole')) {
+            self::markTestSkipped('Swoole extension is required.');
+        }
+
+        $caster = new class () extends TypeCaster {
+            public function castToPropertyType(mixed $value, string $phpType, bool $nullable): mixed
+            {
+                // What an application's override plausibly does, and the only
+                // thing that makes this reachable: it suspends.
+                \Swoole\Coroutine::sleep(0.01);
+
+                return parent::castToPropertyType($value, $phpType, $nullable);
+            }
+        };
+
+        $value = new \DateTimeImmutable('2026-09-13 05:41:07', new \DateTimeZone('UTC'));
+        $seen = [];
+
+        \Swoole\Coroutine\run(function () use ($caster, $value, &$seen): void {
+            foreach ([['date', MySqlType::Date], ['datetime', MySqlType::Datetime]] as [$name, $type]) {
+                \Swoole\Coroutine::create(function () use ($caster, $value, $type, $name, &$seen): void {
+                    $seen[$name] = $caster->castToPropertyTypeForColumn(
+                        $value,
+                        'string',
+                        false,
+                        $this->column($type, 'string'),
+                    );
+                });
+            }
+        });
+
+        self::assertSame('2026-09-13', $seen['date'] ?? null, 'the date column was formatted as the other one');
+        self::assertSame('2026-09-13 05:41:07', $seen['datetime'] ?? null);
+    }
+
+    /**
+     * A caster that delegates to ANOTHER caster's public three-argument method.
+     *
+     * That method was given no column and documents the datetime default;
+     * under one process-wide key it inherited the outer caster's DATE and
+     * dropped the time instead. The context belongs to the caster that was
+     * given it. Raised in review of orm#67.
+     */
+    #[Test]
+    public function a_delegate_caster_does_not_inherit_the_column(): void
+    {
+        $delegate = new TypeCaster();
+        $outer = new class ($delegate) extends TypeCaster {
+            public function __construct(private readonly TypeCaster $delegate) {}
+
+            public function castToPropertyType(mixed $value, string $phpType, bool $nullable): mixed
+            {
+                return $this->delegate->castToPropertyType($value, $phpType, $nullable);
+            }
+        };
+
+        $value = new \DateTimeImmutable('2026-09-13 05:41:07', new \DateTimeZone('UTC'));
+
+        self::assertSame(
+            '2026-09-13 05:41:07',
+            $outer->castToPropertyTypeForColumn($value, 'string', false, $this->column(MySqlType::Date, 'string')),
+            'the delegate was handed no column, so it owes the documented default',
+        );
+    }
+
+    /** The remembered column must not outlive the call that supplied it. */
+    #[Test]
+    public function the_column_does_not_leak_into_the_next_cast(): void
+    {
+        $value = new \DateTimeImmutable('2026-09-13 05:41:07', new \DateTimeZone('UTC'));
+
+        $this->caster->castToPropertyTypeForColumn($value, 'string', false, $this->column(MySqlType::Date, 'string'));
+
+        self::assertSame(
+            '2026-09-13 05:41:07',
+            $this->caster->castToPropertyType($value, 'string', false),
+            'a bare call has no column and must get the default form, not the last one seen',
         );
     }
 }
