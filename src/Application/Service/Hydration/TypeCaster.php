@@ -8,20 +8,24 @@ use Semitexa\Orm\Adapter\MySqlType;
 use Semitexa\Orm\Adapter\SqliteType;
 use Semitexa\Orm\Domain\Model\ColumnDefinition;
 use Semitexa\Orm\Application\Service\Uuid7;
+use Semitexa\Core\Support\CoroutineLocal;
 
 class TypeCaster
 {
     /**
-     * The column the current property cast came from, for the pass that needs
-     * it — see {@see castToPropertyTypeForColumn()}.
+     * Where the column for the current property cast is kept — see
+     * {@see castToPropertyTypeForColumn()}.
      *
-     * Set for the duration of ONE call and restored in a finally. Nothing
-     * between those two points suspends: the cast is arithmetic, string work
-     * and a DateTime constructor, with no I/O and no sleep, so another
-     * coroutine cannot observe the field mid-call even though an injected
-     * caster may be shared by the whole worker.
+     * Per COROUTINE, not per instance. An injected caster is shared by the
+     * whole worker, and the method it hands the value to is the overridable
+     * one: an application's override may do I/O, and a coroutine that suspends
+     * there lets another hydration overwrite an instance field underneath it.
+     * The resumed call would then format by the other request's column —
+     * dropping a time from a datetime, or adding one to a date — and the
+     * interleaved finally blocks would restore each other's value. Raised in
+     * review of orm#67.
      */
-    private ?ColumnDefinition $columnInPlay = null;
+    private const COLUMN_KEY = 'orm.type_caster.column';
 
     /**
      * Cast a raw DB value to the expected PHP type based on column definition.
@@ -86,7 +90,7 @@ class TypeCaster
                 // The format follows the column, exactly as castToDb() chooses
                 // it going the other way, so what was written comes back — to
                 // the second; see formatForColumn() on sub-second precision.
-                $value instanceof \DateTimeInterface => $this->formatForColumn($value, $this->columnInPlay),
+                $value instanceof \DateTimeInterface => $this->formatForColumn($value, self::columnInPlay()),
                 default => (string) $value,
             },
             'array' => is_array($value) ? $value : json_decode((string) $value, true),
@@ -147,14 +151,28 @@ class TypeCaster
         bool $nullable,
         ColumnDefinition $column,
     ): mixed {
-        $previous = $this->columnInPlay;
-        $this->columnInPlay = $column;
+        $previous = self::columnInPlay();
+        CoroutineLocal::set(self::COLUMN_KEY, $column);
 
         try {
             return $this->castToPropertyType($value, $phpType, $nullable);
         } finally {
-            $this->columnInPlay = $previous;
+            // Restored rather than cleared: casts nest, and the outer one is
+            // still owed its own column.
+            if ($previous === null) {
+                CoroutineLocal::remove(self::COLUMN_KEY);
+            } else {
+                CoroutineLocal::set(self::COLUMN_KEY, $previous);
+            }
         }
+    }
+
+    /** The column this coroutine is currently casting for, if it came through the column-aware path. */
+    private static function columnInPlay(): ?ColumnDefinition
+    {
+        $column = CoroutineLocal::get(self::COLUMN_KEY);
+
+        return $column instanceof ColumnDefinition ? $column : null;
     }
 
     /**

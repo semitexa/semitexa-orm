@@ -294,6 +294,54 @@ final class TypeCasterOwnershipTest extends TestCase
         );
     }
 
+    /**
+     * Two hydrations at once, on one shared caster, where the override does I/O
+     * and therefore suspends.
+     *
+     * Held on the instance, the second request's column overwrote the first's
+     * while it was parked, so the resumed call formatted by the wrong one — a
+     * date column gaining a time, or a datetime losing one — and the two
+     * finally blocks then restored each other's value. Raised in review of
+     * orm#67.
+     */
+    #[Test]
+    public function two_coroutines_do_not_share_a_column(): void
+    {
+        if (!extension_loaded('swoole')) {
+            self::markTestSkipped('Swoole extension is required.');
+        }
+
+        $caster = new class () extends TypeCaster {
+            public function castToPropertyType(mixed $value, string $phpType, bool $nullable): mixed
+            {
+                // What an application's override plausibly does, and the only
+                // thing that makes this reachable: it suspends.
+                \Swoole\Coroutine::sleep(0.01);
+
+                return parent::castToPropertyType($value, $phpType, $nullable);
+            }
+        };
+
+        $value = new \DateTimeImmutable('2026-09-13 05:41:07', new \DateTimeZone('UTC'));
+        $seen = [];
+
+        \Swoole\Coroutine\run(function () use ($caster, $value, &$seen): void {
+            foreach ([['date', MySqlType::Date], ['datetime', MySqlType::Datetime]] as [$name, $type]) {
+                \Swoole\Coroutine::create(function () use ($caster, $value, $type, $name, &$seen): void {
+                    $seen[$name] = $caster->castToPropertyTypeForColumn(
+                        $value,
+                        'string',
+                        false,
+                        $this->column($type, 'string'),
+                    );
+                });
+            }
+        });
+
+        self::assertSame('2026-09-13', $seen['date'] ?? null, 'the date column was formatted as the other one');
+        self::assertSame('2026-09-13 05:41:07', $seen['datetime'] ?? null);
+    }
+
     /** The remembered column must not outlive the call that supplied it. */
     #[Test]
     public function the_column_does_not_leak_into_the_next_cast(): void
