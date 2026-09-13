@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Query;
 
+use Semitexa\Core\Support\Row;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Application\Service\Hydration\ResourceModelHydrator;
 use Semitexa\Orm\Application\Service\Hydration\ResourceModelRelationLoader;
@@ -443,8 +444,8 @@ final class ResourceModelQuery
         }
 
         return is_int($value) || (is_string($value) && preg_match('/^-?\d+$/', $value) === 1)
-            ? (int) $value
-            : (float) $value;
+            ? Row::asInt($value)
+            : Row::asFloat($value);
     }
 
     /**
@@ -454,7 +455,7 @@ final class ResourceModelQuery
     {
         $value = $this->aggregate('AVG', $column);
 
-        return $value === null ? null : (float) $value;
+        return $value === null ? null : Row::asFloat($value);
     }
 
     /**
@@ -501,7 +502,8 @@ final class ResourceModelQuery
 
         $out = [];
         foreach ($this->adapter->execute($sql, $params)->rows as $row) {
-            $out[$row['__g']] = (int) $row['__c'];
+            $group = Row::of($row);
+            $out[$group->string('__g')] = $group->int('__c');
         }
 
         return $out;

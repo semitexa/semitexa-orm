@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Application\Service\Queue;
 
+use Semitexa\Core\Support\Row;
 use Semitexa\Core\Queue\QueueTransportInterface;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Application\Service\Uuid7;
@@ -105,9 +106,11 @@ final class DatabaseQueueTransport implements QueueTransportInterface
             return false;
         }
 
+        $message = Row::of($claimed);
+
         try {
-            $callback((string) $claimed['payload']);
-            $this->ack((string) $claimed['id']);
+            $callback($message->string('payload'));
+            $this->ack($message->string('id'));
         } catch (\Throwable $e) {
             $this->nack($claimed, $e);
         }
@@ -125,7 +128,8 @@ final class DatabaseQueueTransport implements QueueTransportInterface
      */
     private function nack(array $claimed, \Throwable $e): void
     {
-        $exhausted = (int) $claimed['attempt_count'] >= (int) $claimed['max_attempts'];
+        $message = Row::of($claimed);
+        $exhausted = $message->int('attempt_count') >= $message->int('max_attempts');
 
         $this->adapter()->execute(
             'UPDATE queue_messages
@@ -136,7 +140,7 @@ final class DatabaseQueueTransport implements QueueTransportInterface
                 // substr, not mb_substr: byte-accurate for the VARCHAR(512)
                 // column and free of an undeclared ext-mbstring dependency.
                 'last_error' => substr($e::class . ': ' . $e->getMessage(), 0, 512),
-                'id' => (string) $claimed['id'],
+                'id' => $message->string('id'),
             ],
         );
     }

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Application\Service\Transaction;
 
+use Semitexa\Core\Support\Row;
 use Semitexa\Core\Support\CoroutineLocal;
 use Semitexa\Core\Event\EventDispatcherInterface;
 use Semitexa\Core\Log\StaticLoggerBridge;
@@ -85,7 +86,7 @@ class TransactionManager
     /** Nesting depth for the current coroutine: 0 = no transaction, 1 = outer BEGIN, 2+ = savepoints. */
     private function depth(): int
     {
-        return (int) CoroutineLocal::get($this->key(self::KEY_DEPTH), 0);
+        return Row::asInt(CoroutineLocal::get($this->key(self::KEY_DEPTH), 0));
     }
 
     private function setDepth(int $depth): void
