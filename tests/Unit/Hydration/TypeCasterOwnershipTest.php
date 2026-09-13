@@ -119,7 +119,7 @@ final class TypeCasterOwnershipTest extends TestCase
 
         self::assertSame(
             '2026-09-11 12:30:00',
-            $this->caster->castToPropertyType($fromDb, 'string', false, $column),
+            $this->caster->castToPropertyTypeForColumn($fromDb, 'string', false, $column),
             'what was stored is what comes back',
         );
     }
@@ -136,15 +136,15 @@ final class TypeCasterOwnershipTest extends TestCase
 
         self::assertSame(
             '2026-09-11',
-            $this->caster->castToPropertyType($moment, 'string', false, $this->column(MySqlType::Date, 'string')),
+            $this->caster->castToPropertyTypeForColumn($moment, 'string', false, $this->column(MySqlType::Date, 'string')),
         );
         self::assertSame(
             '12:30:00',
-            $this->caster->castToPropertyType($moment, 'string', false, $this->column(MySqlType::Time, 'string')),
+            $this->caster->castToPropertyTypeForColumn($moment, 'string', false, $this->column(MySqlType::Time, 'string')),
         );
         self::assertSame(
             '2026-09-11 12:30:00',
-            $this->caster->castToPropertyType($moment, 'string', false, $this->column(MySqlType::Timestamp, 'string')),
+            $this->caster->castToPropertyTypeForColumn($moment, 'string', false, $this->column(MySqlType::Timestamp, 'string')),
         );
     }
 
@@ -171,7 +171,7 @@ final class TypeCasterOwnershipTest extends TestCase
         $stored = '2026-09-11 12:30:00';
 
         $toDb = $this->caster->castToDb($stored, $column);
-        $back = $this->caster->castToPropertyType($this->caster->castFromDb($toDb, $column), 'string', $column->nullable, $column);
+        $back = $this->caster->castToPropertyTypeForColumn($this->caster->castFromDb($toDb, $column), 'string', $column->nullable, $column);
 
         self::assertSame($stored, $back);
     }
@@ -205,7 +205,7 @@ final class TypeCasterOwnershipTest extends TestCase
 
         self::assertInstanceOf(
             \DateTimeImmutable::class,
-            $this->caster->castToPropertyType($fromDb, 'mixed', false, $column),
+            $this->caster->castToPropertyTypeForColumn($fromDb, 'mixed', false, $column),
         );
     }
 
@@ -217,6 +217,31 @@ final class TypeCasterOwnershipTest extends TestCase
             'draft',
             $this->caster->castToPropertyType('draft', 'string', false),
             'nothing turns this into an enum; no property asked for one',
+        );
+    }
+
+    /**
+     * The public three-argument signature is an extension point: TypeCaster is
+     * not final and the hydrator accepts an injected instance, so an
+     * application may already override it. Widening that method would have made
+     * such a subclass incompatible with its parent and fatalled the class at
+     * load; the column-aware work lives in its own method instead.
+     */
+    #[Test]
+    public function a_subclass_overriding_the_three_argument_method_still_loads(): void
+    {
+        $caster = new class () extends TypeCaster {
+            public function castToPropertyType(mixed $value, string $phpType, bool $nullable): mixed
+            {
+                return $phpType === 'string' ? 'from the subclass' : parent::castToPropertyType($value, $phpType, $nullable);
+            }
+        };
+
+        self::assertSame('from the subclass', $caster->castToPropertyType('x', 'string', false));
+        self::assertSame(
+            'from the subclass',
+            $caster->castToPropertyTypeForColumn('x', 'string', false, $this->column(MySqlType::Varchar, 'string')),
+            'and the column-aware path still goes through it for everything it did not take over',
         );
     }
 }

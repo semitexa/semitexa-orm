@@ -53,7 +53,7 @@ class TypeCaster
      * Cast a raw DB value to the PHP type expected by the property.
      * Handles enums, DateTimeImmutable, and scalars.
      */
-    public function castToPropertyType(mixed $value, string $phpType, bool $nullable, ?ColumnDefinition $column = null): mixed
+    public function castToPropertyType(mixed $value, string $phpType, bool $nullable): mixed
     {
         if ($value === null) {
             return null;
@@ -74,7 +74,7 @@ class TypeCaster
                 // The format follows the column, exactly as castToDb() chooses
                 // it going the other way, so what was written comes back — to
                 // the second; see formatForColumn() on sub-second precision.
-                $value instanceof \DateTimeInterface => $this->formatForColumn($value, $column),
+                $value instanceof \DateTimeInterface => $this->formatForColumn($value, null),
                 default => (string) $value,
             },
             'array' => is_array($value) ? $value : json_decode((string) $value, true),
@@ -109,6 +109,30 @@ class TypeCaster
             MySqlType::Time, SqliteType::Time => $value->format('H:i:s'),
             default                           => $value->format('Y-m-d H:i:s'),
         };
+    }
+
+    /**
+     * The property pass, told which column the value came from.
+     *
+     * SEPARATE from {@see castToPropertyType()} on purpose. That method is
+     * public on a non-final class and the hydrator accepts an injected
+     * instance, so an application's subclass may already override it with the
+     * three-argument signature — adding a fourth parameter there would make
+     * that declaration incompatible with its parent and fatal the class at
+     * load. The column-aware work lives here instead, and everything it does
+     * not handle goes back through the overridable method.
+     */
+    public function castToPropertyTypeForColumn(
+        mixed $value,
+        string $phpType,
+        bool $nullable,
+        ColumnDefinition $column,
+    ): mixed {
+        if ($value instanceof \DateTimeInterface && ($phpType === 'string')) {
+            return $this->formatForColumn($value, $column);
+        }
+
+        return $this->castToPropertyType($value, $phpType, $nullable);
     }
 
     /**
