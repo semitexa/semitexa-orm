@@ -86,25 +86,27 @@ final class TypeCasterOwnershipTest extends TestCase
     }
 
     /**
-     * A datetime column declared `string` is accepted by the schema validator
-     * and then fails on the first read. PINNED AS A DEFECT, not as a rule.
+     * A datetime column declared `string` now hydrates to a string.
      *
-     * The first version of this test called castToPropertyType() with a raw
-     * string and concluded that `string` works. It does — but the hydrator
-     * never hands it one: castFromDb() has already produced a
-     * DateTimeImmutable, and the string branch casts with `(string) $value`,
-     * which an object that is not Stringable refuses. So the test passed while
-     * describing a path that does not occur, which is worse than no test.
+     * This used to be pinned as a DEFECT: the schema validator permits the
+     * declaration, the column pass turns the value into a DateTimeImmutable
+     * before the property pass is consulted, and the string branch cast it with
+     * `(string) $value`, which an object that is not Stringable refuses. So a
+     * model the validator accepted fatalled on its first read — and only on
+     * MySQL, since the SQLite branch of castFromDb() leaves datetimes as
+     * strings and the same model worked there.
      *
-     * Nothing in this repository declares such a column, which is why the
-     * contradiction between the validator and the caster has gone unnoticed.
-     * This pins the real behaviour so the day it is fixed, it is fixed
-     * deliberately and this test is what says so.
+     * Fixed in the property pass rather than by narrowing the validator,
+     * because of what the two passes are FOR: the first reads the column, the
+     * second delivers what the model declared. It could not deliver a string,
+     * and that is a hole in the second pass — not a promise the validator
+     * should not have made. Narrowing it would also have turned working SQLite
+     * models into boot failures.
      *
      * @see \Semitexa\Orm\Application\Service\Schema\SchemaCollector — permits string/mixed here
      */
     #[Test]
-    public function a_datetime_column_declared_as_a_string_cannot_be_hydrated_today(): void
+    public function a_datetime_column_declared_as_a_string_arrives_as_a_string(): void
     {
         $column = $this->column(MySqlType::Datetime, 'string');
         $fromDb = $this->caster->castFromDb('2026-09-11 12:30:00', $column);
@@ -112,13 +114,99 @@ final class TypeCasterOwnershipTest extends TestCase
         self::assertInstanceOf(
             \DateTimeImmutable::class,
             $fromDb,
-            'the column pass converts before the property pass is ever consulted',
+            'the column pass still converts before the property pass is consulted',
         );
 
-        $this->expectException(\Error::class);
-        $this->expectExceptionMessage('DateTimeImmutable could not be converted to string');
+        self::assertSame(
+            '2026-09-11 12:30:00',
+            $this->caster->castToPropertyType($fromDb, 'string', false, $column),
+            'what was stored is what comes back',
+        );
+    }
 
-        $this->caster->castToPropertyType($fromDb, 'string', false);
+    /**
+     * The format follows the COLUMN, exactly as castToDb() chooses it going the
+     * other way. A date column that came back with a time on it would be a
+     * value the application never wrote.
+     */
+    #[Test]
+    public function the_string_form_follows_the_column_type(): void
+    {
+        $moment = new \DateTimeImmutable('2026-09-11 12:30:00');
+
+        self::assertSame(
+            '2026-09-11',
+            $this->caster->castToPropertyType($moment, 'string', false, $this->column(MySqlType::Date, 'string')),
+        );
+        self::assertSame(
+            '12:30:00',
+            $this->caster->castToPropertyType($moment, 'string', false, $this->column(MySqlType::Time, 'string')),
+        );
+        self::assertSame(
+            '2026-09-11 12:30:00',
+            $this->caster->castToPropertyType($moment, 'string', false, $this->column(MySqlType::Timestamp, 'string')),
+        );
+    }
+
+    /**
+     * Called without a column — the hydrator always passes one, but this is a
+     * public method — a datetime still has to produce a string rather than the
+     * fatal it produced before. The datetime form is the default because it is
+     * the one castToDb() writes for everything that is not a date or a time.
+     */
+    #[Test]
+    public function a_datetime_still_becomes_a_string_when_no_column_is_given(): void
+    {
+        self::assertSame(
+            '2026-09-11 12:30:00',
+            $this->caster->castToPropertyType(new \DateTimeImmutable('2026-09-11 12:30:00'), 'string', false),
+        );
+    }
+
+    /** A round trip through the database leaves the string it started as. */
+    #[Test]
+    public function a_string_survives_a_round_trip_through_a_datetime_column(): void
+    {
+        $column = $this->column(MySqlType::Datetime, 'string');
+        $stored = '2026-09-11 12:30:00';
+
+        $toDb = $this->caster->castToDb($stored, $column);
+        $back = $this->caster->castToPropertyType($this->caster->castFromDb($toDb, $column), 'string', $column->nullable, $column);
+
+        self::assertSame($stored, $back);
+    }
+
+    /**
+     * Only DateTimeInterface is intercepted. An object that CAN become a string
+     * says so, and casting it was never the bug.
+     */
+    #[Test]
+    public function a_stringable_object_is_still_cast_the_ordinary_way(): void
+    {
+        $stringable = new class () implements \Stringable {
+            public function __toString(): string
+            {
+                return 'i know how to do this';
+            }
+        };
+
+        self::assertSame(
+            'i know how to do this',
+            $this->caster->castToPropertyType($stringable, 'string', false),
+        );
+    }
+
+    /** `mixed` asked for anything, so it keeps the object the column produced. */
+    #[Test]
+    public function a_datetime_column_declared_mixed_keeps_the_object(): void
+    {
+        $column = $this->column(MySqlType::Datetime, 'mixed');
+        $fromDb = $this->caster->castFromDb('2026-09-11 12:30:00', $column);
+
+        self::assertInstanceOf(
+            \DateTimeImmutable::class,
+            $this->caster->castToPropertyType($fromDb, 'mixed', false, $column),
+        );
     }
 
     /** Same for an enum: a backed case only where the property is typed as one. */

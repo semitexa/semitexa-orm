@@ -53,7 +53,7 @@ class TypeCaster
      * Cast a raw DB value to the PHP type expected by the property.
      * Handles enums, DateTimeImmutable, and scalars.
      */
-    public function castToPropertyType(mixed $value, string $phpType, bool $nullable): mixed
+    public function castToPropertyType(mixed $value, string $phpType, bool $nullable, ?ColumnDefinition $column = null): mixed
     {
         if ($value === null) {
             return null;
@@ -64,9 +64,18 @@ class TypeCaster
             'int' => (int) $value,
             'float' => (float) $value,
             'bool' => (bool) $value,
-            'string' => is_array($value)
-                ? (json_encode($value, JSON_UNESCAPED_UNICODE) ?: '[]')
-                : (string) $value,
+            'string' => match (true) {
+                is_array($value) => json_encode($value, JSON_UNESCAPED_UNICODE) ?: '[]',
+                // The column pass has already turned a datetime column into a
+                // DateTimeImmutable, and `(string)` on one is a fatal — so a
+                // model that declared `string`, which the schema validator
+                // permits, could not be hydrated at all. Formatting here is the
+                // second pass doing its job: deliver what the MODEL declared.
+                // The format follows the column, exactly as castToDb() chooses
+                // it going the other way, so what was written comes back.
+                $value instanceof \DateTimeInterface => $this->formatForColumn($value, $column),
+                default => (string) $value,
+            },
             'array' => is_array($value) ? $value : json_decode((string) $value, true),
             'DateTimeImmutable', '\DateTimeImmutable' => $value instanceof \DateTimeImmutable
                 ? $value
@@ -75,6 +84,23 @@ class TypeCaster
                 ? $value
                 : new \DateTime((string) $value),
             default => $this->castToEnum($value, $phpType),
+        };
+    }
+
+    /**
+     * The string a datetime becomes for a given column — the same choice
+     * castToDb() makes, kept in one place so the two directions cannot drift.
+     *
+     * Without a column (this method is public; the hydrator always passes one)
+     * the datetime form is the default, because it is what castToDb() writes
+     * for everything that is not a date or a time.
+     */
+    private function formatForColumn(\DateTimeInterface $value, ?ColumnDefinition $column): string
+    {
+        return match ($column?->type) {
+            MySqlType::Date, SqliteType::Date => $value->format('Y-m-d'),
+            MySqlType::Time, SqliteType::Time => $value->format('H:i:s'),
+            default                           => $value->format('Y-m-d H:i:s'),
         };
     }
 

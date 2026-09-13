@@ -9,6 +9,7 @@ use PHPUnit\Framework\TestCase;
 use Semitexa\Orm\Domain\Model\RelationState;
 use Semitexa\Orm\Application\Service\Hydration\ResourceModelHydrator;
 use Semitexa\Orm\Tests\Fixture\Hydration\HydratableProductResourceModel;
+use Semitexa\Orm\Tests\Fixture\Hydration\StringDatedResourceModel;
 
 final class ResourceModelHydratorTest extends TestCase
 {
@@ -114,5 +115,53 @@ final class ResourceModelHydratorTest extends TestCase
             'tenantId' => 'tenant-3',
             'name' => 'Product 3',
         ], HydratableProductResourceModel::class);
+    }
+
+    /**
+     * The whole path, in the order the hydrator runs it: the column pass turns
+     * a datetime into a DateTimeImmutable, and the property pass has to give a
+     * model that declared `string` a string back. It could not, so a model the
+     * schema validator accepts fatalled on its first read — and only on MySQL,
+     * because the SQLite branch never converts.
+     */
+    #[Test]
+    public function a_model_that_declares_its_dates_as_strings_hydrates(): void
+    {
+        $hydrator = new ResourceModelHydrator();
+
+        $resourceModel = $hydrator->hydrate([
+            'id' => 'r-1',
+            'createdAt' => '2026-09-11 12:30:00',
+            'bornOn' => '1999-01-02',
+        ], StringDatedResourceModel::class);
+
+        $this->assertSame('2026-09-11 12:30:00', $resourceModel->createdAt, 'a datetime column keeps its time');
+        $this->assertSame('1999-01-02', $resourceModel->bornOn, 'a date column does not grow one');
+    }
+
+    #[Test]
+    public function a_nullable_string_date_stays_null(): void
+    {
+        $hydrator = new ResourceModelHydrator();
+
+        $resourceModel = $hydrator->hydrate([
+            'id' => 'r-2',
+            'createdAt' => '2026-09-11 12:30:00',
+            'bornOn' => null,
+        ], StringDatedResourceModel::class);
+
+        $this->assertNull($resourceModel->bornOn);
+    }
+
+    #[Test]
+    public function such_a_model_survives_a_dehydrate_hydrate_round_trip(): void
+    {
+        $hydrator = new ResourceModelHydrator();
+        $row = ['id' => 'r-3', 'createdAt' => '2026-09-11 12:30:00', 'bornOn' => '1999-01-02'];
+
+        $back = $hydrator->hydrate($hydrator->dehydrate($hydrator->hydrate($row, StringDatedResourceModel::class)), StringDatedResourceModel::class);
+
+        $this->assertSame($row['createdAt'], $back->createdAt);
+        $this->assertSame($row['bornOn'], $back->bornOn);
     }
 }

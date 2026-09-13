@@ -171,6 +171,7 @@ final class ResourceModelHydrator
             $value,
             $column->phpType,
             $column->nullable || $p->allowsNull,
+            $p->columnDef,
         );
     }
 
