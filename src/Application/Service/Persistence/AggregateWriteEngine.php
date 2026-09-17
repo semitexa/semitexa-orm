@@ -448,8 +448,12 @@ final class AggregateWriteEngine
             $params['__tenant_scope'] = $scope->tenantValue;
         }
 
+        // Both conditions, though expectedVersion() already returns null when
+        // there is no version property: the link between the two is a fact
+        // about that method's body, not about these types, and spelling it out
+        // is what lets the column lookup below take a string.
         $expectedVersion = $this->expectedVersion($resourceModel, $metadata);
-        if ($expectedVersion !== null) {
+        if ($expectedVersion !== null && $metadata->versionProperty !== null) {
             $versionColumn = $metadata->column($metadata->versionProperty)->columnName;
             $assignments[] = sprintf('`%s` = :__next_version', $versionColumn);
             $guards[] = sprintf('`%s` = :__expected_version', $versionColumn);
@@ -490,8 +494,12 @@ final class AggregateWriteEngine
             $params['__tenant_scope'] = $scope->tenantValue;
         }
 
+        // Both conditions, though expectedVersion() already returns null when
+        // there is no version property: the link between the two is a fact
+        // about that method's body, not about these types, and spelling it out
+        // is what lets the column lookup below take a string.
         $expectedVersion = $this->expectedVersion($resourceModel, $metadata);
-        if ($expectedVersion !== null) {
+        if ($expectedVersion !== null && $metadata->versionProperty !== null) {
             $versionColumn = $metadata->column($metadata->versionProperty)->columnName;
             $guards[] = sprintf('`%s` = :__expected_version', $versionColumn);
             $params['__expected_version'] = $expectedVersion;
