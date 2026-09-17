@@ -21,6 +21,8 @@ Depends on Core and Tenancy. Depended on by Cache, Media, Scheduler, Search, Sto
 - `#[Filterable]` with auto-indexing and typed `filterByX()` methods
 - `#[Aggregate]` for virtual computed fields
 - Traits: `HasTimestamps`, `SoftDeletes`, `HasUuid`, `HasUuidV7` (BINARY(16) chronological)
+- Fail-closed tenant isolation for reads and writes; scoped writes cannot mutate tenant identity
+- `#[SoftDelete]` turns repository deletion into an optimistic, atomic marker update while preserving owned rows
 - Domain mapping via `ResourceModel`, `#[AsMapper]`, and `DomainRepository`
 - Swoole `Channel`-based connection pool
 - MySQL 8.0+ with version detection and capability checks

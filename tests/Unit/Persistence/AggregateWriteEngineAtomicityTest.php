@@ -45,7 +45,12 @@ final class AggregateWriteEngineAtomicityTest extends TestCase
         $engine = $this->orm->getAggregateWriteEngine();
 
         try {
-            $engine->insert($this->productWithReviews(), ValidProductResourceModel::class, $this->registry());
+            $engine->insert(
+                $this->productWithReviews(),
+                ValidProductResourceModel::class,
+                $this->registry(),
+                tenantValue: 'tenant-1',
+            );
             self::fail('The cascade insert into the missing reviews table must throw.');
         } catch (\Throwable) {
             // expected — reviews table does not exist
@@ -67,12 +72,25 @@ final class AggregateWriteEngineAtomicityTest extends TestCase
         // not from driver/session side effects.
         $engine = new AggregateWriteEngine($this->orm->getAdapter(), new ResourceModelHydrator());
 
+        // The thrown exception is CAPTURED, not swallowed. `self::fail()` raises
+        // an assertion error, which is a Throwable too, so catching Throwable
+        // here ate the very failure that says the cascade did not throw — and
+        // the row count below then saw one root row and passed, reporting
+        // atomicity that had not been tested at all.
+        $thrown = null;
+
         try {
-            $engine->insert($this->productWithReviews(), ValidProductResourceModel::class, $this->registry());
-            self::fail('The cascade insert into the missing reviews table must throw.');
-        } catch (\Throwable) {
-            // expected
+            $engine->insert(
+                $this->productWithReviews(),
+                ValidProductResourceModel::class,
+                $this->registry(),
+                tenantValue: 'tenant-1',
+            );
+        } catch (\Throwable $e) {
+            $thrown = $e;
         }
+
+        self::assertNotNull($thrown, 'the cascade insert into the missing reviews table must throw');
 
         self::assertSame(
             1,
@@ -89,7 +107,12 @@ final class AggregateWriteEngineAtomicityTest extends TestCase
         );
 
         $engine = $this->orm->getAggregateWriteEngine();
-        $engine->insert($this->productWithReviews(), ValidProductResourceModel::class, $this->registry());
+        $engine->insert(
+            $this->productWithReviews(),
+            ValidProductResourceModel::class,
+            $this->registry(),
+            tenantValue: 'tenant-1',
+        );
 
         $adapter = $this->orm->getAdapter();
         self::assertSame(1, (int) $adapter->query('SELECT COUNT(*) AS c FROM products')->rows[0]['c']);
@@ -109,7 +132,12 @@ final class AggregateWriteEngineAtomicityTest extends TestCase
         // whole write must roll back with the OUTER transaction.
         try {
             $this->orm->getTransactionManager()->run(function () use ($engine): void {
-                $engine->insert($this->productWithReviews(), ValidProductResourceModel::class, $this->registry());
+                $engine->insert(
+                    $this->productWithReviews(),
+                    ValidProductResourceModel::class,
+                    $this->registry(),
+                    tenantValue: 'tenant-1',
+                );
                 throw new \RuntimeException('outer rollback');
             });
             self::fail('The outer transaction must re-throw.');
@@ -161,7 +189,12 @@ final class AggregateWriteEngineAtomicityTest extends TestCase
 
         $duringTx = null;
         $this->orm->getTransactionManager()->run(function () use ($engine, &$dispatched, &$duringTx): void {
-            $engine->insert($this->productWithReviews(), ValidProductResourceModel::class, $this->registry());
+            $engine->insert(
+                $this->productWithReviews(),
+                ValidProductResourceModel::class,
+                $this->registry(),
+                tenantValue: 'tenant-1',
+            );
             $duringTx = count($dispatched);
         });
 
@@ -204,7 +237,12 @@ final class AggregateWriteEngineAtomicityTest extends TestCase
 
         try {
             $this->orm->getTransactionManager()->run(function () use ($engine): void {
-                $engine->insert($this->productWithReviews(), ValidProductResourceModel::class, $this->registry());
+                $engine->insert(
+                    $this->productWithReviews(),
+                    ValidProductResourceModel::class,
+                    $this->registry(),
+                    tenantValue: 'tenant-1',
+                );
                 throw new \RuntimeException('outer rollback');
             });
         } catch (\RuntimeException) {

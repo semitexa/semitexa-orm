@@ -13,7 +13,7 @@ use Semitexa\Orm\Query\InsertQuery;
 
 /**
  * executeBatch() folds many rows into a single multi-row INSERT with a distinct
- * placeholder set per row (`:col_0`, `:col_1`, … — native-prepare safe). It is
+ * placeholder set per row (`:v0_0`, `:v1_0`, … — native-prepare safe). It is
  * what AggregateWriteEngine now uses to sync pivot rows in one round-trip
  * instead of one INSERT per related item; exercised here against a real
  * in-memory SQLite driver so the generated SQL is proven to execute and land.
@@ -50,5 +50,24 @@ final class InsertQueryBatchTest extends TestCase
     {
         $this->expectException(\InvalidArgumentException::class);
         (new InsertQuery('pivot', $this->adapter))->executeBatch([]);
+    }
+
+    #[Test]
+    public function execute_batch_rejects_mismatched_rows_before_writing_any_data(): void
+    {
+        try {
+            (new InsertQuery('pivot', $this->adapter))->executeBatch([
+                ['a' => 'x', 'b' => '1'],
+                ['a' => 'y'],
+            ]);
+            self::fail('A mismatched batch must be rejected.');
+        } catch (\InvalidArgumentException) {
+            // expected
+        }
+
+        self::assertSame(
+            0,
+            (int) $this->adapter->query('SELECT COUNT(*) AS c FROM pivot')->rows[0]['c'],
+        );
     }
 }

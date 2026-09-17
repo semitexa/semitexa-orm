@@ -28,8 +28,9 @@ use Semitexa\Orm\Query\ResourceModelQuery;
  *
  * Build queries with {@see query()} (typed, fluent) or use the convenience
  * {@see findById}, {@see findBy}, {@see count}, {@see paginate} helpers.
- * All read methods respect the tenant scope set by {@see forTenant} /
- * {@see withoutTenantScope}.
+ * All read and write methods respect the tenant scope set by {@see forTenant}
+ * / {@see withoutTenantScope}. Tenant-scoped writes fail closed when neither
+ * has been selected.
  */
 final class DomainRepository
 {
@@ -275,17 +276,35 @@ final class DomainRepository
 
     public function insert(object $domainModel): object
     {
-        return $this->writeEngine->insert($domainModel, $this->resourceModelClass, $this->mapperRegistry);
+        return $this->writeEngine->insert(
+            $domainModel,
+            $this->resourceModelClass,
+            $this->mapperRegistry,
+            $this->tenantValue,
+            $this->systemScopeToken,
+        );
     }
 
     public function update(object $domainModel): object
     {
-        return $this->writeEngine->update($domainModel, $this->resourceModelClass, $this->mapperRegistry);
+        return $this->writeEngine->update(
+            $domainModel,
+            $this->resourceModelClass,
+            $this->mapperRegistry,
+            $this->tenantValue,
+            $this->systemScopeToken,
+        );
     }
 
     public function delete(object $domainModel): void
     {
-        $this->writeEngine->delete($domainModel, $this->resourceModelClass, $this->mapperRegistry);
+        $this->writeEngine->delete(
+            $domainModel,
+            $this->resourceModelClass,
+            $this->mapperRegistry,
+            $this->tenantValue,
+            $this->systemScopeToken,
+        );
     }
 
     /**
