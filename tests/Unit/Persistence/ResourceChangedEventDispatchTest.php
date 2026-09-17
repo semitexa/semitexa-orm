@@ -13,6 +13,7 @@ use Semitexa\Orm\Application\Service\Persistence\AggregateWriteEngine;
 use Semitexa\Orm\Domain\Enum\ResourceChangeOperation;
 use Semitexa\Orm\Domain\Event\ResourceChangedEvent;
 use Semitexa\Orm\Query\UpdateQuery;
+use Semitexa\Orm\Query\SystemScopeToken;
 use Semitexa\Orm\Tests\Fixture\Hydration\FakeDatabaseAdapter;
 use Semitexa\Orm\Tests\Fixture\Metadata\ValidProductResourceModel;
 use Semitexa\Orm\Tests\Fixture\Persistence\PersistableCategoryDomainModel;
@@ -36,7 +37,12 @@ final class ResourceChangedEventDispatchTest extends TestCase
         $dispatcher = $this->capturingDispatcher();
         $engine = new AggregateWriteEngine($adapter, new ResourceModelHydrator(), null, $dispatcher);
 
-        $engine->insert($this->validDomainModel(id: ''), ValidProductResourceModel::class, $this->buildRegistry());
+        $engine->insert(
+            $this->validDomainModel(id: ''),
+            ValidProductResourceModel::class,
+            $this->buildRegistry(),
+            systemScopeToken: SystemScopeToken::issue(),
+        );
 
         $this->assertCount(1, $dispatcher->captured);
         $event = $dispatcher->captured[0];
@@ -52,7 +58,12 @@ final class ResourceChangedEventDispatchTest extends TestCase
         $dispatcher = $this->capturingDispatcher();
         $engine = new AggregateWriteEngine($adapter, new ResourceModelHydrator(), null, $dispatcher);
 
-        $engine->update($this->validDomainModel(), ValidProductResourceModel::class, $this->buildRegistry());
+        $engine->update(
+            $this->validDomainModel(),
+            ValidProductResourceModel::class,
+            $this->buildRegistry(),
+            systemScopeToken: SystemScopeToken::issue(),
+        );
 
         $this->assertCount(1, $dispatcher->captured);
         $this->assertSame('products', $dispatcher->captured[0]->resourceKey);
@@ -66,7 +77,12 @@ final class ResourceChangedEventDispatchTest extends TestCase
         $dispatcher = $this->capturingDispatcher();
         $engine = new AggregateWriteEngine($adapter, new ResourceModelHydrator(), null, $dispatcher);
 
-        $engine->delete($this->validDomainModel(), ValidProductResourceModel::class, $this->buildRegistry());
+        $engine->delete(
+            $this->validDomainModel(),
+            ValidProductResourceModel::class,
+            $this->buildRegistry(),
+            systemScopeToken: SystemScopeToken::issue(),
+        );
 
         $this->assertCount(1, $dispatcher->captured);
         $this->assertSame('products', $dispatcher->captured[0]->resourceKey);
@@ -80,7 +96,12 @@ final class ResourceChangedEventDispatchTest extends TestCase
         // No dispatcher (default null) — dispatch must be a silent no-op.
         $engine = new AggregateWriteEngine($adapter, new ResourceModelHydrator());
 
-        $persisted = $engine->insert($this->validDomainModel(id: ''), ValidProductResourceModel::class, $this->buildRegistry());
+        $persisted = $engine->insert(
+            $this->validDomainModel(id: ''),
+            ValidProductResourceModel::class,
+            $this->buildRegistry(),
+            systemScopeToken: SystemScopeToken::issue(),
+        );
 
         // The write is unaffected by the absence of a dispatcher (root + 2 reviews).
         $this->assertCount(3, $adapter->executed);
@@ -108,7 +129,12 @@ final class ResourceChangedEventDispatchTest extends TestCase
         $engine = new AggregateWriteEngine($adapter, new ResourceModelHydrator(), null, $throwing);
 
         // Must NOT propagate the listener throw — the write already committed.
-        $persisted = $engine->insert($this->validDomainModel(id: ''), ValidProductResourceModel::class, $this->buildRegistry());
+        $persisted = $engine->insert(
+            $this->validDomainModel(id: ''),
+            ValidProductResourceModel::class,
+            $this->buildRegistry(),
+            systemScopeToken: SystemScopeToken::issue(),
+        );
 
         $this->assertCount(3, $adapter->executed);
         $this->assertInstanceOf(PersistableProductDomainModel::class, $persisted);
@@ -150,13 +176,23 @@ final class ResourceChangedEventDispatchTest extends TestCase
         );
 
         // Write BEFORE any dispatcher is resolvable — a silent no-op, as before.
-        $engine->insert($this->validDomainModel(id: ''), ValidProductResourceModel::class, $this->buildRegistry());
+        $engine->insert(
+            $this->validDomainModel(id: ''),
+            ValidProductResourceModel::class,
+            $this->buildRegistry(),
+            systemScopeToken: SystemScopeToken::issue(),
+        );
 
         // The bootstrap arrives late (the scheduler:work reality)...
         $slot->dispatcher = $this->capturingDispatcher();
 
         // ...and the SAME memoized engine must now dispatch.
-        $engine->insert($this->validDomainModel(id: ''), ValidProductResourceModel::class, $this->buildRegistry());
+        $engine->insert(
+            $this->validDomainModel(id: ''),
+            ValidProductResourceModel::class,
+            $this->buildRegistry(),
+            systemScopeToken: SystemScopeToken::issue(),
+        );
 
         $this->assertCount(1, $slot->dispatcher->captured);
         $this->assertSame('products', $slot->dispatcher->captured[0]->resourceKey);

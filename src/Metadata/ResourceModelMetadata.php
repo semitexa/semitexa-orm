@@ -50,6 +50,34 @@ final readonly class ResourceModelMetadata
     }
 
     /**
+     * Resolve a tenant declaration expressed as either a PHP property name or
+     * a physical SQL column name to one canonical column descriptor.
+     */
+    public function tenantColumn(): ?ColumnMetadata
+    {
+        if ($this->tenantPolicy === null) {
+            return null;
+        }
+
+        $declared = $this->tenantPolicy->column;
+        if ($declared !== null && $this->hasColumn($declared)) {
+            return $this->column($declared);
+        }
+
+        foreach ($this->columnsByProperty as $column) {
+            if ($column->columnName === $declared) {
+                return $column;
+            }
+        }
+
+        throw new \LogicException(sprintf(
+            'Tenant column %s is not declared on %s.',
+            (string) $declared,
+            $this->className,
+        ));
+    }
+
+    /**
      * @return array<string, RelationMetadata>
      */
     public function relations(): array

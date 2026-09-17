@@ -13,6 +13,7 @@ enum ServerCapability: string
     case JsonTableFunc = 'json_table';
     case WindowFunctions = 'window_func';
     case DescendingIndexes = 'desc_index';
+    case LockingReads = 'locking_reads';
 
     /**
      * Minimum MySQL version required for each capability.
@@ -30,6 +31,7 @@ enum ServerCapability: string
             self::JsonTableFunc->value      => '8.0.4',
             self::WindowFunctions->value    => '8.0.0',
             self::DescendingIndexes->value  => '8.0.0',
+            self::LockingReads->value        => '8.0.0',
         ];
     }
 
@@ -49,6 +51,7 @@ enum ServerCapability: string
             self::JsonTableFunc => true,      // json_each() available, json_table() since 3.45.0
             self::WindowFunctions => true,    // Supported since 3.25.0
             self::DescendingIndexes => true,  // Supported (but ignored until 3.30.0, works since)
+            self::LockingReads => false,       // SQLite has no SELECT ... FOR UPDATE
         };
     }
 }

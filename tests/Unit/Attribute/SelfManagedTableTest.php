@@ -100,6 +100,13 @@ final class SelfManagedTableTest extends TestCase
     #[Test]
     public function the_update_journals_are_protected_from_the_two_phase_drop(): void
     {
+        if (
+            !class_exists(\Composer\InstalledVersions::class)
+            || !\Composer\InstalledVersions::isInstalled('semitexa/update')
+        ) {
+            self::markTestSkipped('The cross-package ownership contract requires semitexa/update.');
+        }
+
         // The motivating case, pinned by name: these two tables record the
         // progress of the very command that may be syncing the schema, so they
         // are created with plain SQL and own no resource. Before this, every

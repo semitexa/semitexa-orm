@@ -116,6 +116,25 @@ final class OptimisticLockingTest extends TestCase
             ->update(new OlNoteDomain('n1', 'ghost', 1), OlNoteFixture::class, $this->registry());
     }
 
+    #[Test]
+    public function deleting_with_a_stale_version_cannot_remove_a_newer_row(): void
+    {
+        $engine = $this->orm->getAggregateWriteEngine();
+        $engine->update(new OlNoteDomain('n1', 'newer', 1), OlNoteFixture::class, $this->registry());
+
+        try {
+            $engine->delete(new OlNoteDomain('n1', 'first', 1), OlNoteFixture::class, $this->registry());
+            self::fail('A stale-version delete must throw StaleAggregateException.');
+        } catch (StaleAggregateException) {
+            // expected
+        }
+
+        self::assertSame(
+            1,
+            (int) $this->orm->getAdapter()->query('SELECT COUNT(*) AS c FROM ol_notes')->rows[0]['c'],
+        );
+    }
+
     private function registry(): MapperRegistry
     {
         $registry = new MapperRegistry();

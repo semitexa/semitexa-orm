@@ -51,7 +51,9 @@ final class DatabaseQueueTransportTest extends TestCase
 
     protected function tearDown(): void
     {
-        if (isset($this->adapter)) {
+        // setUp() may skip after creating the adapter but before assigning the
+        // per-test queue name. PHPUnit still calls tearDown() for that path.
+        if (isset($this->adapter, $this->queue)) {
             $this->adapter->execute(
                 'DELETE FROM queue_messages WHERE queue_name = :q',
                 ['q' => $this->queue],
