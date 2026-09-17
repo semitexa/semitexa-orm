@@ -21,6 +21,7 @@ use Semitexa\Orm\Tests\Fixture\Metadata\InvalidSyncPivotBelongsToResourceModel;
 
 use Semitexa\Orm\Tests\Fixture\Metadata\InvalidSoftDeleteResourceModel;
 
+use Semitexa\Orm\Tests\Fixture\Metadata\ImplicitTenantColumnResourceModel;
 use Semitexa\Orm\Tests\Fixture\Metadata\InvalidTenantResourceModel;
 
 use Semitexa\Orm\Tests\Fixture\Metadata\ValidProductResourceModel;
@@ -54,6 +55,23 @@ final class ResourceModelMetadataValidatorTest extends TestCase
         $this->validator->validate($metadata);
 
         $this->assertTrue(true);
+    }
+
+    #[Test]
+    public function rejects_a_tenant_policy_that_declares_no_column_at_all(): void
+    {
+        // `#[TenantScoped]` with every default is writable — `column` defaults
+        // to null — and this refusal is what keeps it from reaching
+        // ResourceModelMetadata::tenantColumn(), which has no null to match
+        // against and would throw a LogicException naming an empty column at
+        // query time instead. The guard is here, at boot, with a reason; the
+        // branch just had no test, so it looked absent.
+        $metadata = $this->extractor->extract(ImplicitTenantColumnResourceModel::class);
+
+        $this->expectException(InvalidTenantPolicyException::class);
+        $this->expectExceptionMessageMatches('/must declare a tenant column/');
+
+        $this->validator->validate($metadata);
     }
 
     #[Test]

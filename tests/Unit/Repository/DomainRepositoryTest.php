@@ -152,9 +152,12 @@ final class DomainRepositoryTest extends TestCase
         $repository->update($domainModel);
         $repository->delete($domainModel);
 
-        // delete() is one soft-delete UPDATE and intentionally leaves owned
-        // children intact, so this flow executes one statement fewer.
-        $this->assertGreaterThanOrEqual(6, count($adapter->executed));
+        // EXACTLY six. delete() is one soft-delete UPDATE and intentionally
+        // leaves owned children intact, so this flow executes one statement
+        // fewer — and `>= 6` also accepts the seven a regression would emit if
+        // delete() started removing the owned review first, which is precisely
+        // the behaviour this test exists to pin.
+        $this->assertSame(6, count($adapter->executed), implode("\n", array_column($adapter->executed, 'sql')));
         $this->assertSame('INSERT INTO `products` (`id`, `tenantId`, `name`, `categoryId`, `deletedAt`) VALUES (:v0, :v1, :v2, :v3, :v4)', $adapter->executed[0]['sql']);
     }
 

@@ -72,6 +72,13 @@ final class AggregateWriteEngineAtomicityTest extends TestCase
         // not from driver/session side effects.
         $engine = new AggregateWriteEngine($this->orm->getAdapter(), new ResourceModelHydrator());
 
+        // The thrown exception is CAPTURED, not swallowed. `self::fail()` raises
+        // an assertion error, which is a Throwable too, so catching Throwable
+        // here ate the very failure that says the cascade did not throw — and
+        // the row count below then saw one root row and passed, reporting
+        // atomicity that had not been tested at all.
+        $thrown = null;
+
         try {
             $engine->insert(
                 $this->productWithReviews(),
@@ -79,10 +86,11 @@ final class AggregateWriteEngineAtomicityTest extends TestCase
                 $this->registry(),
                 tenantValue: 'tenant-1',
             );
-            self::fail('The cascade insert into the missing reviews table must throw.');
-        } catch (\Throwable) {
-            // expected
+        } catch (\Throwable $e) {
+            $thrown = $e;
         }
+
+        self::assertNotNull($thrown, 'the cascade insert into the missing reviews table must throw');
 
         self::assertSame(
             1,
