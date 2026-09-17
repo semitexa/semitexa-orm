@@ -11,20 +11,12 @@
     ],
     "require": {
         "php": "^8.4",
-        "semitexa/core": "^2026.09.13.1330 || dev-master",
-        "semitexa/tenancy": "^2026.09.13.1330 || dev-master"
+        "semitexa/core": ">=2026.09.13.1330 || dev-master",
+        "semitexa/tenancy": "*"
     },
     "require-dev": {
-        "phpunit/phpunit": "^12.5",
+        "phpunit/phpunit": "^10.0",
         "swoole/ide-helper": "^5.1"
-    },
-    "scripts": {
-        "test": "phpunit --bootstrap vendor/autoload.php tests"
-    },
-    "config": {
-        "allow-plugins": {
-            "semitexa/core": true
-        }
     },
     "autoload": {
         "psr-4": {
