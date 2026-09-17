@@ -128,7 +128,8 @@ final class DomainRepositoryTest extends TestCase
     public function insert_update_and_delete_delegate_to_new_write_engine(): void
     {
         $adapter = new FakeDatabaseAdapter([]);
-        $repository = $this->persistableRepository($adapter);
+        $repository = $this->persistableRepository($adapter)
+            ->withoutTenantScope(SystemScopeToken::issue());
         $domainModel = new PersistableProductDomainModel(
             id: 'product-1',
             tenantId: 'tenant-1',
@@ -151,8 +152,10 @@ final class DomainRepositoryTest extends TestCase
         $repository->update($domainModel);
         $repository->delete($domainModel);
 
-        $this->assertGreaterThanOrEqual(7, count($adapter->executed));
-        $this->assertSame('INSERT INTO `products` (`id`, `tenantId`, `name`, `categoryId`, `deletedAt`) VALUES (:id, :tenantId, :name, :categoryId, :deletedAt)', $adapter->executed[0]['sql']);
+        // delete() is one soft-delete UPDATE and intentionally leaves owned
+        // children intact, so this flow executes one statement fewer.
+        $this->assertGreaterThanOrEqual(6, count($adapter->executed));
+        $this->assertSame('INSERT INTO `products` (`id`, `tenantId`, `name`, `categoryId`, `deletedAt`) VALUES (:v0, :v1, :v2, :v3, :v4)', $adapter->executed[0]['sql']);
     }
 
     #[Test]

@@ -9,8 +9,10 @@ use Semitexa\Core\Event\EventDispatcherInterface;
 use Semitexa\Orm\Domain\Enum\RelationWritePolicy;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
+use Semitexa\Orm\Adapter\ServerCapability;
 use Semitexa\Orm\Exception\InvalidRelationWriteException;
 use Semitexa\Orm\Exception\StaleAggregateException;
+use Semitexa\Orm\Exception\TenantScopeViolationException;
 use Semitexa\Orm\Domain\Enum\ResourceChangeOperation;
 use Semitexa\Orm\Domain\Event\ResourceChangedEvent;
 use Semitexa\Orm\Domain\Model\RelationState;
@@ -19,8 +21,10 @@ use Semitexa\Orm\Application\Service\Hydration\ResourceModelHydrator;
 use Semitexa\Orm\Application\Service\Mapping\MapperRegistry;
 use Semitexa\Orm\Metadata\RelationKind;
 use Semitexa\Orm\Metadata\RelationMetadata;
+use Semitexa\Orm\Metadata\ColumnMetadata;
 use Semitexa\Orm\Query\DeleteQuery;
 use Semitexa\Orm\Query\InsertQuery;
+use Semitexa\Orm\Query\SystemScopeToken;
 use Semitexa\Orm\Metadata\ResourceModelMetadata;
 use Semitexa\Orm\Metadata\ResourceModelMetadataRegistry;
 use Semitexa\Orm\Application\Service\Transaction\TransactionManager;
@@ -84,11 +88,18 @@ final class AggregateWriteEngine
     /**
      * @param class-string $resourceModelClass
      */
-    public function insert(object $domainModel, string $resourceModelClass, MapperRegistry $mapperRegistry): object
+    public function insert(
+        object $domainModel,
+        string $resourceModelClass,
+        MapperRegistry $mapperRegistry,
+        mixed $tenantValue = null,
+        ?SystemScopeToken $systemScopeToken = null,
+    ): object
     {
+        $scope = TenantWriteScope::from($tenantValue, $systemScopeToken);
         $rootResourceModel = $mapperRegistry->mapToSourceModel($domainModel, $resourceModelClass);
         $rootResourceModel = $this->atomically(
-            fn (DatabaseAdapterInterface $adapter): object => $this->insertResourceModel($rootResourceModel, $adapter),
+            fn (DatabaseAdapterInterface $adapter): object => $this->insertResourceModel($rootResourceModel, $adapter, $scope),
         );
         $domainResult = $mapperRegistry->mapToDomain($rootResourceModel, $domainModel::class);
 
@@ -100,11 +111,18 @@ final class AggregateWriteEngine
     /**
      * @param class-string $resourceModelClass
      */
-    public function update(object $domainModel, string $resourceModelClass, MapperRegistry $mapperRegistry): object
+    public function update(
+        object $domainModel,
+        string $resourceModelClass,
+        MapperRegistry $mapperRegistry,
+        mixed $tenantValue = null,
+        ?SystemScopeToken $systemScopeToken = null,
+    ): object
     {
+        $scope = TenantWriteScope::from($tenantValue, $systemScopeToken);
         $rootResourceModel = $mapperRegistry->mapToSourceModel($domainModel, $resourceModelClass);
         $updatedResourceModel = $this->atomically(
-            fn (DatabaseAdapterInterface $adapter): object => $this->updateResourceModel($rootResourceModel, $adapter),
+            fn (DatabaseAdapterInterface $adapter): object => $this->updateResourceModel($rootResourceModel, $adapter, $scope),
         );
 
         $this->dispatchResourceChanged($resourceModelClass, ResourceChangeOperation::Update);
@@ -126,11 +144,18 @@ final class AggregateWriteEngine
     /**
      * @param class-string $resourceModelClass
      */
-    public function delete(object $domainModel, string $resourceModelClass, MapperRegistry $mapperRegistry): void
+    public function delete(
+        object $domainModel,
+        string $resourceModelClass,
+        MapperRegistry $mapperRegistry,
+        mixed $tenantValue = null,
+        ?SystemScopeToken $systemScopeToken = null,
+    ): void
     {
+        $scope = TenantWriteScope::from($tenantValue, $systemScopeToken);
         $rootResourceModel = $mapperRegistry->mapToSourceModel($domainModel, $resourceModelClass);
-        $this->atomically(function (DatabaseAdapterInterface $adapter) use ($rootResourceModel): void {
-            $this->deleteResourceModel($rootResourceModel, $adapter);
+        $this->atomically(function (DatabaseAdapterInterface $adapter) use ($rootResourceModel, $scope): void {
+            $this->deleteResourceModel($rootResourceModel, $adapter, $scope);
         });
 
         $this->dispatchResourceChanged($resourceModelClass, ResourceChangeOperation::Delete);
@@ -185,47 +210,115 @@ final class AggregateWriteEngine
         }
     }
 
-    private function insertResourceModel(object $resourceModel, DatabaseAdapterInterface $adapter): object
+    private function insertResourceModel(
+        object $resourceModel,
+        DatabaseAdapterInterface $adapter,
+        TenantWriteScope $scope,
+    ): object
     {
         $resourceModel = $this->prepareInsertResourceModel($resourceModel);
         $metadata = $this->metadata($resourceModel::class);
+        $resourceModel = $this->applyTenantScope($resourceModel, $metadata, $scope);
         $this->validateReferenceOnlyRelations($resourceModel, $metadata);
         $resourceModel = $this->executeInsert($resourceModel, $metadata, $adapter);
-        $this->persistOwnedRelations($resourceModel, $metadata, true, $adapter);
+        $this->persistOwnedRelations($resourceModel, $metadata, true, $adapter, $scope);
 
         return $resourceModel;
     }
 
     /** @return object the resource model as persisted (version-bumped when #[Version] applies) */
-    private function updateResourceModel(object $resourceModel, DatabaseAdapterInterface $adapter): object
+    private function updateResourceModel(
+        object $resourceModel,
+        DatabaseAdapterInterface $adapter,
+        TenantWriteScope $scope,
+    ): object
     {
         $metadata = $this->metadata($resourceModel::class);
+        $resourceModel = $this->applyTenantScope($resourceModel, $metadata, $scope);
+        $this->assertTargetWithinTenantScope($resourceModel, $metadata, $adapter, $scope);
         $this->validateReferenceOnlyRelations($resourceModel, $metadata);
-        $resourceModel = $this->executeUpdate($resourceModel, $metadata, $adapter);
-        $this->persistOwnedRelations($resourceModel, $metadata, false, $adapter);
+        $resourceModel = $this->executeUpdate($resourceModel, $metadata, $adapter, $scope);
+        $this->persistOwnedRelations($resourceModel, $metadata, false, $adapter, $scope);
 
         return $resourceModel;
     }
 
-    private function deleteResourceModel(object $resourceModel, DatabaseAdapterInterface $adapter): void
+    private function deleteResourceModel(
+        object $resourceModel,
+        DatabaseAdapterInterface $adapter,
+        TenantWriteScope $scope,
+    ): void
     {
         $metadata = $this->metadata($resourceModel::class);
-        $this->deleteOwnedRelations($resourceModel, $metadata, $adapter);
-        $this->executeDelete($resourceModel, $metadata, $adapter);
+        $resourceModel = $this->applyTenantScope($resourceModel, $metadata, $scope);
+        $this->assertTargetWithinTenantScope($resourceModel, $metadata, $adapter, $scope);
+
+        if ($metadata->softDelete !== null) {
+            $this->executeSoftDelete($resourceModel, $metadata, $adapter, $scope);
+            return;
+        }
+
+        // THE VERSION IS CHECKED BEFORE THE CHILDREN GO. A cascade delete
+        // removes owned rows first and guards the root DELETE on #[Version],
+        // so a stale root threw AFTER the children were already gone — and
+        // without a TransactionManager there is nothing to roll that back.
+        // The documented legacy path may be non-atomic; it must not be a way
+        // to lose rows a caller never asked to delete.
+        $this->assertExpectedVersionStillCurrent($resourceModel, $metadata, $adapter, $scope);
+
+        $this->deleteOwnedRelations($resourceModel, $metadata, $adapter, $scope);
+        $this->executeDelete($resourceModel, $metadata, $adapter, $scope);
+    }
+
+    /**
+     * Read the root's current version, and refuse before anything is removed.
+     *
+     * Inside a transaction this is belt and braces — the guarded DELETE would
+     * catch it and the rollback would undo the children. Outside one it is the
+     * only thing standing between a stale write and permanently missing rows.
+     */
+    private function assertExpectedVersionStillCurrent(
+        object $resourceModel,
+        ResourceModelMetadata $metadata,
+        DatabaseAdapterInterface $adapter,
+        TenantWriteScope $scope,
+    ): void {
+        $expectedVersion = $this->expectedVersion($resourceModel, $metadata);
+        if ($expectedVersion === null || $metadata->versionProperty === null) {
+            return;
+        }
+
+        $primaryKey = $this->requirePrimaryKey($metadata);
+        $params = [
+            '__pk' => $this->propertyValue($resourceModel, $primaryKey),
+            '__expected_version' => $expectedVersion,
+        ];
+
+        $guards = [sprintf('`%s` = :__expected_version', $metadata->column($metadata->versionProperty)->columnName)];
+
+        $tenantColumn = $this->scopedTenantColumn($metadata, $scope);
+        if ($tenantColumn !== null) {
+            $guards[] = sprintf('`%s` = :__tenant_scope', $tenantColumn->columnName);
+            $params['__tenant_scope'] = $scope->tenantValue;
+        }
+
+        $sql = sprintf(
+            'SELECT 1 FROM `%s` WHERE `%s` = :__pk AND %s LIMIT 1%s',
+            $metadata->tableName,
+            $metadata->column($primaryKey)->columnName,
+            implode(' AND ', $guards),
+            $adapter->supports(ServerCapability::LockingReads) ? ' FOR UPDATE' : '',
+        );
+
+        if ($adapter->execute($sql, $params)->rows === []) {
+            throw $this->staleDelete($metadata, $expectedVersion);
+        }
     }
 
     private function executeInsert(object $resourceModel, ResourceModelMetadata $metadata, DatabaseAdapterInterface $adapter): object
     {
         $row = $this->hydrator->dehydrate($resourceModel);
-        $columns = array_keys($row);
-        $sql = sprintf(
-            'INSERT INTO `%s` (%s) VALUES (%s)',
-            $metadata->tableName,
-            implode(', ', array_map(static fn (string $column): string => sprintf('`%s`', $column), $columns)),
-            implode(', ', array_map(static fn (string $column): string => ':' . $column, $columns)),
-        );
-
-        $result = $adapter->execute($sql, $row);
+        $lastInsertId = (new InsertQuery($metadata->tableName, $adapter))->execute($row);
         $primaryKey = $metadata->primaryKeyProperty;
         if ($primaryKey === null) {
             return $resourceModel;
@@ -241,17 +334,32 @@ final class AggregateWriteEngine
             return $resourceModel;
         }
 
-        return $this->withPropertyValue($resourceModel, $primaryKey, (int) $result->lastInsertId);
+        return $this->withPropertyValue($resourceModel, $primaryKey, (int) $lastInsertId);
     }
 
     /** @return object the input model, version-bumped when #[Version] applies */
-    private function executeUpdate(object $resourceModel, ResourceModelMetadata $metadata, DatabaseAdapterInterface $adapter): object
+    private function executeUpdate(
+        object $resourceModel,
+        ResourceModelMetadata $metadata,
+        DatabaseAdapterInterface $adapter,
+        TenantWriteScope $scope,
+    ): object
     {
         $primaryKey = $this->requirePrimaryKey($metadata);
         $row = $this->hydrator->dehydrate($resourceModel);
         $pkColumn = $metadata->column($primaryKey)->columnName;
         $pkValue = $row[$pkColumn] ?? $this->propertyValue($resourceModel, $primaryKey);
         unset($row[$pkColumn]);
+
+        $tenantColumn = $this->scopedTenantColumn($metadata, $scope);
+        $tenantGuard = '';
+        if ($tenantColumn !== null) {
+            // Tenant identity is immutable on scoped writes. The trusted scope
+            // narrows the WHERE clause; domain input can never move a row to a
+            // different tenant or target another tenant by primary key alone.
+            unset($row[$tenantColumn->columnName]);
+            $tenantGuard = sprintf(' AND `%s` = :__tenant_scope', $tenantColumn->columnName);
+        }
 
         // Optimistic locking: guard on the #[Version] the caller READ and bump
         // it in the same statement. A concurrent writer that committed first
@@ -278,15 +386,23 @@ final class AggregateWriteEngine
             array_keys($row),
         ));
 
+        if ($row === []) {
+            return $resourceModel;
+        }
+
         $sql = sprintf(
-            'UPDATE `%s` SET %s WHERE `%s` = :__pk%s',
+            'UPDATE `%s` SET %s WHERE `%s` = :__pk%s%s',
             $metadata->tableName,
             $assignments,
             $pkColumn,
+            $tenantGuard,
             $versionGuard,
         );
 
         $row['__pk'] = $pkValue;
+        if ($tenantColumn !== null) {
+            $row['__tenant_scope'] = $scope->tenantValue;
+        }
         if ($versionGuard !== '') {
             $row['__expected_version'] = (int) $expectedVersion;
         }
@@ -308,22 +424,105 @@ final class AggregateWriteEngine
         return $resourceModel;
     }
 
-    private function executeDelete(object $resourceModel, ResourceModelMetadata $metadata, DatabaseAdapterInterface $adapter): void
+    private function executeSoftDelete(
+        object $resourceModel,
+        ResourceModelMetadata $metadata,
+        DatabaseAdapterInterface $adapter,
+        TenantWriteScope $scope,
+    ): void
+    {
+        $softDelete = $metadata->softDelete
+            ?? throw new \LogicException('executeSoftDelete() requires soft-delete metadata.');
+        $primaryKey = $this->requirePrimaryKey($metadata);
+        $pkColumn = $metadata->column($primaryKey)->columnName;
+        $params = [
+            '__deleted_at' => (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s'),
+            '__pk' => $this->propertyValue($resourceModel, $primaryKey),
+        ];
+        $assignments = [sprintf('`%s` = :__deleted_at', $softDelete->columnName)];
+        $guards = [];
+
+        $tenantColumn = $this->scopedTenantColumn($metadata, $scope);
+        if ($tenantColumn !== null) {
+            $guards[] = sprintf('`%s` = :__tenant_scope', $tenantColumn->columnName);
+            $params['__tenant_scope'] = $scope->tenantValue;
+        }
+
+        $expectedVersion = $this->expectedVersion($resourceModel, $metadata);
+        if ($expectedVersion !== null) {
+            $versionColumn = $metadata->column($metadata->versionProperty)->columnName;
+            $assignments[] = sprintf('`%s` = :__next_version', $versionColumn);
+            $guards[] = sprintf('`%s` = :__expected_version', $versionColumn);
+            $params['__next_version'] = $expectedVersion + 1;
+            $params['__expected_version'] = $expectedVersion;
+        }
+
+        $sql = sprintf(
+            'UPDATE `%s` SET %s WHERE `%s` = :__pk%s',
+            $metadata->tableName,
+            implode(', ', $assignments),
+            $pkColumn,
+            $guards === [] ? '' : ' AND ' . implode(' AND ', $guards),
+        );
+        $result = $adapter->execute($sql, $params);
+
+        if ($expectedVersion !== null && $result->rowCount === 0) {
+            throw $this->staleDelete($metadata, $expectedVersion);
+        }
+    }
+
+    private function executeDelete(
+        object $resourceModel,
+        ResourceModelMetadata $metadata,
+        DatabaseAdapterInterface $adapter,
+        TenantWriteScope $scope,
+    ): void
     {
         $primaryKey = $this->requirePrimaryKey($metadata);
         $pkColumn = $metadata->column($primaryKey)->columnName;
         $pkValue = $this->propertyValue($resourceModel, $primaryKey);
+        $params = ['__pk' => $pkValue];
+        $guards = [];
 
-        (new DeleteQuery($metadata->tableName, $adapter))->execute($pkColumn, $pkValue);
+        $tenantColumn = $this->scopedTenantColumn($metadata, $scope);
+        if ($tenantColumn !== null) {
+            $guards[] = sprintf('`%s` = :__tenant_scope', $tenantColumn->columnName);
+            $params['__tenant_scope'] = $scope->tenantValue;
+        }
+
+        $expectedVersion = $this->expectedVersion($resourceModel, $metadata);
+        if ($expectedVersion !== null) {
+            $versionColumn = $metadata->column($metadata->versionProperty)->columnName;
+            $guards[] = sprintf('`%s` = :__expected_version', $versionColumn);
+            $params['__expected_version'] = $expectedVersion;
+        }
+
+        $sql = sprintf(
+            'DELETE FROM `%s` WHERE `%s` = :__pk%s',
+            $metadata->tableName,
+            $pkColumn,
+            $guards === [] ? '' : ' AND ' . implode(' AND ', $guards),
+        );
+        $result = $adapter->execute($sql, $params);
+
+        if ($expectedVersion !== null && $result->rowCount === 0) {
+            throw $this->staleDelete($metadata, $expectedVersion);
+        }
     }
 
-    private function persistOwnedRelations(object $resourceModel, ResourceModelMetadata $metadata, bool $isInsert, DatabaseAdapterInterface $adapter): void
+    private function persistOwnedRelations(
+        object $resourceModel,
+        ResourceModelMetadata $metadata,
+        bool $isInsert,
+        DatabaseAdapterInterface $adapter,
+        TenantWriteScope $scope,
+    ): void
     {
         foreach ($metadata->relations() as $relation) {
             $value = $this->unwrapRelationValue($this->propertyValue($resourceModel, $relation->propertyName));
 
             if ($relation->writePolicy === RelationWritePolicy::CascadeOwned) {
-                $this->persistCascadeOwnedRelation($resourceModel, $metadata, $relation, $value, $isInsert, $adapter);
+                $this->persistCascadeOwnedRelation($resourceModel, $metadata, $relation, $value, $isInsert, $adapter, $scope);
                 continue;
             }
 
@@ -333,11 +532,16 @@ final class AggregateWriteEngine
         }
     }
 
-    private function deleteOwnedRelations(object $resourceModel, ResourceModelMetadata $metadata, DatabaseAdapterInterface $adapter): void
+    private function deleteOwnedRelations(
+        object $resourceModel,
+        ResourceModelMetadata $metadata,
+        DatabaseAdapterInterface $adapter,
+        TenantWriteScope $scope,
+    ): void
     {
         foreach ($metadata->relations() as $relation) {
             if ($relation->writePolicy === RelationWritePolicy::CascadeOwned) {
-                $this->deleteCascadeOwnedRelation($resourceModel, $metadata, $relation, $adapter);
+                $this->deleteCascadeOwnedRelation($resourceModel, $metadata, $relation, $adapter, $scope);
                 continue;
             }
 
@@ -354,13 +558,14 @@ final class AggregateWriteEngine
         mixed                 $value,
         bool                  $isInsert,
         DatabaseAdapterInterface $adapter,
+        TenantWriteScope $scope,
     ): void {
         $parentId = $this->propertyValue($resourceModel, $this->requirePrimaryKey($metadata));
 
         if (!$isInsert) {
             $targetMetadata = $this->metadata($relation->targetClass);
             $fkColumn = $targetMetadata->column($relation->foreignKey)->columnName;
-            (new DeleteQuery($targetMetadata->tableName, $adapter))->execute($fkColumn, $parentId);
+            $this->deleteRelatedRows($targetMetadata, $fkColumn, $parentId, $adapter, $scope);
         }
 
         if ($value === null) {
@@ -375,7 +580,11 @@ final class AggregateWriteEngine
                 ));
             }
 
-            $this->insertResourceModel($this->withPropertyValue($value, $relation->foreignKey, $parentId), $adapter);
+            $this->insertResourceModel(
+                $this->withPropertyValue($value, $relation->foreignKey, $parentId),
+                $adapter,
+                $scope,
+            );
             return;
         }
 
@@ -387,7 +596,11 @@ final class AggregateWriteEngine
                 ));
             }
 
-            $this->insertResourceModel($this->withPropertyValue($item, $relation->foreignKey, $parentId), $adapter);
+            $this->insertResourceModel(
+                $this->withPropertyValue($item, $relation->foreignKey, $parentId),
+                $adapter,
+                $scope,
+            );
         }
     }
 
@@ -396,12 +609,13 @@ final class AggregateWriteEngine
         ResourceModelMetadata $metadata,
         RelationMetadata      $relation,
         DatabaseAdapterInterface $adapter,
+        TenantWriteScope $scope,
     ): void {
         $targetMetadata = $this->metadata($relation->targetClass);
         $fkColumn = $targetMetadata->column($relation->foreignKey)->columnName;
         $parentId = $this->propertyValue($resourceModel, $this->requirePrimaryKey($metadata));
 
-        (new DeleteQuery($targetMetadata->tableName, $adapter))->execute($fkColumn, $parentId);
+        $this->deleteRelatedRows($targetMetadata, $fkColumn, $parentId, $adapter, $scope);
     }
 
     private function syncPivotRelation(
@@ -450,6 +664,121 @@ final class AggregateWriteEngine
         foreach (array_chunk($rows, self::PIVOT_INSERT_CHUNK) as $chunk) {
             $insert->executeBatch($chunk);
         }
+    }
+
+    private function deleteRelatedRows(
+        ResourceModelMetadata $metadata,
+        string $foreignKeyColumn,
+        mixed $foreignKeyValue,
+        DatabaseAdapterInterface $adapter,
+        TenantWriteScope $scope,
+    ): void {
+        $delete = new DeleteQuery($metadata->tableName, $adapter);
+        $delete->where($foreignKeyColumn, '=', $foreignKeyValue);
+
+        $tenantColumn = $this->scopedTenantColumn($metadata, $scope);
+        if ($tenantColumn !== null) {
+            $delete->where($tenantColumn->columnName, '=', $scope->tenantValue);
+        }
+
+        $delete->executeWhere();
+    }
+
+    private function applyTenantScope(
+        object $resourceModel,
+        ResourceModelMetadata $metadata,
+        TenantWriteScope $scope,
+    ): object {
+        $tenantColumn = $this->scopedTenantColumn($metadata, $scope);
+        if ($tenantColumn === null) {
+            return $resourceModel;
+        }
+
+        return $this->withPropertyValue($resourceModel, $tenantColumn->propertyName, $scope->tenantValue);
+    }
+
+    /**
+     * Verify and lock a scoped update/delete target before relation writes.
+     *
+     * MySQL uses FOR UPDATE so the root cannot disappear between this check and
+     * the child mutations. SQLite rejects that syntax, but its outer write
+     * transaction is already serialized by TransactionManager's BEGIN IMMEDIATE
+     * path. Hand-built engines without TransactionManager keep their documented
+     * legacy non-atomic semantics, while still refusing a cross-tenant target.
+     */
+    private function assertTargetWithinTenantScope(
+        object $resourceModel,
+        ResourceModelMetadata $metadata,
+        DatabaseAdapterInterface $adapter,
+        TenantWriteScope $scope,
+    ): void {
+        $tenantColumn = $this->scopedTenantColumn($metadata, $scope);
+        if ($tenantColumn === null) {
+            return;
+        }
+
+        $primaryKey = $this->requirePrimaryKey($metadata);
+        $pkColumn = $metadata->column($primaryKey)->columnName;
+        $sql = sprintf(
+            'SELECT 1 FROM `%s` WHERE `%s` = :__pk AND `%s` = :__tenant_scope LIMIT 1%s',
+            $metadata->tableName,
+            $pkColumn,
+            $tenantColumn->columnName,
+            $adapter->supports(ServerCapability::LockingReads) ? ' FOR UPDATE' : '',
+        );
+        $result = $adapter->execute($sql, [
+            '__pk' => $this->propertyValue($resourceModel, $primaryKey),
+            '__tenant_scope' => $scope->tenantValue,
+        ]);
+
+        if ($result->rows === []) {
+            throw TenantScopeViolationException::forWrite($metadata->className);
+        }
+    }
+
+    private function scopedTenantColumn(
+        ResourceModelMetadata $metadata,
+        TenantWriteScope $scope,
+    ): ?ColumnMetadata {
+        if ($metadata->tenantPolicy === null || $scope->bypass) {
+            return null;
+        }
+
+        if ($scope->tenantValue === null) {
+            throw new \LogicException(sprintf(
+                'Write for tenant-scoped resource model %s requires tenant context. Call forTenant() or withoutTenantScope().',
+                $metadata->className,
+            ));
+        }
+
+        return $metadata->tenantColumn();
+    }
+
+    private function expectedVersion(object $resourceModel, ResourceModelMetadata $metadata): ?int
+    {
+        if ($metadata->versionProperty === null) {
+            return null;
+        }
+
+        $expectedVersion = $this->propertyValue($resourceModel, $metadata->versionProperty);
+        if (!is_numeric($expectedVersion)) {
+            throw new \LogicException(sprintf(
+                '#[Version] property %s::$%s must carry the read version (int) on delete.',
+                $resourceModel::class,
+                $metadata->versionProperty,
+            ));
+        }
+
+        return (int) $expectedVersion;
+    }
+
+    private function staleDelete(ResourceModelMetadata $metadata, int $expectedVersion): StaleAggregateException
+    {
+        return new StaleAggregateException(sprintf(
+            'Optimistic-lock miss deleting %s at version %d: the row was modified concurrently or no longer exists. Re-read and retry.',
+            $metadata->tableName,
+            $expectedVersion,
+        ));
     }
 
     private function validateReferenceOnlyRelations(object $resourceModel, ResourceModelMetadata $metadata): void

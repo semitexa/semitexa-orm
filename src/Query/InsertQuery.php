@@ -23,19 +23,29 @@ class InsertQuery
      */
     public function execute(array $data, bool $upsert = false): string
     {
-        $columns = array_keys($data);
-        $placeholders = array_map(fn(string $col) => ":{$col}", $columns);
+        if ($data === []) {
+            throw new \InvalidArgumentException('execute() requires at least one column to insert.');
+        }
 
-        $colList = implode(', ', array_map(fn(string $c) => "`{$c}`", $columns));
+        $columns = array_keys($data);
+        $params = [];
+        $placeholders = [];
+        foreach (array_values($data) as $index => $value) {
+            $name = 'v' . $index;
+            $placeholders[] = ':' . $name;
+            $params[$name] = $value;
+        }
+
+        $colList = implode(', ', array_map($this->quoteIdentifier(...), $columns));
         $phList = implode(', ', $placeholders);
 
-        $sql = "INSERT INTO `{$this->table}` ({$colList}) VALUES ({$phList})";
+        $sql = 'INSERT INTO ' . $this->quoteIdentifier($this->table) . " ({$colList}) VALUES ({$phList})";
 
         if ($upsert) {
             $sql .= $this->buildUpsertClause($columns);
         }
 
-        $result = $this->adapter->execute($sql, $data);
+        $result = $this->adapter->execute($sql, $params);
 
         return $result->lastInsertId;
     }
@@ -43,7 +53,8 @@ class InsertQuery
     /**
      * Insert multiple rows in a single query.
      *
-     * All rows must have the same set of columns (determined by the first row).
+     * All rows must have the same ordered set of columns (determined by the
+     * first row). The full batch is validated before SQL is executed.
      * Returns the last insert ID of the first inserted row (MySQL behaviour).
      *
      * @param array<int, array<string, mixed>> $rows
@@ -57,20 +68,35 @@ class InsertQuery
         }
 
         $columns = array_keys($rows[0]);
-        $colList = implode(', ', array_map(fn(string $c) => "`{$c}`", $columns));
+        if ($columns === []) {
+            throw new \InvalidArgumentException('executeBatch() rows must contain at least one column.');
+        }
+        foreach ($rows as $index => $row) {
+            if (array_keys($row) !== $columns) {
+                throw new \InvalidArgumentException(sprintf(
+                    'executeBatch() row %d must have the same columns in the same order as row 0.',
+                    $index,
+                ));
+            }
+        }
+
+        $colList = implode(', ', array_map($this->quoteIdentifier(...), $columns));
 
         $valueSets = [];
         $params = [];
 
         foreach ($rows as $i => $row) {
-            $phList = implode(', ', array_map(fn(string $col) => ":{$col}_{$i}", $columns));
-            $valueSets[] = "({$phList})";
-            foreach ($columns as $col) {
-                $params["{$col}_{$i}"] = $row[$col];
+            $rowPlaceholders = [];
+            foreach ($columns as $columnIndex => $column) {
+                $name = sprintf('v%d_%d', $i, $columnIndex);
+                $rowPlaceholders[] = ':' . $name;
+                $params[$name] = $row[$column];
             }
+            $phList = implode(', ', $rowPlaceholders);
+            $valueSets[] = "({$phList})";
         }
 
-        $sql = "INSERT INTO `{$this->table}` ({$colList}) VALUES " . implode(', ', $valueSets);
+        $sql = 'INSERT INTO ' . $this->quoteIdentifier($this->table) . " ({$colList}) VALUES " . implode(', ', $valueSets);
 
         $result = $this->adapter->execute($sql, $params);
 
@@ -86,12 +112,27 @@ class InsertQuery
     {
         if ($this->adapter instanceof SqliteAdapter) {
             // SQLite: ON CONFLICT DO UPDATE SET
-            $updateParts = array_map(fn(string $c) => "\"{$c}\" = excluded.\"{$c}\"", $columns);
+            $updateParts = array_map(function (string $column): string {
+                $quoted = $this->quoteIdentifier($column);
+                return "{$quoted} = excluded.{$quoted}";
+            }, $columns);
             return ' ON CONFLICT DO UPDATE SET ' . implode(', ', $updateParts);
         }
 
         // MySQL: ON DUPLICATE KEY UPDATE
-        $updateParts = array_map(fn(string $c) => "`{$c}` = VALUES(`{$c}`)", $columns);
+        $updateParts = array_map(function (string $column): string {
+            $quoted = $this->quoteIdentifier($column);
+            return "{$quoted} = VALUES({$quoted})";
+        }, $columns);
         return ' ON DUPLICATE KEY UPDATE ' . implode(', ', $updateParts);
+    }
+
+    private function quoteIdentifier(string $identifier): string
+    {
+        if ($identifier === '') {
+            throw new \InvalidArgumentException('SQL identifiers must not be empty.');
+        }
+
+        return '`' . str_replace('`', '``', $identifier) . '`';
     }
 }
