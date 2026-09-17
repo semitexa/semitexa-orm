@@ -1025,11 +1025,16 @@ final class ResourceModelQuery
 
     private function resolveTenantColumnName(ResourceModelMetadata $metadata): string
     {
-        return $metadata->tenantColumn()?->columnName
-            ?? throw new \LogicException(sprintf(
+        $column = $metadata->tenantColumn();
+
+        if ($column === null) {
+            throw new \LogicException(sprintf(
                 'Tenant metadata is missing for %s.',
                 $metadata->className,
             ));
+        }
+
+        return $column->columnName;
     }
 
     private function assertColumnBelongsToCurrentResourceModel(ColumnRef $column): void
