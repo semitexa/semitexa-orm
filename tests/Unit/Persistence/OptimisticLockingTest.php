@@ -16,6 +16,8 @@ use Semitexa\Orm\Application\Service\Mapping\MapperRegistry;
 use Semitexa\Orm\Domain\Model\ConnectionConfig;
 use Semitexa\Orm\Exception\StaleAggregateException;
 use Semitexa\Orm\OrmManager;
+use Semitexa\Orm\Application\Service\Persistence\AggregateWriteEngine;
+use Semitexa\Orm\Application\Service\Hydration\ResourceModelHydrator;
 
 /**
  * #[Version] optimistic locking: an UPDATE guards on the version the caller
@@ -33,7 +35,11 @@ final class OptimisticLockingTest extends TestCase
         $this->orm->getAdapter()->execute(
             'CREATE TABLE ol_notes (id TEXT PRIMARY KEY, body TEXT, version INTEGER)'
         );
+        $this->orm->getAdapter()->execute(
+            'CREATE TABLE ol_comments (id TEXT PRIMARY KEY, noteId TEXT, body TEXT)'
+        );
         $this->orm->getAdapter()->execute("INSERT INTO ol_notes VALUES ('n1', 'first', 1)");
+        $this->orm->getAdapter()->execute("INSERT INTO ol_comments VALUES ('c1', 'n1', 'a comment')");
     }
 
     #[Test]
@@ -135,6 +141,50 @@ final class OptimisticLockingTest extends TestCase
         );
     }
 
+    #[Test]
+    public function a_stale_delete_is_refused_before_anything_is_removed(): void
+    {
+        // A cascade delete removes owned rows FIRST and guards the root DELETE
+        // on #[Version], so a stale root used to throw only after the children
+        // were already gone. Inside a transaction the rollback hides that;
+        // without a TransactionManager — the documented legacy path, and what
+        // a hand-built engine gets — nothing undoes it, and rows the caller
+        // never asked to delete are gone for good.
+        //
+        // The engine here is hand-built ON PURPOSE: it is the unprotected path
+        // that needed the guard.
+        $adapter = $this->orm->getAdapter();
+        $engine = new AggregateWriteEngine($adapter, new ResourceModelHydrator());
+
+        // Writer A moves the row to version 2 — done in SQL on purpose. Going
+        // through update() would ALSO replace the owned children (the domain
+        // model carries none, and replacing is what update means), which is
+        // existing behaviour and would destroy the very row this test is about
+        // before the delete is even attempted.
+        $adapter->execute("UPDATE ol_notes SET body = 'from A', version = 2 WHERE id = 'n1'");
+
+        $before = $adapter->query('SELECT body, version FROM ol_notes')->rows;
+
+        // Writer B still holds version 1 and asks for a delete.
+        try {
+            $engine->delete(new OlNoteDomain('n1', 'from B', 1), OlNoteFixture::class, $this->registry());
+            self::fail('A stale-version delete must throw StaleAggregateException.');
+        } catch (StaleAggregateException) {
+            // expected
+        }
+
+        self::assertSame(
+            $before,
+            $adapter->query('SELECT body, version FROM ol_notes')->rows,
+            'a refused delete must leave the root exactly as it was',
+        );
+        self::assertCount(
+            1,
+            $adapter->query('SELECT id FROM ol_comments')->rows,
+            'the owned child must survive a delete that was refused',
+        );
+    }
+
     private function registry(): MapperRegistry
     {
         $registry = new MapperRegistry();
@@ -159,6 +209,10 @@ final readonly class OlNoteDomain
 #[FromTable(name: 'ol_notes')]
 final readonly class OlNoteFixture
 {
+    use \Semitexa\Orm\Metadata\HasColumnReferences;
+    use \Semitexa\Orm\Metadata\HasRelationReferences;
+
+    /** @param list<OlCommentFixture> $comments */
     public function __construct(
         #[PrimaryKey(strategy: 'uuid')]
         #[Column(type: MySqlType::Varchar, length: 36)]
@@ -170,6 +224,31 @@ final readonly class OlNoteFixture
         #[Version]
         #[Column(type: MySqlType::Int)]
         public int $version,
+
+        // OWNED, so a delete cascades to it — which is what makes a lost child
+        // observable when a stale root is refused half way through.
+        #[\Semitexa\Orm\Attribute\HasMany(
+            target: OlCommentFixture::class,
+            foreignKey: 'noteId',
+            writePolicy: \Semitexa\Orm\Domain\Enum\RelationWritePolicy::CascadeOwned,
+        )]
+        public array $comments = [],
+    ) {}
+}
+
+#[FromTable(name: 'ol_comments')]
+final readonly class OlCommentFixture
+{
+    public function __construct(
+        #[PrimaryKey(strategy: 'uuid')]
+        #[Column(type: MySqlType::Varchar, length: 36)]
+        public string $id,
+
+        #[Column(type: MySqlType::Varchar, length: 36)]
+        public string $noteId,
+
+        #[Column(type: MySqlType::Varchar, length: 255)]
+        public string $body,
     ) {}
 }
 

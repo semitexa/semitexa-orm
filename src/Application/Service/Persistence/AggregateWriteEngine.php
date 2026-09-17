@@ -258,8 +258,61 @@ final class AggregateWriteEngine
             return;
         }
 
+        // THE VERSION IS CHECKED BEFORE THE CHILDREN GO. A cascade delete
+        // removes owned rows first and guards the root DELETE on #[Version],
+        // so a stale root threw AFTER the children were already gone — and
+        // without a TransactionManager there is nothing to roll that back.
+        // The documented legacy path may be non-atomic; it must not be a way
+        // to lose rows a caller never asked to delete.
+        $this->assertExpectedVersionStillCurrent($resourceModel, $metadata, $adapter, $scope);
+
         $this->deleteOwnedRelations($resourceModel, $metadata, $adapter, $scope);
         $this->executeDelete($resourceModel, $metadata, $adapter, $scope);
+    }
+
+    /**
+     * Read the root's current version, and refuse before anything is removed.
+     *
+     * Inside a transaction this is belt and braces — the guarded DELETE would
+     * catch it and the rollback would undo the children. Outside one it is the
+     * only thing standing between a stale write and permanently missing rows.
+     */
+    private function assertExpectedVersionStillCurrent(
+        object $resourceModel,
+        ResourceModelMetadata $metadata,
+        DatabaseAdapterInterface $adapter,
+        TenantWriteScope $scope,
+    ): void {
+        $expectedVersion = $this->expectedVersion($resourceModel, $metadata);
+        if ($expectedVersion === null || $metadata->versionProperty === null) {
+            return;
+        }
+
+        $primaryKey = $this->requirePrimaryKey($metadata);
+        $params = [
+            '__pk' => $this->propertyValue($resourceModel, $primaryKey),
+            '__expected_version' => $expectedVersion,
+        ];
+
+        $guards = [sprintf('`%s` = :__expected_version', $metadata->column($metadata->versionProperty)->columnName)];
+
+        $tenantColumn = $this->scopedTenantColumn($metadata, $scope);
+        if ($tenantColumn !== null) {
+            $guards[] = sprintf('`%s` = :__tenant_scope', $tenantColumn->columnName);
+            $params['__tenant_scope'] = $scope->tenantValue;
+        }
+
+        $sql = sprintf(
+            'SELECT 1 FROM `%s` WHERE `%s` = :__pk AND %s LIMIT 1%s',
+            $metadata->tableName,
+            $metadata->column($primaryKey)->columnName,
+            implode(' AND ', $guards),
+            $adapter->supports(ServerCapability::LockingReads) ? ' FOR UPDATE' : '',
+        );
+
+        if ($adapter->execute($sql, $params)->rows === []) {
+            throw $this->staleDelete($metadata, $expectedVersion);
+        }
     }
 
     private function executeInsert(object $resourceModel, ResourceModelMetadata $metadata, DatabaseAdapterInterface $adapter): object
