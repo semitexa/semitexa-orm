@@ -30,6 +30,11 @@ final class OrmBootstrapValidator
         ?array $mapperClasses = null,
         ?array $domainModelClasses = null,
     ): OrmBootstrapReport {
+        // Remembered before the defaults are filled in, because "the caller named
+        // a subset" and "we discovered everything" are the same array afterwards
+        // and must not lead to the same decision below.
+        $mapperClassesWereGiven = $mapperClasses !== null;
+
         $resourceModelClasses ??= $this->classDiscovery()->findClassesWithAttribute(FromTable::class);
         $mapperClasses ??= $this->classDiscovery()->findClassesWithAttribute(AsMapper::class);
         /** @var list<class-string> $resourceModelClasses */
@@ -64,10 +69,7 @@ final class OrmBootstrapValidator
             }
         }
 
-        $mapperRegistry = $this->mapperRegistry ?? new MapperRegistry($this->classDiscovery);
-        $mapperRegistry->build(
-            mapperClasses: $mapperClasses,
-        );
+        $mapperRegistry = $this->registryToInspect($mapperClasses, $mapperClassesWereGiven);
 
         $domainModelClasses ??= array_values(array_unique(array_map(
             static fn ($definition) => $definition->domainModelClass,
@@ -81,6 +83,45 @@ final class OrmBootstrapValidator
             domainModelClasses: $domainModelClasses,
             crossConnectionWarnings: $crossConnectionWarnings,
         );
+    }
+
+    /**
+     * The registry this report describes — never one this validator has to
+     * damage to produce it.
+     *
+     * A DIAGNOSTIC MUST NOT REBUILD WHAT IT INSPECTS. This used to call
+     * build() on the injected registry, and OrmManager::getBootstrapValidator()
+     * injects the LIVE one. With no arguments that rebuilt the same content and
+     * threw away the memoized mapper instances; with a subset —
+     * `validate(mapperClasses: [OneMapper::class])`, which is the public API and
+     * the shape a doctor check naturally writes — it left the application's
+     * registry holding exactly that one mapper, and every other mapToDomain()
+     * in the worker threw MissingMapperException until something rebuilt it.
+     * Nothing does: OrmManager builds the registry only when its field is null.
+     *
+     * The same hazard the memoization comment on getMapperRegistry() was written
+     * for: build() walks the classmap through ClassDiscovery, whose autoloads
+     * suspend the coroutine under SWOOLE_HOOK_ALL, so a rebuild is visible to
+     * every request in flight on that worker.
+     *
+     * So: a caller-named subset is always inspected in a registry of this
+     * method's own making. Otherwise the live one is read as it stands — it was
+     * built from the same classmap this validate() just walked — and only when
+     * it holds nothing (never built, or genuinely empty) is a local one built,
+     * which yields the same answer either way.
+     *
+     * @param list<class-string> $mapperClasses
+     */
+    private function registryToInspect(array $mapperClasses, bool $mapperClassesWereGiven): MapperRegistry
+    {
+        if (!$mapperClassesWereGiven && $this->mapperRegistry !== null && $this->mapperRegistry->all() !== []) {
+            return $this->mapperRegistry;
+        }
+
+        $registry = new MapperRegistry($this->classDiscovery);
+        $registry->build(mapperClasses: $mapperClasses);
+
+        return $registry;
     }
 
     private function classDiscovery(): ClassDiscovery
