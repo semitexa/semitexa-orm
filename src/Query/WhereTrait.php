@@ -147,6 +147,19 @@ trait WhereTrait
      * Append a raw SQL fragment to the WHERE clause (joined with AND).
      * Use positional ? placeholders — values are bound immediately.
      *
+     * THE FRAGMENT IS TRUSTED VERBATIM. The bindings are bound; $sql is not —
+     * it is concatenated into the statement as given, which makes this the one
+     * door in the ORM an injection can still come through, and it comes from
+     * the caller:
+     *
+     *     ->whereRaw('`status` = ?', [$status])              // fine
+     *     ->whereRaw('`name` = ' . $request->get('q'))       // INJECTION
+     *
+     * Every value belongs in a `?`; every identifier that is not written out
+     * by hand belongs in SqlIdentifier. Same contract as
+     * {@see \Semitexa\Orm\Query\ResourceModelQuery::whereRaw()}, stated
+     * here too because a caller reaching for this trait does not read that one.
+     *
      * @param list<mixed> $bindings
      */
     public function whereRaw(string $sql, array $bindings = []): static

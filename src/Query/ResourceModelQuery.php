@@ -236,6 +236,21 @@ final class ResourceModelQuery
      * Values are bound as named parameters. Use `?` for each binding.
      * Intended as an escape hatch — prefer the typed helpers.
      *
+     * THE FRAGMENT IS TRUSTED VERBATIM, AND THAT IS THE WHOLE CONTRACT. The
+     * BINDINGS are safe — they are bound, never interpolated — but $sql is
+     * concatenated into the statement exactly as given. So this method is the
+     * one door in the ORM through which SQL injection can still arrive, and it
+     * arrives from the CALLER:
+     *
+     *     ->whereRaw('`status` = ? AND `score` > ?', [$status, $score])   // fine
+     *     ->whereRaw('`name` = ' . $request->get('q'))                    // INJECTION
+     *
+     * Every VALUE belongs in a `?`. Every IDENTIFIER that is not written out
+     * by hand belongs in {@see SqlIdentifier}. A fragment
+     * assembled from request data is an injection the ORM cannot see, cannot
+     * bind and cannot refuse — the name reads as "advanced", and this is what
+     * advanced means here.
+     *
      * @param array<int, mixed> $bindings
      */
     public function whereRaw(string $sql, array $bindings = []): self
