@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Query;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
+use Semitexa\Orm\Adapter\SqlIdentifier;
 use Semitexa\Orm\Adapter\SqliteAdapter;
 
 class InsertQuery
@@ -36,10 +37,10 @@ class InsertQuery
             $params[$name] = $value;
         }
 
-        $colList = implode(', ', array_map($this->quoteIdentifier(...), $columns));
+        $colList = implode(', ', array_map(SqlIdentifier::quote(...), $columns));
         $phList = implode(', ', $placeholders);
 
-        $sql = 'INSERT INTO ' . $this->quoteIdentifier($this->table) . " ({$colList}) VALUES ({$phList})";
+        $sql = 'INSERT INTO ' . SqlIdentifier::quote($this->table) . " ({$colList}) VALUES ({$phList})";
 
         if ($upsert) {
             $sql .= $this->buildUpsertClause($columns);
@@ -80,7 +81,7 @@ class InsertQuery
             }
         }
 
-        $colList = implode(', ', array_map($this->quoteIdentifier(...), $columns));
+        $colList = implode(', ', array_map(SqlIdentifier::quote(...), $columns));
 
         $valueSets = [];
         $params = [];
@@ -96,7 +97,7 @@ class InsertQuery
             $valueSets[] = "({$phList})";
         }
 
-        $sql = 'INSERT INTO ' . $this->quoteIdentifier($this->table) . " ({$colList}) VALUES " . implode(', ', $valueSets);
+        $sql = 'INSERT INTO ' . SqlIdentifier::quote($this->table) . " ({$colList}) VALUES " . implode(', ', $valueSets);
 
         $result = $this->adapter->execute($sql, $params);
 
@@ -113,7 +114,7 @@ class InsertQuery
         if ($this->adapter instanceof SqliteAdapter) {
             // SQLite: ON CONFLICT DO UPDATE SET
             $updateParts = array_map(function (string $column): string {
-                $quoted = $this->quoteIdentifier($column);
+                $quoted = SqlIdentifier::quote($column);
                 return "{$quoted} = excluded.{$quoted}";
             }, $columns);
             return ' ON CONFLICT DO UPDATE SET ' . implode(', ', $updateParts);
@@ -121,18 +122,9 @@ class InsertQuery
 
         // MySQL: ON DUPLICATE KEY UPDATE
         $updateParts = array_map(function (string $column): string {
-            $quoted = $this->quoteIdentifier($column);
+            $quoted = SqlIdentifier::quote($column);
             return "{$quoted} = VALUES({$quoted})";
         }, $columns);
         return ' ON DUPLICATE KEY UPDATE ' . implode(', ', $updateParts);
-    }
-
-    private function quoteIdentifier(string $identifier): string
-    {
-        if ($identifier === '') {
-            throw new \InvalidArgumentException('SQL identifiers must not be empty.');
-        }
-
-        return '`' . str_replace('`', '``', $identifier) . '`';
     }
 }

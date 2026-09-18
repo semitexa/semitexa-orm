@@ -7,6 +7,7 @@ namespace Semitexa\Orm\Application\Service\Hydration;
 use Semitexa\Orm\Domain\Model\RelationState;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
+use Semitexa\Orm\Adapter\SqlIdentifier;
 use Semitexa\Orm\Metadata\RelationKind;
 use Semitexa\Orm\Metadata\RelationMetadata;
 use Semitexa\Orm\Metadata\ResourceModelMetadataRegistry;
@@ -233,11 +234,11 @@ final class ResourceModelRelationLoader
         $parentIdsList = array_keys($parentIds);
         $parentIdParams = $this->buildInParams($parentIdsList);
         $pivotSql = sprintf(
-            'SELECT `%s`, `%s` FROM `%s` WHERE `%s` IN (%s)',
-            $relation->foreignKey,
-            $relation->relatedKey,
-            $relation->pivotTable,
-            $relation->foreignKey,
+            'SELECT %s, %s FROM %s WHERE %s IN (%s)',
+            SqlIdentifier::quote($relation->foreignKey),
+            SqlIdentifier::quote($relation->relatedKey),
+            SqlIdentifier::quote($relation->pivotTable),
+            SqlIdentifier::quote($relation->foreignKey),
             $this->placeholdersForParams($parentIdParams),
         );
         $pivotRows = $this->adapter->execute($pivotSql, $parentIdParams)->rows;
@@ -314,9 +315,9 @@ final class ResourceModelRelationLoader
     {
         $params = $this->buildInParams($values);
         $sql = sprintf(
-            'SELECT * FROM `%s` WHERE `%s` IN (%s)',
-            $tableName,
-            $columnName,
+            'SELECT * FROM %s WHERE %s IN (%s)',
+            SqlIdentifier::quote($tableName),
+            SqlIdentifier::quote($columnName),
             $this->placeholdersForParams($params),
         );
 

@@ -10,6 +10,7 @@ use Semitexa\Orm\Domain\Enum\RelationWritePolicy;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Adapter\ServerCapability;
+use Semitexa\Orm\Adapter\SqlIdentifier;
 use Semitexa\Orm\Exception\InvalidRelationWriteException;
 use Semitexa\Orm\Exception\StaleAggregateException;
 use Semitexa\Orm\Exception\TenantScopeViolationException;
@@ -294,18 +295,18 @@ final class AggregateWriteEngine
             '__expected_version' => $expectedVersion,
         ];
 
-        $guards = [sprintf('`%s` = :__expected_version', $metadata->column($metadata->versionProperty)->columnName)];
+        $guards = [sprintf('%s = :__expected_version', SqlIdentifier::quote($metadata->column($metadata->versionProperty)->columnName))];
 
         $tenantColumn = $this->scopedTenantColumn($metadata, $scope);
         if ($tenantColumn !== null) {
-            $guards[] = sprintf('`%s` = :__tenant_scope', $tenantColumn->columnName);
+            $guards[] = sprintf('%s = :__tenant_scope', SqlIdentifier::quote($tenantColumn->columnName));
             $params['__tenant_scope'] = $scope->tenantValue;
         }
 
         $sql = sprintf(
-            'SELECT 1 FROM `%s` WHERE `%s` = :__pk AND %s LIMIT 1%s',
-            $metadata->tableName,
-            $metadata->column($primaryKey)->columnName,
+            'SELECT 1 FROM %s WHERE %s = :__pk AND %s LIMIT 1%s',
+            SqlIdentifier::quote($metadata->tableName),
+            SqlIdentifier::quote($metadata->column($primaryKey)->columnName),
             implode(' AND ', $guards),
             $adapter->supports(ServerCapability::LockingReads) ? ' FOR UPDATE' : '',
         );
@@ -358,7 +359,7 @@ final class AggregateWriteEngine
             // narrows the WHERE clause; domain input can never move a row to a
             // different tenant or target another tenant by primary key alone.
             unset($row[$tenantColumn->columnName]);
-            $tenantGuard = sprintf(' AND `%s` = :__tenant_scope', $tenantColumn->columnName);
+            $tenantGuard = sprintf(' AND %s = :__tenant_scope', SqlIdentifier::quote($tenantColumn->columnName));
         }
 
         // Optimistic locking: guard on the #[Version] the caller READ and bump
@@ -378,11 +379,11 @@ final class AggregateWriteEngine
                 ));
             }
             $row[$versionColumn] = (int) $expectedVersion + 1;
-            $versionGuard = sprintf(' AND `%s` = :__expected_version', $versionColumn);
+            $versionGuard = sprintf(' AND %s = :__expected_version', SqlIdentifier::quote($versionColumn));
         }
 
         $assignments = implode(', ', array_map(
-            static fn (string $column): string => sprintf('`%s` = :%s', $column, $column),
+            static fn (string $column): string => sprintf('%s = :%s', SqlIdentifier::quote($column), $column),
             array_keys($row),
         ));
 
@@ -391,10 +392,10 @@ final class AggregateWriteEngine
         }
 
         $sql = sprintf(
-            'UPDATE `%s` SET %s WHERE `%s` = :__pk%s%s',
-            $metadata->tableName,
+            'UPDATE %s SET %s WHERE %s = :__pk%s%s',
+            SqlIdentifier::quote($metadata->tableName),
             $assignments,
-            $pkColumn,
+            SqlIdentifier::quote($pkColumn),
             $tenantGuard,
             $versionGuard,
         );
@@ -439,12 +440,12 @@ final class AggregateWriteEngine
             '__deleted_at' => (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s'),
             '__pk' => $this->propertyValue($resourceModel, $primaryKey),
         ];
-        $assignments = [sprintf('`%s` = :__deleted_at', $softDelete->columnName)];
+        $assignments = [sprintf('%s = :__deleted_at', SqlIdentifier::quote($softDelete->columnName))];
         $guards = [];
 
         $tenantColumn = $this->scopedTenantColumn($metadata, $scope);
         if ($tenantColumn !== null) {
-            $guards[] = sprintf('`%s` = :__tenant_scope', $tenantColumn->columnName);
+            $guards[] = sprintf('%s = :__tenant_scope', SqlIdentifier::quote($tenantColumn->columnName));
             $params['__tenant_scope'] = $scope->tenantValue;
         }
 
@@ -455,17 +456,17 @@ final class AggregateWriteEngine
         $expectedVersion = $this->expectedVersion($resourceModel, $metadata);
         if ($expectedVersion !== null && $metadata->versionProperty !== null) {
             $versionColumn = $metadata->column($metadata->versionProperty)->columnName;
-            $assignments[] = sprintf('`%s` = :__next_version', $versionColumn);
-            $guards[] = sprintf('`%s` = :__expected_version', $versionColumn);
+            $assignments[] = sprintf('%s = :__next_version', SqlIdentifier::quote($versionColumn));
+            $guards[] = sprintf('%s = :__expected_version', SqlIdentifier::quote($versionColumn));
             $params['__next_version'] = $expectedVersion + 1;
             $params['__expected_version'] = $expectedVersion;
         }
 
         $sql = sprintf(
-            'UPDATE `%s` SET %s WHERE `%s` = :__pk%s',
-            $metadata->tableName,
+            'UPDATE %s SET %s WHERE %s = :__pk%s',
+            SqlIdentifier::quote($metadata->tableName),
             implode(', ', $assignments),
-            $pkColumn,
+            SqlIdentifier::quote($pkColumn),
             $guards === [] ? '' : ' AND ' . implode(' AND ', $guards),
         );
         $result = $adapter->execute($sql, $params);
@@ -490,7 +491,7 @@ final class AggregateWriteEngine
 
         $tenantColumn = $this->scopedTenantColumn($metadata, $scope);
         if ($tenantColumn !== null) {
-            $guards[] = sprintf('`%s` = :__tenant_scope', $tenantColumn->columnName);
+            $guards[] = sprintf('%s = :__tenant_scope', SqlIdentifier::quote($tenantColumn->columnName));
             $params['__tenant_scope'] = $scope->tenantValue;
         }
 
@@ -501,14 +502,14 @@ final class AggregateWriteEngine
         $expectedVersion = $this->expectedVersion($resourceModel, $metadata);
         if ($expectedVersion !== null && $metadata->versionProperty !== null) {
             $versionColumn = $metadata->column($metadata->versionProperty)->columnName;
-            $guards[] = sprintf('`%s` = :__expected_version', $versionColumn);
+            $guards[] = sprintf('%s = :__expected_version', SqlIdentifier::quote($versionColumn));
             $params['__expected_version'] = $expectedVersion;
         }
 
         $sql = sprintf(
-            'DELETE FROM `%s` WHERE `%s` = :__pk%s',
-            $metadata->tableName,
-            $pkColumn,
+            'DELETE FROM %s WHERE %s = :__pk%s',
+            SqlIdentifier::quote($metadata->tableName),
+            SqlIdentifier::quote($pkColumn),
             $guards === [] ? '' : ' AND ' . implode(' AND ', $guards),
         );
         $result = $adapter->execute($sql, $params);
@@ -728,10 +729,10 @@ final class AggregateWriteEngine
         $primaryKey = $this->requirePrimaryKey($metadata);
         $pkColumn = $metadata->column($primaryKey)->columnName;
         $sql = sprintf(
-            'SELECT 1 FROM `%s` WHERE `%s` = :__pk AND `%s` = :__tenant_scope LIMIT 1%s',
-            $metadata->tableName,
-            $pkColumn,
-            $tenantColumn->columnName,
+            'SELECT 1 FROM %s WHERE %s = :__pk AND %s = :__tenant_scope LIMIT 1%s',
+            SqlIdentifier::quote($metadata->tableName),
+            SqlIdentifier::quote($pkColumn),
+            SqlIdentifier::quote($tenantColumn->columnName),
             $adapter->supports(ServerCapability::LockingReads) ? ' FOR UPDATE' : '',
         );
         $result = $adapter->execute($sql, [

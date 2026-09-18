@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Application\Service\Sync;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
+use Semitexa\Orm\Adapter\SqlIdentifier;
 use Semitexa\Orm\Application\Service\Hydration\ResourceModelHydrator;
 use Semitexa\Orm\Domain\Model\ResourceMetadata;
 
@@ -80,7 +81,7 @@ class SmartUpsert
     private function batchUpsert(string $table, string $pkColumn, array $rows): array
     {
         $columns   = array_keys($rows[0]);
-        $colList   = implode(', ', array_map(fn(string $c) => "`{$c}`", $columns));
+        $colList   = implode(', ', SqlIdentifier::quoteAll($columns));
         $valueSets = [];
         $params    = [];
 
@@ -98,13 +99,14 @@ class SmartUpsert
         $updateClauses = [];
         foreach ($columns as $col) {
             if ($col !== $pkColumn) {
-                $updateClauses[] = "`{$col}` = VALUES(`{$col}`)";
+                $quoted = SqlIdentifier::quote($col);
+                $updateClauses[] = "{$quoted} = VALUES({$quoted})";
             }
         }
 
         $sql = sprintf(
-            'INSERT INTO `%s` (%s) VALUES %s ON DUPLICATE KEY UPDATE %s',
-            $table,
+            'INSERT INTO %s (%s) VALUES %s ON DUPLICATE KEY UPDATE %s',
+            SqlIdentifier::quote($table),
             $colList,
             implode(', ', $valueSets),
             implode(', ', $updateClauses),

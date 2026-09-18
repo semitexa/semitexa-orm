@@ -20,6 +20,7 @@ use Semitexa\Core\Resource\Pagination\CollectionPage;
 use Semitexa\Core\Resource\Sort\CollectionSortRequest;
 use Semitexa\Core\Resource\Sort\SortDirection;
 use Semitexa\Core\Resource\Sort\SortTerm;
+use Semitexa\Orm\Adapter\SqlIdentifier;
 use Semitexa\Orm\Metadata\ColumnRef;
 
 /**
@@ -325,12 +326,12 @@ final class CollectionQueryCompiler implements CollectionQueryCompilerInterface
         foreach ($effectiveTerms as $i => $term) {
             $parts = [];
             for ($j = 0; $j < $i; $j++) {
-                $parts[] = sprintf('`%s` = ?', $this->columnFor($modelClass, $effectiveTerms[$j]->field, $fieldMap)->columnName);
+                $parts[] = sprintf('%s = ?', SqlIdentifier::quote($this->columnFor($modelClass, $effectiveTerms[$j]->field, $fieldMap)->columnName));
                 $bindings[] = $cursorValues[$j];
             }
             $parts[] = sprintf(
-                '`%s` %s ?',
-                $this->columnFor($modelClass, $term->field, $fieldMap)->columnName,
+                '%s %s ?',
+                SqlIdentifier::quote($this->columnFor($modelClass, $term->field, $fieldMap)->columnName),
                 $term->direction === SortDirection::Desc ? '<' : '>',
             );
             $bindings[] = $cursorValues[$i];

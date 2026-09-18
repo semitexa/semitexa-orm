@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Query;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
+use Semitexa\Orm\Adapter\SqlIdentifier;
 
 class DeleteQuery implements WhereCapableInterface
 {
@@ -60,6 +61,6 @@ class DeleteQuery implements WhereCapableInterface
 
     private function quotedTable(): string
     {
-        return '`' . str_replace('`', '``', $this->table) . '`';
+        return SqlIdentifier::quote($this->table);
     }
 }

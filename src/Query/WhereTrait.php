@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Query;
 
+use Semitexa\Orm\Adapter\SqlIdentifier;
+
 /**
  * Shared WHERE-building logic for query builders that support filtering.
  *
@@ -197,15 +199,14 @@ trait WhereTrait
             return $where['sql'];
         }
 
-        // Support qualified column (e.g. alias.column) for relation filters
-        // Security: escape backticks within column parts to prevent SQL injection (VULN-004)
+        // Support qualified column (e.g. alias.column) for relation filters.
+        // The backtick escaping this used to inline (VULN-004) is now
+        // SqlIdentifier's, so every builder gets the same rule.
         $column = $where['column'];
         if (!is_string($column)) {
             throw new \LogicException('WHERE condition column must be a string.');
         }
-        $col = str_contains($column, '.')
-            ? implode('.', array_map(fn(string $part) => '`' . str_replace('`', '``', $part) . '`', explode('.', $column, 2)))
-            : '`' . str_replace('`', '``', $column) . '`';
+        $col = SqlIdentifier::quoteQualified($column);
 
         if ($type === 'null') {
             return "{$col} {$where['operator']}";
