@@ -13,6 +13,25 @@ use Semitexa\Orm\Exception\DuplicateMapperException;
 use Semitexa\Orm\Exception\InvalidMapperDeclarationException;
 use Semitexa\Orm\Exception\MissingMapperException;
 
+/**
+ * The mappers this application declares, keyed by the PAIR they map.
+ *
+ * ## The key is the pair, and that is not incidental
+ *
+ * `resourceModel` alone is not the key, and neither is `domainModel`. One row
+ * shape legitimately becomes more than one domain model — the full record and a
+ * summary, say — and one domain model is legitimately persisted in more than one
+ * table. Both are ordinary, and both are why {@see DuplicateMapperException} is
+ * raised for a repeated PAIR and for nothing else.
+ *
+ * So there is no `mapperFor(string $resourceModelClass)`, and adding one would
+ * not be a missing convenience: it is a question this registry cannot answer.
+ * With two mappers on one resource, such a helper has to pick, and picking
+ * silently is how the wrong domain model reaches a caller that asked for
+ * neither. Every lookup here takes both halves, and every caller has both —
+ * `mapToDomain()` is given the resource INSTANCE and the domain class,
+ * `mapToSourceModel()` the domain instance and the resource class.
+ */
 final class MapperRegistry
 {
     /** @var array<string, MapperDefinition> */
@@ -138,8 +157,25 @@ final class MapperRegistry
             ));
         }
 
-        /** @var AsMapper $asMapper */
-        $asMapper = $attrs[0]->newInstance();
+        // A class carrying TWO #[AsMapper] declarations. AsMapper is
+        // #[Attribute(Attribute::TARGET_CLASS)] — not repeatable — so PHP
+        // refuses to instantiate it, which is right: the second declaration
+        // would otherwise be dropped in silence by the [0] above. The bare
+        // Error it raises names the attribute and nothing else, while every
+        // other bad declaration in this method says which mapper and what to do.
+        try {
+            /** @var AsMapper $asMapper */
+            $asMapper = $attrs[0]->newInstance();
+        } catch (\Error $e) {
+            throw new InvalidMapperDeclarationException(sprintf(
+                'Mapper class %s declares #[AsMapper] %d times. It maps ONE pair; '
+                . 'a resource model that becomes two domain models needs two mapper '
+                . 'classes, one per pair. (%s)',
+                $mapperClass,
+                count($attrs),
+                $e->getMessage(),
+            ), previous: $e);
+        }
         /** @var class-string $resourceModelClass */
         $resourceModelClass = $asMapper->resourceModel;
         /** @var class-string $domainModelClass */

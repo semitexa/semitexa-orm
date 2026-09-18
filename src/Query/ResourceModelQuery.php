@@ -6,6 +6,7 @@ namespace Semitexa\Orm\Query;
 
 use Semitexa\Core\Support\Row;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
+use Semitexa\Orm\Adapter\SqlIdentifier;
 use Semitexa\Orm\Application\Service\Hydration\ResourceModelHydrator;
 use Semitexa\Orm\Application\Service\Hydration\ResourceModelRelationLoader;
 use Semitexa\Orm\Application\Service\Hydration\TypeCaster;
@@ -235,6 +236,21 @@ final class ResourceModelQuery
      * Values are bound as named parameters. Use `?` for each binding.
      * Intended as an escape hatch — prefer the typed helpers.
      *
+     * THE FRAGMENT IS TRUSTED VERBATIM, AND THAT IS THE WHOLE CONTRACT. The
+     * BINDINGS are safe — they are bound, never interpolated — but $sql is
+     * concatenated into the statement exactly as given. So this method is the
+     * one door in the ORM through which SQL injection can still arrive, and it
+     * arrives from the CALLER:
+     *
+     *     ->whereRaw('`status` = ? AND `score` > ?', [$status, $score])   // fine
+     *     ->whereRaw('`name` = ' . $request->get('q'))                    // INJECTION
+     *
+     * Every VALUE belongs in a `?`. Every IDENTIFIER that is not written out
+     * by hand belongs in {@see SqlIdentifier}. A fragment
+     * assembled from request data is an injection the ORM cannot see, cannot
+     * bind and cannot refuse — the name reads as "advanced", and this is what
+     * advanced means here.
+     *
      * @param array<int, mixed> $bindings
      */
     public function whereRaw(string $sql, array $bindings = []): self
@@ -425,7 +441,7 @@ final class ResourceModelQuery
     {
         [$whereSql, $params] = $this->buildWhereAndParams();
         $metadata = $this->metadata();
-        $sql = sprintf('SELECT COUNT(*) AS __c FROM `%s`%s', $metadata->tableName, $whereSql);
+        $sql = sprintf('SELECT COUNT(*) AS __c FROM %s%s', SqlIdentifier::quote($metadata->tableName), $whereSql);
         $result = $this->adapter->execute($sql, $params);
         $column = $result->fetchColumn();
 
@@ -494,9 +510,9 @@ final class ResourceModelQuery
         $sql = sprintf(
             // Secondary sort on the group value: equal counts would otherwise
             // come back in a driver-dependent order.
-            'SELECT `%1$s` AS __g, COUNT(*) AS __c FROM `%2$s`%3$s GROUP BY `%1$s` ORDER BY __c DESC, `%1$s` ASC',
-            $group->columnName,
-            $metadata->tableName,
+            'SELECT %1$s AS __g, COUNT(*) AS __c FROM %2$s%3$s GROUP BY %1$s ORDER BY __c DESC, %1$s ASC',
+            SqlIdentifier::quote($group->columnName),
+            SqlIdentifier::quote($metadata->tableName),
             $whereSql,
         );
 
@@ -515,10 +531,10 @@ final class ResourceModelQuery
         [$whereSql, $params] = $this->buildWhereAndParams();
         $metadata = $this->metadata();
         $sql = sprintf(
-            'SELECT %s(`%s`) AS __a FROM `%s`%s',
+            'SELECT %s(%s) AS __a FROM %s%s',
             $function,
-            $column->columnName,
-            $metadata->tableName,
+            SqlIdentifier::quote($column->columnName),
+            SqlIdentifier::quote($metadata->tableName),
             $whereSql,
         );
 
@@ -537,7 +553,7 @@ final class ResourceModelQuery
     {
         [$whereSql, $params] = $this->buildWhereAndParams();
         $metadata = $this->metadata();
-        $sql = sprintf('SELECT 1 FROM `%s`%s LIMIT 1', $metadata->tableName, $whereSql);
+        $sql = sprintf('SELECT 1 FROM %s%s LIMIT 1', SqlIdentifier::quote($metadata->tableName), $whereSql);
         $result = $this->adapter->execute($sql, $params);
 
         return $result->rows !== [];
@@ -674,14 +690,14 @@ final class ResourceModelQuery
         $this->assertRequiredPoliciesAreSatisfied($metadata);
 
         [$whereSql, ] = $this->buildWhereAndParams();
-        $sql = sprintf('SELECT * FROM `%s`%s', $metadata->tableName, $whereSql);
+        $sql = sprintf('SELECT * FROM %s%s', SqlIdentifier::quote($metadata->tableName), $whereSql);
 
         if ($this->orderBys !== []) {
             $parts = [];
             foreach ($this->orderBys as $orderBy) {
                 $parts[] = sprintf(
-                    '`%s` %s',
-                    $orderBy['column']->columnName,
+                    '%s %s',
+                    SqlIdentifier::quote($orderBy['column']->columnName),
                     $orderBy['direction']->value,
                 );
             }
@@ -731,7 +747,7 @@ final class ResourceModelQuery
             $tenantColumn = $this->resolveTenantColumnName($metadata);
             $policyConditions[] = [
                 'connector' => 'AND',
-                'sql' => sprintf('`%s` = :tenant_scope', $tenantColumn),
+                'sql' => sprintf('%s = :tenant_scope', SqlIdentifier::quote($tenantColumn)),
             ];
             $params['tenant_scope'] = $this->tenantValue;
         }
@@ -740,12 +756,12 @@ final class ResourceModelQuery
             if ($this->onlySoftDeleted) {
                 $policyConditions[] = [
                     'connector' => 'AND',
-                    'sql' => sprintf('`%s` IS NOT NULL', $metadata->softDelete->columnName),
+                    'sql' => sprintf('%s IS NOT NULL', SqlIdentifier::quote($metadata->softDelete->columnName)),
                 ];
             } elseif (!$this->includeSoftDeleted) {
                 $policyConditions[] = [
                     'connector' => 'AND',
-                    'sql' => sprintf('`%s` IS NULL', $metadata->softDelete->columnName),
+                    'sql' => sprintf('%s IS NULL', SqlIdentifier::quote($metadata->softDelete->columnName)),
                 ];
             }
         }
@@ -808,8 +824,8 @@ final class ResourceModelQuery
         return match ($where['kind']) {
             'comparison' => [
                 sprintf(
-                    '`%s` %s :%s',
-                    $where['column']->columnName,
+                    '%s %s :%s',
+                    SqlIdentifier::quote($where['column']->columnName),
                     $where['operator']->value,
                     $where['param'],
                 ),
@@ -817,16 +833,16 @@ final class ResourceModelQuery
             ],
             'null' => [
                 sprintf(
-                    '`%s` IS %sNULL',
-                    $where['column']->columnName,
+                    '%s IS %sNULL',
+                    SqlIdentifier::quote($where['column']->columnName),
                     $where['negated'] ? 'NOT ' : '',
                 ),
                 [],
             ],
             'in' => [
                 sprintf(
-                    '`%s` %s (%s)',
-                    $where['column']->columnName,
+                    '%s %s (%s)',
+                    SqlIdentifier::quote($where['column']->columnName),
                     $where['negated'] ? 'NOT IN' : 'IN',
                     implode(', ', array_map(static fn (string $name): string => ':' . $name, $where['params'])),
                 ),
@@ -834,8 +850,8 @@ final class ResourceModelQuery
             ],
             'between' => [
                 sprintf(
-                    '`%s` BETWEEN :%s AND :%s',
-                    $where['column']->columnName,
+                    '%s BETWEEN :%s AND :%s',
+                    SqlIdentifier::quote($where['column']->columnName),
                     $where['fromParam'],
                     $where['toParam'],
                 ),
@@ -853,8 +869,8 @@ final class ResourceModelQuery
                 $params = [];
                 foreach ($where['members'] as $member) {
                     $fragments[] = sprintf(
-                        '`%s` %s :%s',
-                        $member['column']->columnName,
+                        '%s %s :%s',
+                        SqlIdentifier::quote($member['column']->columnName),
                         $where['operator']->value,
                         $member['param'],
                     );

@@ -4,12 +4,20 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Metadata;
 
+/**
+ * A relation of a resource model, named by the metadata rather than by a caller.
+ *
+ * Private constructor for the reason given on [[ColumnRef]]: a relation's
+ * foreignKey, relatedKey and pivotTable are interpolated into SQL by
+ * ResourceModelRelationLoader, so the name has to come from the attributes.
+ * Both factories validate the property against its metadata before building.
+ */
 final readonly class RelationRef
 {
     /**
      * @param class-string $resourceModelClass
      */
-    public function __construct(
+    private function __construct(
         public string $resourceModelClass,
         public string $propertyName,
     ) {}

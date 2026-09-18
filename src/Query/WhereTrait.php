@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Query;
 
+use Semitexa\Orm\Adapter\SqlIdentifier;
+
 /**
  * Shared WHERE-building logic for query builders that support filtering.
  *
@@ -145,6 +147,19 @@ trait WhereTrait
      * Append a raw SQL fragment to the WHERE clause (joined with AND).
      * Use positional ? placeholders — values are bound immediately.
      *
+     * THE FRAGMENT IS TRUSTED VERBATIM. The bindings are bound; $sql is not —
+     * it is concatenated into the statement as given, which makes this the one
+     * door in the ORM an injection can still come through, and it comes from
+     * the caller:
+     *
+     *     ->whereRaw('`status` = ?', [$status])              // fine
+     *     ->whereRaw('`name` = ' . $request->get('q'))       // INJECTION
+     *
+     * Every value belongs in a `?`; every identifier that is not written out
+     * by hand belongs in SqlIdentifier. Same contract as
+     * {@see \Semitexa\Orm\Query\ResourceModelQuery::whereRaw()}, stated
+     * here too because a caller reaching for this trait does not read that one.
+     *
      * @param list<mixed> $bindings
      */
     public function whereRaw(string $sql, array $bindings = []): static
@@ -197,15 +212,14 @@ trait WhereTrait
             return $where['sql'];
         }
 
-        // Support qualified column (e.g. alias.column) for relation filters
-        // Security: escape backticks within column parts to prevent SQL injection (VULN-004)
+        // Support qualified column (e.g. alias.column) for relation filters.
+        // The backtick escaping this used to inline (VULN-004) is now
+        // SqlIdentifier's, so every builder gets the same rule.
         $column = $where['column'];
         if (!is_string($column)) {
             throw new \LogicException('WHERE condition column must be a string.');
         }
-        $col = str_contains($column, '.')
-            ? implode('.', array_map(fn(string $part) => '`' . str_replace('`', '``', $part) . '`', explode('.', $column, 2)))
-            : '`' . str_replace('`', '``', $column) . '`';
+        $col = SqlIdentifier::quoteQualified($column);
 
         if ($type === 'null') {
             return "{$col} {$where['operator']}";
