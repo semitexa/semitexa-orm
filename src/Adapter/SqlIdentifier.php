@@ -35,8 +35,18 @@ final class SqlIdentifier
     public const DOUBLE_QUOTE = '"';
 
     /**
-     * @param self::BACKTICK|self::DOUBLE_QUOTE $quoteChar
-     * @throws \InvalidArgumentException when the name cannot be a SQL identifier at all
+     * $quoteChar is DOCUMENTED as a plain string and CHECKED at runtime, which
+     * is not a weaker contract than the literal union it used to declare — it
+     * is the only one that is true. The union told the analyser that no other
+     * value could arrive, so the guard below became unreachable code
+     * (`notIdentical.alwaysFalse`), every internal caller that forwards a
+     * `string $quoteChar` became an `argument.type` error, and the negative
+     * test that proves a single quote is refused could not be written at all.
+     * The values this accepts are {@see self::BACKTICK} and
+     * {@see self::DOUBLE_QUOTE}; anything else is an exception with a reason.
+     *
+     * @throws \InvalidArgumentException when the name cannot be a SQL identifier at all,
+     *                                   or the quote character is not one of the two
      */
     public static function quote(string $identifier, string $quoteChar = self::BACKTICK): string
     {
@@ -80,8 +90,16 @@ final class SqlIdentifier
     }
 
     /**
-     * @param list<string> $identifiers
-     * @return list<string>
+     * Every identifier quoted, KEYS PRESERVED.
+     *
+     * array_map() over a single array keeps its keys, so
+     * `['id' => 'user_id']` comes back as `['id' => '`user_id`']` — which is
+     * what the callers building a column map rely on. The old `list<string>`
+     * described neither the input those callers pass nor the shape they get
+     * back, and made a legitimate associative call an analyser error.
+     *
+     * @param array<array-key, string> $identifiers
+     * @return array<array-key, string>
      */
     public static function quoteAll(array $identifiers, string $quoteChar = self::BACKTICK): array
     {
