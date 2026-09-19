@@ -60,6 +60,8 @@ final class TenantScopedRelationLoadingTest extends TestCase
     #[Test]
     public function belongs_to_cannot_reveal_a_record_hidden_by_a_direct_scoped_query(): void
     {
+        $this->assertOwnerCanRead('record-b', 'tenant-b');
+
         $direct = $this->query(TenantRelationRecord::class)->forTenant('tenant-a')
             ->where(ColumnRef::for(TenantRelationRecord::class, 'id'), Operator::Equals, 'record-b')->fetchOne();
         self::assertNull($direct);
@@ -82,6 +84,8 @@ final class TenantScopedRelationLoadingTest extends TestCase
     #[DataProvider('relationKinds')]
     public function each_relation_filters_targets_and_stays_batched(string $relation, bool $many, int $queryCount): void
     {
+        $this->assertOwnerCanRead('record-b', 'tenant-b');
+
         $orders = $this->orders('tenant-a', [$relation]);
         $value = $orders['order-a']->{$relation}->value();
         $items = $many ? $value : [$value];
@@ -97,6 +101,8 @@ final class TenantScopedRelationLoadingTest extends TestCase
     #[Test]
     public function nested_relations_keep_the_root_scope(): void
     {
+        $this->assertOwnerCanRead('record-b', 'tenant-b');
+
         $orders = $this->orders('tenant-a', ['customer.detail']);
         $customer = $orders['order-a']->customer->value();
         self::assertSame('record-a', $customer->id);
@@ -222,6 +228,38 @@ final class TenantScopedRelationLoadingTest extends TestCase
         self::assertSame(['record-a'], array_column($results['a']['order-a']->items->value(), 'id'));
         self::assertNull($results['a']['order-a-cross']->customer->value());
         self::assertSame(['record-b-own'], array_column($results['b']['order-b']->items->value(), 'id'));
+    }
+
+    #[Test]
+    public function tenant_scope_and_system_bypass_are_mutually_exclusive(): void
+    {
+        $this->assertOwnerCanRead('record-b', 'tenant-b');
+
+        $scoped = $this->query(TenantRelationOrder::class)
+            ->withoutTenantScope(SystemScopeToken::issue())
+            ->forTenant('tenant-a')
+            ->withRelation(RelationRef::for(TenantRelationOrder::class, 'customer'))->fetchAll();
+        self::assertSame(['order-a', 'order-a-cross'], array_column($scoped, 'id'), 'forTenant() must retract an earlier bypass.');
+        self::assertNull(array_column($scoped, null, 'id')['order-a-cross']->customer->value());
+
+        $bypassed = $this->query(TenantRelationOrder::class)
+            ->forTenant('tenant-a')
+            ->withoutTenantScope(SystemScopeToken::issue())
+            ->withRelation(RelationRef::for(TenantRelationOrder::class, 'customer'))->fetchAll();
+        self::assertCount(3, $bypassed, 'withoutTenantScope() must retract an earlier forTenant().');
+        self::assertSame('record-b', array_column($bypassed, null, 'id')['order-a-cross']->customer->value()->id);
+    }
+
+    /**
+     * A negative assertion about a hidden row only means something once the row
+     * is known to exist: without this, an empty fixture would satisfy it too.
+     */
+    private function assertOwnerCanRead(string $id, string $tenant): void
+    {
+        $owned = $this->query(TenantRelationRecord::class)->forTenant($tenant)
+            ->where(ColumnRef::for(TenantRelationRecord::class, 'id'), Operator::Equals, $id)->fetchOne();
+        self::assertSame($id, $owned?->id, sprintf('Fixture row %s must be readable by its owner %s.', $id, $tenant));
+        $this->adapter->executed = [];
     }
 
     /** @param class-string $class */

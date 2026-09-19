@@ -332,9 +332,14 @@ final class ResourceModelQuery
         return $this;
     }
 
+    /**
+     * Retracts an earlier system bypass: the two authorities are exclusive,
+     * as they are on {@see \Semitexa\Orm\Repository\DomainRepository}.
+     */
     public function forTenant(mixed $tenantValue): self
     {
         $this->tenantValue = $tenantValue;
+        $this->systemScopeToken = null;
 
         return $this;
     }
@@ -355,9 +360,14 @@ final class ResourceModelQuery
         return $this;
     }
 
+    /**
+     * Retracts an earlier forTenant(): a bypass reads across every tenant, so
+     * leaving a tenant value behind would only describe the read inaccurately.
+     */
     public function withoutTenantScope(SystemScopeToken $token): self
     {
         $this->systemScopeToken = $token;
+        $this->tenantValue = null;
 
         return $this;
     }
