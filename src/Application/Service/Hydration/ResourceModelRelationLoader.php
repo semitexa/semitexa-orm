@@ -244,14 +244,26 @@ final class ResourceModelRelationLoader
             return;
         }
 
+        // Both are nullable on the metadata because the other relation kinds do
+        // not carry them. Null here is a broken ManyToMany declaration, and
+        // quoting null would yield an empty identifier rather than an error.
+        $relatedKey = $relation->relatedKey;
+        $pivotTable = $relation->pivotTable;
+        if ($relatedKey === null || $pivotTable === null) {
+            throw new \LogicException(sprintf(
+                'ManyToMany relation %s is missing its pivot table or related key.',
+                $relation->propertyName,
+            ));
+        }
+
         /** @var list<int|string> $parentIdsList */
         $parentIdsList = array_keys($parentIds);
         $parentIdParams = $this->buildInParams($parentIdsList);
         $pivotSql = sprintf(
             'SELECT %s, %s FROM %s WHERE %s IN (%s)',
             SqlIdentifier::quote($relation->foreignKey),
-            SqlIdentifier::quote($relation->relatedKey),
-            SqlIdentifier::quote($relation->pivotTable),
+            SqlIdentifier::quote($relatedKey),
+            SqlIdentifier::quote($pivotTable),
             SqlIdentifier::quote($relation->foreignKey),
             $this->placeholdersForParams($parentIdParams),
         );
@@ -270,7 +282,7 @@ final class ResourceModelRelationLoader
         $pivotMap = [];
         foreach ($pivotRows as $row) {
             $parentId = $this->arrayKeyFrom($row[$relation->foreignKey]);
-            $relatedId = $this->arrayKeyFrom($row[$relation->relatedKey]);
+            $relatedId = $this->arrayKeyFrom($row[$relatedKey]);
             $relatedIds[$relatedId] = $relatedId;
             $pivotMap[$parentId][] = $relatedId;
         }
