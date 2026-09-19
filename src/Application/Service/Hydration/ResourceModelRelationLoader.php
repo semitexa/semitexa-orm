@@ -10,7 +10,9 @@ use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Adapter\SqlIdentifier;
 use Semitexa\Orm\Metadata\RelationKind;
 use Semitexa\Orm\Metadata\RelationMetadata;
+use Semitexa\Orm\Metadata\ResourceModelMetadata;
 use Semitexa\Orm\Metadata\ResourceModelMetadataRegistry;
+use Semitexa\Orm\Query\TenantReadScope;
 
 final class ResourceModelRelationLoader
 {
@@ -29,17 +31,26 @@ final class ResourceModelRelationLoader
      * `product` — every level stays one `IN (...)` query per relation, so a
      * P-parent chain of depth D costs O(relations x D) queries, never O(rows).
      *
+     * Tenant-scoped targets require an explicit scope, including when the
+     * parent is unscoped. Never infer read authority from hydrated row data.
+     * Omitting scope remains supported for unscoped targets.
+     *
      * @param object[] $resourceModels
      * @param class-string $resourceModelClass
      * @param string[]|null $onlyRelations relation property names, dot paths allowed
      */
-    public function loadRelations(array $resourceModels, string $resourceModelClass, ?array $onlyRelations = null): void
-    {
+    public function loadRelations(
+        array $resourceModels,
+        string $resourceModelClass,
+        ?array $onlyRelations = null,
+        ?TenantReadScope $scope = null,
+    ): void {
         if ($resourceModels === []) {
             return;
         }
 
         $metadata = ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($resourceModelClass);
+        $scope ??= TenantReadScope::from(null, null);
 
         // Split dot paths into this level's names + per-relation remainders.
         $topLevel = null;
@@ -61,18 +72,21 @@ final class ResourceModelRelationLoader
                 continue;
             }
 
+            // Fail before any relation read, including a ManyToMany pivot.
+            $scope->conditionFor(($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($relation->targetClass));
+
             match ($relation->kind) {
-                RelationKind::BelongsTo => $this->loadBelongsTo($resourceModels, $relation),
-                RelationKind::HasMany => $this->loadHasMany($resourceModels, $relation, $resourceModelClass),
-                RelationKind::OneToOne => $this->loadOneToOne($resourceModels, $relation, $resourceModelClass),
-                RelationKind::ManyToMany => $this->loadManyToMany($resourceModels, $relation, $resourceModelClass),
+                RelationKind::BelongsTo => $this->loadBelongsTo($resourceModels, $relation, $scope),
+                RelationKind::HasMany => $this->loadHasMany($resourceModels, $relation, $resourceModelClass, $scope),
+                RelationKind::OneToOne => $this->loadOneToOne($resourceModels, $relation, $resourceModelClass, $scope),
+                RelationKind::ManyToMany => $this->loadManyToMany($resourceModels, $relation, $resourceModelClass, $scope),
             };
 
             $children = $nested[$relation->propertyName] ?? [];
             if ($children !== []) {
                 $related = $this->collectLoadedRelated($resourceModels, $relation->propertyName);
                 if ($related !== []) {
-                    $this->loadRelations($related, $relation->targetClass, $children);
+                    $this->loadRelations($related, $relation->targetClass, $children, $scope);
                 }
             }
         }
@@ -116,7 +130,7 @@ final class ResourceModelRelationLoader
     /**
      * @param object[] $resourceModels
      */
-    private function loadBelongsTo(array $resourceModels, RelationMetadata $relation): void
+    private function loadBelongsTo(array $resourceModels, RelationMetadata $relation, TenantReadScope $scope): void
     {
         $fkValues = $this->collectPropertyValues($resourceModels, $relation->foreignKey);
         if ($fkValues === []) {
@@ -129,7 +143,7 @@ final class ResourceModelRelationLoader
         $targetPkColumn = $targetMetadata->column($targetPkProperty)->columnName;
         /** @var list<int|string> $fkValuesList */
         $fkValuesList = array_keys($fkValues);
-        $rows = $this->fetchRowsByColumn($targetMetadata->tableName, $targetPkColumn, $fkValuesList);
+        $rows = $this->fetchRowsByColumn($targetMetadata, $targetPkColumn, $fkValuesList, $scope);
 
         $indexed = [];
         foreach ($rows as $row) {
@@ -154,7 +168,7 @@ final class ResourceModelRelationLoader
      * @param object[] $resourceModels
      * @param class-string $parentResourceModelClass
      */
-    private function loadHasMany(array $resourceModels, RelationMetadata $relation, string $parentResourceModelClass): void
+    private function loadHasMany(array $resourceModels, RelationMetadata $relation, string $parentResourceModelClass, TenantReadScope $scope): void
     {
         $parentMetadata = ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($parentResourceModelClass);
         $parentPkProperty = $parentMetadata->primaryKeyProperty ?? 'id';
@@ -168,7 +182,7 @@ final class ResourceModelRelationLoader
         $fkColumn = $targetMetadata->column($relation->foreignKey)->columnName;
         /** @var list<int|string> $parentIdsList */
         $parentIdsList = array_keys($parentIds);
-        $rows = $this->fetchRowsByColumn($targetMetadata->tableName, $fkColumn, $parentIdsList);
+        $rows = $this->fetchRowsByColumn($targetMetadata, $fkColumn, $parentIdsList, $scope);
 
         $grouped = [];
         foreach ($rows as $row) {
@@ -187,7 +201,7 @@ final class ResourceModelRelationLoader
      * @param object[] $resourceModels
      * @param class-string $parentResourceModelClass
      */
-    private function loadOneToOne(array $resourceModels, RelationMetadata $relation, string $parentResourceModelClass): void
+    private function loadOneToOne(array $resourceModels, RelationMetadata $relation, string $parentResourceModelClass, TenantReadScope $scope): void
     {
         $parentMetadata = ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($parentResourceModelClass);
         $parentPkProperty = $parentMetadata->primaryKeyProperty ?? 'id';
@@ -201,7 +215,7 @@ final class ResourceModelRelationLoader
         $fkColumn = $targetMetadata->column($relation->foreignKey)->columnName;
         /** @var list<int|string> $parentIdsList */
         $parentIdsList = array_keys($parentIds);
-        $rows = $this->fetchRowsByColumn($targetMetadata->tableName, $fkColumn, $parentIdsList);
+        $rows = $this->fetchRowsByColumn($targetMetadata, $fkColumn, $parentIdsList, $scope);
 
         $indexed = [];
         foreach ($rows as $row) {
@@ -220,7 +234,7 @@ final class ResourceModelRelationLoader
      * @param object[] $resourceModels
      * @param class-string $parentResourceModelClass
      */
-    private function loadManyToMany(array $resourceModels, RelationMetadata $relation, string $parentResourceModelClass): void
+    private function loadManyToMany(array $resourceModels, RelationMetadata $relation, string $parentResourceModelClass, TenantReadScope $scope): void
     {
         $parentMetadata = ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($parentResourceModelClass);
         $parentPkProperty = $parentMetadata->primaryKeyProperty ?? 'id';
@@ -263,7 +277,7 @@ final class ResourceModelRelationLoader
 
         /** @var list<int|string> $relatedIdsList */
         $relatedIdsList = array_keys($relatedIds);
-        $rows = $this->fetchRowsByColumn($targetMetadata->tableName, $targetPkColumn, $relatedIdsList);
+        $rows = $this->fetchRowsByColumn($targetMetadata, $targetPkColumn, $relatedIdsList, $scope);
 
         $indexed = [];
         foreach ($rows as $row) {
@@ -311,15 +325,25 @@ final class ResourceModelRelationLoader
      * @param list<int|string> $values
      * @return array<int, array<string, mixed>>
      */
-    private function fetchRowsByColumn(string $tableName, string $columnName, array $values): array
-    {
+    private function fetchRowsByColumn(
+        ResourceModelMetadata $metadata,
+        string $columnName,
+        array $values,
+        TenantReadScope $scope,
+    ): array {
         $params = $this->buildInParams($values);
         $sql = sprintf(
             'SELECT * FROM %s WHERE %s IN (%s)',
-            SqlIdentifier::quote($tableName),
+            SqlIdentifier::quote($metadata->tableName),
             SqlIdentifier::quote($columnName),
             $this->placeholdersForParams($params),
         );
+
+        [$tenantCondition, $tenantParams] = $scope->conditionFor($metadata);
+        if ($tenantCondition !== null) {
+            $sql .= ' AND ' . $tenantCondition;
+            $params += $tenantParams;
+        }
 
         return $this->adapter->execute($sql, $params)->rows;
     }

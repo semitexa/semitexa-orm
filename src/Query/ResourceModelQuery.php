@@ -59,7 +59,7 @@ final class ResourceModelQuery
     private mixed $tenantValue = null;
     private bool $includeSoftDeleted = false;
     private bool $onlySoftDeleted = false;
-    private bool $skipTenantScope = false;
+    private ?SystemScopeToken $systemScopeToken = null;
     private int $paramCounter = 0;
 
     /**
@@ -357,9 +357,7 @@ final class ResourceModelQuery
 
     public function withoutTenantScope(SystemScopeToken $token): self
     {
-        // Token presence itself is the assertion — callers must explicitly issue one.
-        unset($token);
-        $this->skipTenantScope = true;
+        $this->systemScopeToken = $token;
 
         return $this;
     }
@@ -373,6 +371,7 @@ final class ResourceModelQuery
      */
     public function fetchAll(): array
     {
+        $scope = $this->tenantScope();
         $result = $this->adapter->execute($this->buildSql(), $this->buildParams());
         $items = array_map(
             fn (array $row): object => $this->hydrator->hydrate($row, $this->resourceModelClass),
@@ -384,6 +383,7 @@ final class ResourceModelQuery
                 $items,
                 $this->resourceModelClass,
                 array_map(static fn (RelationRef $relation): string => $relation->propertyName, $this->relations),
+                $scope,
             );
         }
 
@@ -687,8 +687,6 @@ final class ResourceModelQuery
     private function buildSql(): string
     {
         $metadata = $this->metadata();
-        $this->assertRequiredPoliciesAreSatisfied($metadata);
-
         [$whereSql, ] = $this->buildWhereAndParams();
         $sql = sprintf('SELECT * FROM %s%s', SqlIdentifier::quote($metadata->tableName), $whereSql);
 
@@ -735,21 +733,17 @@ final class ResourceModelQuery
     private function buildWhereAndParams(): array
     {
         $metadata = $this->metadata();
-        $this->assertRequiredPoliciesAreSatisfied($metadata);
-
         /** @var list<SqlCondition> $policyConditions */
         $policyConditions = [];
         /** @var list<SqlCondition> $userConditions */
         $userConditions = [];
-        $params = [];
+        [$tenantCondition, $params] = $this->tenantScope()->conditionFor($metadata);
 
-        if ($metadata->tenantPolicy !== null && !$this->skipTenantScope) {
-            $tenantColumn = $this->resolveTenantColumnName($metadata);
+        if ($tenantCondition !== null) {
             $policyConditions[] = [
                 'connector' => 'AND',
-                'sql' => sprintf('%s = :tenant_scope', SqlIdentifier::quote($tenantColumn)),
+                'sql' => $tenantCondition,
             ];
-            $params['tenant_scope'] = $this->tenantValue;
         }
 
         if ($metadata->softDelete !== null) {
@@ -1039,18 +1033,9 @@ final class ResourceModelQuery
         return ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($this->resourceModelClass);
     }
 
-    private function resolveTenantColumnName(ResourceModelMetadata $metadata): string
+    private function tenantScope(): TenantReadScope
     {
-        $column = $metadata->tenantColumn();
-
-        if ($column === null) {
-            throw new \LogicException(sprintf(
-                'Tenant metadata is missing for %s.',
-                $metadata->className,
-            ));
-        }
-
-        return $column->columnName;
+        return TenantReadScope::from($this->tenantValue, $this->systemScopeToken);
     }
 
     private function assertColumnBelongsToCurrentResourceModel(ColumnRef $column): void
@@ -1070,16 +1055,6 @@ final class ResourceModelQuery
             throw new \InvalidArgumentException(sprintf(
                 'RelationRef for %s cannot be used in query for %s.',
                 $relation->resourceModelClass,
-                $this->resourceModelClass,
-            ));
-        }
-    }
-
-    private function assertRequiredPoliciesAreSatisfied(ResourceModelMetadata $metadata): void
-    {
-        if ($metadata->tenantPolicy !== null && !$this->skipTenantScope && $this->tenantValue === null) {
-            throw new \LogicException(sprintf(
-                'Query for tenant-scoped resource model %s requires tenant context. Call forTenant() or withoutTenantScope().',
                 $this->resourceModelClass,
             ));
         }
