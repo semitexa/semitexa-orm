@@ -21,10 +21,6 @@ use Semitexa\Orm\Tests\Fixture\Mapping\HydratableProductDomainModel;
 
 use Semitexa\Orm\Tests\Fixture\Mapping\HydratableProductMapper;
 
-use Semitexa\Orm\Tests\Fixture\Metadata\ValidCategoryResourceModel;
-
-use Semitexa\Orm\Tests\Fixture\Metadata\ValidReviewResourceModel;
-
 use Semitexa\Orm\Tests\Fixture\Persistence\PersistableProductDomainModel;
 
 use Semitexa\Orm\Tests\Fixture\Persistence\PersistableProductMapper;
