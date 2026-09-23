@@ -8,12 +8,8 @@ use Semitexa\Orm\Domain\Enum\DdlOperationType;
 use Semitexa\Orm\Domain\Model\DdlOperation;
 use Semitexa\Orm\Domain\Model\ExecutionPlan;
 
-
-
-
 use Semitexa\Orm\Adapter\ConnectionPoolInterface;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
-use Semitexa\Orm\Adapter\DatabaseType;
 use Semitexa\Orm\Application\Service\Transaction\SingleConnectionAdapter;
 use Semitexa\Orm\Adapter\MySqlType;
 use Semitexa\Orm\Adapter\SqlIdentifier;
@@ -21,7 +17,6 @@ use Semitexa\Orm\Adapter\SqliteType;
 use Semitexa\Orm\Domain\Model\ColumnDefinition;
 use Semitexa\Orm\Domain\Model\DbColumnState;
 use Semitexa\Orm\Domain\Model\ForeignKeyDefinition;
-use Semitexa\Orm\Domain\Model\ResourceMetadata;
 use Semitexa\Orm\Domain\Model\SchemaDiff;
 use Semitexa\Orm\Domain\Model\TableDefinition;
 
