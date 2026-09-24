@@ -194,6 +194,27 @@ final class CollectionQueryCompilerTest extends TestCase
         $this->assertNull($compiled->cursorPage);
     }
 
+    /**
+     * resolveMode() counts to choose the mode; the cursor envelope needs the
+     * same post-filter total. The number reached page mode but not cursor mode,
+     * so every AUTO feed past its threshold ran the identical COUNT(*) twice.
+     */
+    #[Test]
+    public function auto_mode_counts_once_whichever_mode_it_picks(): void
+    {
+        foreach (['cursor' => 19, 'page' => 7] as $mode => $total) {
+            $adapter = new CollectionFakeAdapter(total: $total, rows: self::rows(6));
+            (new CollectionQueryCompiler())->compile(
+                $this->criteria(policy: self::autoPolicy()),
+                $this->queryOver($adapter),
+                self::FIELD_MAP,
+            );
+
+            $counts = array_filter($adapter->executed, static fn (array $q): bool => str_contains($q['sql'], 'COUNT('));
+            $this->assertCount(1, $counts, "{$mode} mode ran COUNT(*) " . count($counts) . ' times');
+        }
+    }
+
     #[Test]
     public function auto_mode_flips_to_cursor_over_the_count_threshold(): void
     {

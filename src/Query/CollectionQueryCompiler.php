@@ -100,14 +100,17 @@ final class CollectionQueryCompiler implements CollectionQueryCompilerInterface
             $filtered->whereAnyLike($columns, '%' . self::escapeLikePattern((string) $criteria->q) . '%');
         }
 
-        // resolveMode() counts to decide; page mode needs the same number for
-        // its envelope. Carried across rather than counted twice.
+        // resolveMode() counts to decide; page AND cursor mode need the same
+        // number for their envelope. Carried across rather than counted twice —
+        // it reached page mode only, so an AUTO feed past its countThreshold ran
+        // the identical COUNT(*) twice per request (found by the
+        // requests.duplicate-queries quality metric on the pings feed).
         $knownTotal = null;
         $mode = $this->resolveMode($criteria, $filtered, $knownTotal);
 
         return match ($mode) {
             CollectionPaginationPolicy::MODE_PAGE   => $this->executePage($criteria, $filtered, $modelClass, $fieldMap, $knownTotal),
-            CollectionPaginationPolicy::MODE_CURSOR => $this->executeCursor($criteria, $filtered, $modelClass, $fieldMap),
+            CollectionPaginationPolicy::MODE_CURSOR => $this->executeCursor($criteria, $filtered, $modelClass, $fieldMap, $knownTotal),
             CollectionPaginationPolicy::MODE_SINGLE => $this->executeSingle($criteria, $filtered, $modelClass, $fieldMap),
             default => throw new \LogicException('Unreachable pagination mode: ' . $mode),
         };
@@ -225,13 +228,15 @@ final class CollectionQueryCompiler implements CollectionQueryCompilerInterface
         ResourceModelQuery $filtered,
         string $modelClass,
         array $fieldMap,
+        ?int $knownTotal = null,
     ): CompiledCollection {
         $perPage = $criteria->page->perPage;
         $effectiveTerms = $this->effectiveSortTerms($criteria->sort);
 
         // Post-filter total, counted BEFORE the keyset predicate narrows
         // the window (the cursor envelope documents "post-filter total").
-        $total = (clone $filtered)->count();
+        // resolveMode() may already hold it: same filtered query, same number.
+        $total = $knownTotal ?? (clone $filtered)->count();
 
         $windowed = clone $filtered;
 
