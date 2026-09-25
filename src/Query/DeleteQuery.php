@@ -38,7 +38,9 @@ class DeleteQuery implements WhereCapableInterface
      */
     public function execute(string $column, mixed $value): void
     {
-        (clone $this)->where($column, '=', $value)->executeWhere();
+        $query = clone $this;
+        $query->groupStagedConditions();
+        $query->where($column, '=', $value)->executeWhere();
     }
 
     /**

@@ -8,6 +8,7 @@ use Semitexa\Core\Support\Row;
 use Semitexa\Core\Support\CoroutineLocal;
 use Semitexa\Core\Event\EventDispatcherInterface;
 use Semitexa\Core\Log\StaticLoggerBridge;
+use Semitexa\Orm\Adapter\ConnectionPool;
 use Semitexa\Orm\Adapter\ConnectionPoolInterface;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Adapter\DriverErrorClassifier;
@@ -280,6 +281,7 @@ class TransactionManager
         $pdo = $this->pool->pop();
         $this->setActiveConnection($pdo);
         $this->setDepth(1);
+        $connectionLost = false;
 
         try {
             // beginTransaction() is INSIDE the try: on a stale/dead connection
@@ -309,6 +311,8 @@ class TransactionManager
             $pdo->commit();
         } catch (\Throwable $e) {
             $this->setPendingEvents([]);
+            $connectionLost = $e instanceof ConnectionLostException
+                || ($e instanceof \PDOException && DriverErrorClassifier::classify($e) instanceof ConnectionLostException);
             // inTransaction() is INSIDE the try as well: on a severed
             // connection the status check itself throws, and an unguarded one
             // would replace the original callback/commit failure with a
@@ -323,7 +327,15 @@ class TransactionManager
             }
             throw $e;
         } finally {
-            $this->pool->push($pdo);
+            // A dead connection must not go back to the channel: the pool only
+            // pings connections idle >= 1s, so runWithRetry()'s replay a few
+            // milliseconds later would pop the same dead socket on every
+            // attempt. Discarding frees its slot for a fresh connection.
+            if ($connectionLost && $this->pool instanceof ConnectionPool) {
+                $this->pool->discard($pdo);
+            } else {
+                $this->pool->push($pdo);
+            }
             $this->setActiveConnection(null);
             $this->setCurrentAdapter(null);
             $this->setDepth(0);
