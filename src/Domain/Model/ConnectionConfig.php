@@ -35,6 +35,9 @@ final readonly class ConnectionConfig
         // the variable's name is flavor-specific and an init command naming an
         // unknown one fails inside the PDO constructor.
         public float $queryTimeout = 0.0,
+        // Seconds to fail fast after a failed connect before one probe
+        // connect is allowed through; 0 disables. See ConnectCircuitBreaker.
+        public float $connectFailureCooldown = 2.0,
     ) {}
 
     /**
@@ -85,6 +88,7 @@ final readonly class ConnectionConfig
         $poolSize = (int) (Environment::getEnvValue($prefix . 'POOL_SIZE', '10') ?? '10');
         $connectTimeout = self::parseTimeoutValue(Environment::getEnvValue($prefix . 'CONNECT_TIMEOUT'), 5.0);
         $queryTimeout = self::parseTimeoutValue(Environment::getEnvValue($prefix . 'QUERY_TIMEOUT'), 0.0);
+        $connectFailureCooldown = self::parseTimeoutValue(Environment::getEnvValue($prefix . 'CONNECT_FAILURE_COOLDOWN'), 2.0);
 
         return new self(
             driver: $driver,
@@ -97,6 +101,7 @@ final readonly class ConnectionConfig
             poolSize: $poolSize,
             connectTimeout: $connectTimeout,
             queryTimeout: $queryTimeout,
+            connectFailureCooldown: $connectFailureCooldown,
             sqlitePath: Environment::getEnvValue($prefix . 'SQLITE_PATH'),
             sqliteMemory: $sqliteMemory !== null && in_array(
                 strtolower($sqliteMemory),

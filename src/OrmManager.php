@@ -10,6 +10,7 @@ use Semitexa\Core\Environment;
 use Semitexa\Core\Event\EventDispatcherInterface;
 use Semitexa\Core\Log\StaticLoggerBridge;
 use Semitexa\Core\Support\ProjectRoot;
+use Semitexa\Orm\Adapter\ConnectCircuitBreaker;
 use Semitexa\Orm\Adapter\ConnectionPool;
 use Semitexa\Orm\Adapter\ConnectionPoolInterface;
 use Semitexa\Orm\Domain\Model\ConnectionConfig;
@@ -41,6 +42,8 @@ class OrmManager
 {
     private ClassDiscovery $classDiscovery;
     private ?ConnectionPoolInterface $pool = null;
+
+    private ?ConnectCircuitBreaker $connectBreaker = null;
     private ?DatabaseAdapterInterface $adapter = null;
     private ?SchemaCollector $schemaCollector = null;
     private ?SchemaComparatorInterface $schemaComparator = null;
@@ -711,6 +714,7 @@ class OrmManager
             $poolSize = $this->config->poolSize;
             $connectTimeout = $this->config->connectTimeout;
             $queryTimeout = $this->config->queryTimeout;
+            $connectFailureCooldown = $this->config->connectFailureCooldown;
         } else {
             $host = $this->resolveDbHost();
             $port = $this->resolveDbPort();
@@ -725,6 +729,7 @@ class OrmManager
             // hung-server failure the timeout exists to prevent.
             $connectTimeout = ConnectionConfig::parseTimeoutValue(Environment::getEnvValue('DB_CONNECT_TIMEOUT'), 5.0);
             $queryTimeout = ConnectionConfig::parseTimeoutValue(Environment::getEnvValue('DB_QUERY_TIMEOUT'), 0.0);
+            $connectFailureCooldown = ConnectionConfig::parseTimeoutValue(Environment::getEnvValue('DB_CONNECT_FAILURE_COOLDOWN'), 2.0);
         }
 
         $dsn = "mysql:host={$host};port={$port};dbname={$database};charset={$charset}";
@@ -736,6 +741,15 @@ class OrmManager
 
             return $pdo;
         };
+
+        // Fail fast while the database is down instead of paying a full
+        // connect (up to DB_CONNECT_TIMEOUT) on every request. Kept on the
+        // manager so a pool swap (ensureCoroutineSafePool) keeps its state.
+        $this->connectBreaker ??= new ConnectCircuitBreaker(
+            $connectFailureCooldown,
+            max($connectTimeout, 1.0) + $connectFailureCooldown,
+        );
+        $factory = $this->connectBreaker->wrap($factory);
 
         if ($this->shouldUseCoroutinePool()) {
             return new ConnectionPool($poolSize, $factory);
