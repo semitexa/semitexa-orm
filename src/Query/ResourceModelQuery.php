@@ -255,7 +255,7 @@ final class ResourceModelQuery
      */
     public function whereRaw(string $sql, array $bindings = []): self
     {
-        $offsets = $this->findRawPlaceholderOffsets($sql);
+        $offsets = RawSqlScanner::placeholderOffsets($sql);
         if (!array_is_list($bindings)) {
             $bindings = array_values($bindings);
         }
@@ -662,7 +662,7 @@ final class ResourceModelQuery
         // later iteration, while quoted/comment regions stay untouched.
         while ($i < $length) {
             $segmentStart = $i;
-            if ($this->advancePastQuotedOrCommentRegion($sql, $i, $length)) {
+            if (RawSqlScanner::advancePastQuotedOrCommentRegion($sql, $i, $length)) {
                 $debugSql .= substr($sql, $segmentStart, $i - $segmentStart);
                 continue;
             }
@@ -950,84 +950,6 @@ final class ResourceModelQuery
     private function nextParam(string $hint = 'w'): string
     {
         return sprintf('%s%d', $hint, $this->paramCounter++);
-    }
-
-    /**
-     * Byte offsets of '?' placeholders that sit outside quoted regions and
-     * SQL comments.
-     *
-     * @return list<int>
-     */
-    private function findRawPlaceholderOffsets(string $sql): array
-    {
-        $offsets = [];
-        $length = strlen($sql);
-        $i = 0;
-
-        while ($i < $length) {
-            if ($this->advancePastQuotedOrCommentRegion($sql, $i, $length)) {
-                continue;
-            }
-
-            if ($sql[$i] === '?') {
-                $offsets[] = $i;
-            }
-            $i++;
-        }
-
-        return $offsets;
-    }
-
-    private function advancePastQuotedOrCommentRegion(string $sql, int &$offset, int $length): bool
-    {
-        $ch = $sql[$offset];
-
-        if ($ch === "'" || $ch === '"' || $ch === '`') {
-            $quote = $ch;
-            $offset++;
-            while ($offset < $length) {
-                if ($sql[$offset] === '\\' && $quote !== '`' && $offset + 1 < $length) {
-                    // Backslash escape (MySQL default for string literals).
-                    $offset += 2;
-                    continue;
-                }
-                if ($sql[$offset] === $quote) {
-                    if ($offset + 1 < $length && $sql[$offset + 1] === $quote) {
-                        // Doubled quote — SQL-standard escape.
-                        $offset += 2;
-                        continue;
-                    }
-                    $offset++;
-                    break;
-                }
-                $offset++;
-            }
-            return true;
-        }
-
-        if ($ch === '-' && $offset + 1 < $length && $sql[$offset + 1] === '-') {
-            $offset += 2;
-            while ($offset < $length && $sql[$offset] !== "\n" && $sql[$offset] !== "\r") {
-                $offset++;
-            }
-            return true;
-        }
-
-        if ($ch === '#') {
-            $offset++;
-            while ($offset < $length && $sql[$offset] !== "\n" && $sql[$offset] !== "\r") {
-                $offset++;
-            }
-            return true;
-        }
-
-        if ($ch === '/' && $offset + 1 < $length && $sql[$offset + 1] === '*') {
-            $commentEnd = strpos($sql, '*/', $offset + 2);
-            $offset = $commentEnd === false ? $length : $commentEnd + 2;
-            return true;
-        }
-
-        return false;
     }
 
     private function isSqlPlaceholderNameChar(string $ch): bool

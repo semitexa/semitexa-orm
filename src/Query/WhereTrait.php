@@ -164,10 +164,27 @@ trait WhereTrait
      */
     public function whereRaw(string $sql, array $bindings = []): static
     {
+        // Placeholders inside quoted strings/identifiers and comments are
+        // not bindings (same scanner as ResourceModelQuery::whereRaw()).
+        $offsets = RawSqlScanner::placeholderOffsets($sql);
+        $bindings = array_values($bindings);
+        if (count($offsets) !== count($bindings)) {
+            throw new \InvalidArgumentException(sprintf(
+                'whereRaw() expects exactly %d binding(s), got %d.',
+                count($offsets),
+                count($bindings),
+            ));
+        }
+
+        $keys = [];
         foreach ($bindings as $val) {
             $key                = $this->nextParam('raw');
-            $sql = (string) preg_replace('/\?/', ":{$key}", $sql, 1);
-            $this->params[$key] = $val;
+            $keys[]             = $key;
+            $this->params[$key] = $val instanceof \BackedEnum ? $val->value : $val;
+        }
+        // Right-to-left so earlier offsets stay valid as the string grows.
+        for ($i = count($offsets) - 1; $i >= 0; $i--) {
+            $sql = substr_replace($sql, ':' . $keys[$i], $offsets[$i], 1);
         }
         $this->wheres[] = [
             'connector' => 'AND',
@@ -175,6 +192,26 @@ trait WhereTrait
             'sql'       => $sql,
         ];
         return $this;
+    }
+
+    /**
+     * Collapse the staged conditions into one parenthesized group when they
+     * contain an OR, so a condition appended afterwards narrows the whole
+     * set: (a OR b) AND c, not a OR (b AND c).
+     */
+    private function groupStagedConditions(): void
+    {
+        foreach ($this->wheres as $i => $where) {
+            if ($i > 0 && $where['connector'] === 'OR') {
+                $this->wheres = [[
+                    'connector' => 'AND',
+                    'type'      => 'raw',
+                    'sql'       => substr($this->buildWhereClause(), strlen(' WHERE ')),
+                ]];
+
+                return;
+            }
+        }
     }
 
     private function assertValidOperator(string $operator): void
@@ -208,8 +245,10 @@ trait WhereTrait
     {
         $type = $where['type'];
 
+        // Parenthesized: a fragment containing OR must not bind looser than
+        // the conditions it is ANDed with (`a = ? AND b = ? OR c = ?`).
         if ($type === 'raw') {
-            return $where['sql'];
+            return '(' . $where['sql'] . ')';
         }
 
         // Support qualified column (e.g. alias.column) for relation filters.
