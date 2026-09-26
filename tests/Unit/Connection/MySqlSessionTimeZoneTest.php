@@ -17,19 +17,13 @@ final class MySqlSessionTimeZoneTest extends TestCase
     #[Test]
     public function the_session_is_pinned_to_utc_and_the_connection_is_handed_back(): void
     {
-        $pdo = new class ('sqlite::memory:') extends \PDO {
-            /** @var list<string> */
-            public array $executed = [];
-
-            public function exec(string $statement): int|false
-            {
-                $this->executed[] = $statement;
-
-                return 0;
-            }
-        };
+        // A mock needs no PDO driver at all.
+        $pdo = $this->createMock(\PDO::class);
+        $pdo->expects(self::once())
+            ->method('exec')
+            ->with("SET time_zone = '+00:00'")
+            ->willReturn(0);
 
         self::assertSame($pdo, MySqlSessionTimeZone::applyTo($pdo));
-        self::assertSame(["SET time_zone = '+00:00'"], $pdo->executed);
     }
 }
