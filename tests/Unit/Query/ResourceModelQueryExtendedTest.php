@@ -257,6 +257,25 @@ final class ResourceModelQueryExtendedTest extends TestCase
     }
 
     #[Test]
+    public function paginate_past_last_page_skips_select_and_never_overflows_offset(): void
+    {
+        // Only the COUNT is scripted: any SELECT would miss the fake adapter.
+        $adapter = new FakeDatabaseAdapter([
+            'SELECT COUNT(*) AS __c FROM `hydratable_products` WHERE `tenantId` = :tenant_scope AND `deletedAt` IS NULL' => [
+                ['__c' => 42],
+            ],
+        ]);
+
+        foreach ([6, PHP_INT_MAX] as $pageNumber) {
+            $page = $this->query($adapter)->forTenant('tenant-1')->paginate($pageNumber, 10);
+
+            $this->assertSame([], $page->items);
+            $this->assertSame(42, $page->total);
+            $this->assertSame(5, $page->lastPage);
+        }
+    }
+
+    #[Test]
     public function paginate_as_maps_into_domain_models(): void
     {
         $adapter = new FakeDatabaseAdapter([

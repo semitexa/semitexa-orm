@@ -589,12 +589,20 @@ final class ResourceModelQuery
 
         $total = $this->count();
 
-        $pageClone = clone $this;
-        $pageClone->limitValue = $perPage;
-        $pageClone->offsetValue = ($page - 1) * $perPage;
+        // A page past the last one has no rows by definition — skip the
+        // SELECT. This also keeps the offset below $total, so a hostile
+        // ?page= value cannot overflow ($page - 1) * $perPage into a float.
+        if ($total === 0 || $page - 1 > intdiv($total - 1, $perPage)) {
+            $items = [];
+        } else {
+            $pageClone = clone $this;
+            $pageClone->limitValue = $perPage;
+            $pageClone->offsetValue = ($page - 1) * $perPage;
+            $items = $pageClone->fetchAll();
+        }
 
         return new PaginatedResult(
-            items: $pageClone->fetchAll(),
+            items: $items,
             total: $total,
             page: $page,
             perPage: $perPage,
