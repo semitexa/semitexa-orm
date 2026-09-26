@@ -206,7 +206,13 @@ class TypeCaster
             return match ($column->type) {
                 MySqlType::Date, SqliteType::Date => $value->format('Y-m-d'),
                 MySqlType::Time, SqliteType::Time => $value->format('H:i:s'),
-                default                           => $value->format('Y-m-d H:i:s'),
+                // A datetime column holds no offset and castToDateTime() reads
+                // it in the default zone, so write it in that zone too: a
+                // value carrying +05:00 used to be stored as its own wall
+                // clock and come back five hours off.
+                default                           => \DateTimeImmutable::createFromInterface($value)
+                    ->setTimezone(new \DateTimeZone(date_default_timezone_get()))
+                    ->format('Y-m-d H:i:s'),
             };
         }
 
