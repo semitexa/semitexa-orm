@@ -470,6 +470,9 @@ class OrmManager
         $this->pool?->close();
         $this->pool = null;
         $this->adapter = null;
+        // An explicit teardown starts over: the next getPool() makes a fresh
+        // connect attempt instead of inheriting an open circuit.
+        $this->connectBreaker = null;
     }
 
     /**

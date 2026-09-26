@@ -259,9 +259,9 @@ final class ResourceModelQueryExtendedTest extends TestCase
     #[Test]
     public function paginate_past_last_page_skips_select_and_never_overflows_offset(): void
     {
-        // Only the COUNT is scripted: any SELECT would miss the fake adapter.
+        $countSql = 'SELECT COUNT(*) AS __c FROM `hydratable_products` WHERE `tenantId` = :tenant_scope AND `deletedAt` IS NULL';
         $adapter = new FakeDatabaseAdapter([
-            'SELECT COUNT(*) AS __c FROM `hydratable_products` WHERE `tenantId` = :tenant_scope AND `deletedAt` IS NULL' => [
+            $countSql => [
                 ['__c' => 42],
             ],
         ]);
@@ -273,6 +273,10 @@ final class ResourceModelQueryExtendedTest extends TestCase
             $this->assertSame(42, $page->total);
             $this->assertSame(5, $page->lastPage);
         }
+
+        // An unscripted SELECT would still yield [] from the fake adapter, so
+        // prove it never ran: only the two COUNT queries were executed.
+        $this->assertSame([$countSql, $countSql], array_column($adapter->executed, 'sql'));
     }
 
     #[Test]

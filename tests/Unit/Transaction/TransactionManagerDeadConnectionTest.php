@@ -7,10 +7,8 @@ namespace Semitexa\Orm\Tests\Unit\Transaction;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Semitexa\Orm\Adapter\ConnectionPoolInterface;
-use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
-use Semitexa\Orm\Adapter\QueryResult;
-use Semitexa\Orm\Adapter\ServerCapability;
 use Semitexa\Orm\Application\Service\Transaction\TransactionManager;
+use Semitexa\Orm\Tests\Fixture\Transaction\DeadConnFakeAdapter;
 
 /**
  * A connection that dies mid-transaction makes BOTH commit() and rollBack()
@@ -95,14 +93,4 @@ final class DeadAtCommitPdo extends \PDO
     {
         throw new \PDOException('rollback on a dead connection also fails');
     }
-}
-
-/** Non-SQLite adapter so run() takes the pooled path. */
-final class DeadConnFakeAdapter implements DatabaseAdapterInterface
-{
-    public function supports(ServerCapability $capability): bool { return true; }
-    public function getServerVersion(): string { return '8.0.0'; }
-    public function execute(string $sql, array $params = []): QueryResult { return new QueryResult(); }
-    public function query(string $sql): QueryResult { return new QueryResult(); }
-    public function lastInsertId(): string { return '0'; }
 }

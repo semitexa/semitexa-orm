@@ -76,6 +76,7 @@ final class ConnectCircuitBreaker
         }
 
         $isProbe = false;
+        $claim = null;
         if ($this->lastFailure !== null) {
             $now = ($this->clock)();
             $probeInFlight = $this->probeStartedAt !== null
@@ -86,6 +87,7 @@ final class ConnectCircuitBreaker
             }
 
             $this->probeStartedAt = $now;
+            $claim = $now;
             $isProbe = true;
         }
 
@@ -95,7 +97,9 @@ final class ConnectCircuitBreaker
             $wasClosed = $this->lastFailure === null;
             $this->lastFailure = $e;
             $this->openUntil = ($this->clock)() + $this->cooldownSeconds;
-            if ($isProbe) {
+            // Release the claim only while it is still ours: a probe that
+            // outlived its lease may have been superseded by a newer one.
+            if ($isProbe && $this->probeStartedAt === $claim) {
                 $this->probeStartedAt = null;
             }
             if ($wasClosed) {
@@ -109,7 +113,7 @@ final class ConnectCircuitBreaker
         } catch (\Throwable $e) {
             // Not a connect failure (e.g. a programming error in the factory):
             // do not trip, but do not leave a probe claim behind either.
-            if ($isProbe) {
+            if ($isProbe && $this->probeStartedAt === $claim) {
                 $this->probeStartedAt = null;
             }
 

@@ -155,6 +155,38 @@ final class ConnectCircuitBreakerTest extends TestCase
     }
 
     #[Test]
+    public function a_stale_probe_failing_late_keeps_a_newer_probes_claim(): void
+    {
+        $breaker = $this->breaker(2.0, 5.0);
+        $connect = $breaker->wrap($this->factory());
+        try {
+            $connect();
+        } catch (\PDOException) {
+        }
+        $this->now += 2.0;
+
+        $claim = new \ReflectionProperty($breaker, 'probeStartedAt');
+        $newerClaim = null;
+        // Probe A outlives its lease; probe B claims meanwhile; then A fails.
+        $staleProbe = function () use ($claim, $breaker, &$newerClaim): \PDO {
+            $this->now += 6.0;
+            $newerClaim = $this->now;
+            $claim->setValue($breaker, $newerClaim);
+
+            throw new \PDOException('SQLSTATE[HY000] [2002] Connection timed out');
+        };
+        try {
+            $breaker->connect($staleProbe);
+            self::fail('the stale probe must fail');
+        } catch (\PDOException) {
+        }
+
+        self::assertSame($newerClaim, $claim->getValue($breaker), 'a late failure must not erase the newer claim');
+        $this->now += 2.0;
+        $this->expectFailFast($connect);
+    }
+
+    #[Test]
     public function zero_cooldown_disables_the_breaker(): void
     {
         $factory = $this->factory();

@@ -8,6 +8,7 @@ use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Semitexa\Orm\Adapter\ConnectionPool;
 use Semitexa\Orm\Application\Service\Transaction\TransactionManager;
+use Semitexa\Orm\Tests\Fixture\Transaction\DeadConnFakeAdapter;
 
 /**
  * A pooled connection that dies while idle fails at BEGIN with 2006. The

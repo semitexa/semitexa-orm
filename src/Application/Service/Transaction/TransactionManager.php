@@ -322,8 +322,10 @@ class TransactionManager
                     $pdo->rollBack();
                 }
             } catch (\Throwable) {
-                // The connection is cleaned or discarded by the pool's push()
-                // transaction hygiene.
+                // The status check or rollback failed, so the connection's
+                // state is unknown: discard it. push() would read a throwing
+                // inTransaction() as "clean" and recycle the broken PDO.
+                $connectionLost = true;
             }
             throw $e;
         } finally {
