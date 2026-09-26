@@ -186,4 +186,54 @@ final class DeleteQueryTest extends TestCase
 
         self::assertSame([1, 3], $this->remainingIds());
     }
+
+    #[Test]
+    public function an_empty_in_list_deletes_nothing_and_an_empty_not_in_list_excludes_nothing(): void
+    {
+        // `IN ()` is invalid SQL on MySQL (SQLite happens to accept it, so the
+        // statement text is checked too); an empty list is a valid input.
+        $statements = [];
+        $spy = new class ($this->adapter, $statements) implements DatabaseAdapterInterface {
+            /** @param list<string> $statements */
+            public function __construct(private DatabaseAdapterInterface $inner, private array &$statements) {}
+
+            public function execute(string $sql, array $params = []): \Semitexa\Orm\Adapter\QueryResult
+            {
+                $this->statements[] = $sql;
+
+                return $this->inner->execute($sql, $params);
+            }
+
+            public function supports(\Semitexa\Orm\Adapter\ServerCapability $capability): bool
+            {
+                return $this->inner->supports($capability);
+            }
+
+            public function getServerVersion(): string
+            {
+                return $this->inner->getServerVersion();
+            }
+
+            public function query(string $sql): \Semitexa\Orm\Adapter\QueryResult
+            {
+                return $this->inner->query($sql);
+            }
+
+            public function lastInsertId(): string
+            {
+                return $this->inner->lastInsertId();
+            }
+        };
+
+        (new DeleteQuery('widget', $spy))->whereIn('id', [])->executeWhere();
+        self::assertSame([1, 2, 3], $this->remainingIds());
+
+        (new DeleteQuery('widget', $spy))->whereNotIn('id', [])->executeWhere();
+        self::assertSame([], $this->remainingIds());
+
+        foreach ($statements as $sql) {
+            self::assertStringNotContainsString('IN ()', $sql);
+        }
+        self::assertCount(2, $statements);
+    }
 }

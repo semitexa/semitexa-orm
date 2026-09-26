@@ -265,6 +265,11 @@ trait WhereTrait
         }
 
         if ($type === 'in' || $type === 'not_in') {
+            // `x IN ()` is invalid SQL: an empty list matches nothing, and
+            // excludes nothing — the same predicates ResourceModelQuery uses.
+            if ($where['param'] === []) {
+                return $type === 'in' ? '1 = 0' : '1 = 1';
+            }
             $inList = implode(', ', $where['param']);
             return "{$col} {$where['operator']} ({$inList})";
         }
