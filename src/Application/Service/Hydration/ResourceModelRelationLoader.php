@@ -357,6 +357,12 @@ final class ResourceModelRelationLoader
             $params += $tenantParams;
         }
 
+        // The same implicit gate ResourceModelQuery applies to the root read:
+        // a soft-deleted row is gone, and must not come back as a relation.
+        if ($metadata->softDelete !== null) {
+            $sql .= sprintf(' AND %s IS NULL', SqlIdentifier::quote($metadata->softDelete->columnName));
+        }
+
         return $this->adapter->execute($sql, $params)->rows;
     }
 

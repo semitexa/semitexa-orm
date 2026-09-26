@@ -528,7 +528,15 @@ final class AggregateWriteEngine
     ): void
     {
         foreach ($metadata->relations() as $relation) {
-            $value = $this->unwrapRelationValue($this->propertyValue($resourceModel, $relation->propertyName));
+            $raw = $this->propertyValue($resourceModel, $relation->propertyName);
+            // A relation that was never loaded says nothing about the children:
+            // a model read without withRelation() and saved back must leave
+            // them alone. Treating "not loaded" like "none" deleted every
+            // owned child and pivot row of that parent.
+            if ($raw instanceof RelationState && !$raw->isLoaded()) {
+                continue;
+            }
+            $value = $this->unwrapRelationValue($raw);
 
             if ($relation->writePolicy === RelationWritePolicy::CascadeOwned) {
                 $this->persistCascadeOwnedRelation($resourceModel, $metadata, $relation, $value, $isInsert, $adapter, $scope);

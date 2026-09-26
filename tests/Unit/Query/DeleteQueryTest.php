@@ -149,4 +149,91 @@ final class DeleteQueryTest extends TestCase
         self::assertTrue($threw, 'A broken-out table name must not produce a runnable statement.');
         self::assertSame([1, 2, 3], $this->remainingIds(), 'No row may be deleted through the table identifier.');
     }
+    #[Test]
+    public function execute_keeps_staged_or_conditions_grouped(): void
+    {
+        // Staged `label = 'first' OR label = 'third'` narrowed by owner_id
+        // must mean (A OR B) AND owner — not A OR (B AND owner), which also
+        // deleted Alice's row 1.
+        (new DeleteQuery('widget', $this->adapter))
+            ->where('label', '=', 'first')
+            ->orWhere('label', '=', 'third')
+            ->execute('owner_id', 'bob');
+
+        self::assertSame([1, 2], $this->remainingIds());
+    }
+
+    #[Test]
+    public function a_raw_fragment_with_or_cannot_escape_the_other_conditions(): void
+    {
+        (new DeleteQuery('widget', $this->adapter))
+            ->where('owner_id', '=', 'alice')
+            ->whereRaw('label = ? OR label = ?', ['first', 'third'])
+            ->executeWhere();
+
+        // Bob's row 3 matches the raw fragment but not the owner condition.
+        self::assertSame([2, 3], $this->remainingIds());
+    }
+
+    #[Test]
+    public function raw_placeholders_inside_string_literals_are_not_bound(): void
+    {
+        $this->adapter->execute("UPDATE widget SET label = 'what?' WHERE id = 2");
+
+        (new DeleteQuery('widget', $this->adapter))
+            ->whereRaw("label = 'what?' AND owner_id = ?", ['alice'])
+            ->executeWhere();
+
+        self::assertSame([1, 3], $this->remainingIds());
+    }
+
+    #[Test]
+    public function an_empty_in_list_deletes_nothing_and_an_empty_not_in_list_excludes_nothing(): void
+    {
+        // `IN ()` is invalid SQL on MySQL (SQLite happens to accept it, so the
+        // statement text is checked too); an empty list is a valid input.
+        $statements = [];
+        $spy = new class ($this->adapter, $statements) implements DatabaseAdapterInterface {
+            /** @param list<string> $statements */
+            public function __construct(private DatabaseAdapterInterface $inner, private array &$statements) {}
+
+            public function execute(string $sql, array $params = []): \Semitexa\Orm\Adapter\QueryResult
+            {
+                $this->statements[] = $sql;
+
+                return $this->inner->execute($sql, $params);
+            }
+
+            public function supports(\Semitexa\Orm\Adapter\ServerCapability $capability): bool
+            {
+                return $this->inner->supports($capability);
+            }
+
+            public function getServerVersion(): string
+            {
+                return $this->inner->getServerVersion();
+            }
+
+            public function query(string $sql): \Semitexa\Orm\Adapter\QueryResult
+            {
+                return $this->inner->query($sql);
+            }
+
+            public function lastInsertId(): string
+            {
+                return $this->inner->lastInsertId();
+            }
+        };
+
+        (new DeleteQuery('widget', $spy))->whereIn('id', [])->executeWhere();
+        self::assertSame([1, 2, 3], $this->remainingIds());
+
+        (new DeleteQuery('widget', $spy))->whereNotIn('id', [])->executeWhere();
+        self::assertSame([], $this->remainingIds());
+
+        foreach ($statements as $sql) {
+            self::assertStringNotContainsString('IN ()', $sql);
+        }
+        self::assertCount(2, $statements);
+    }
 }
