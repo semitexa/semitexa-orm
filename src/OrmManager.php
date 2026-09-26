@@ -739,7 +739,7 @@ class OrmManager
 
         $options = self::pdoOptions($connectTimeout, $queryTimeout);
         $factory = static function () use ($dsn, $username, $password, $options, $queryTimeout): \PDO {
-            $pdo = new \PDO($dsn, $username, $password, $options);
+            $pdo = \Semitexa\Orm\Adapter\MySqlSessionTimeZone::applyTo(new \PDO($dsn, $username, $password, $options));
             self::applyQueryTimeout($pdo, $queryTimeout);
 
             return $pdo;

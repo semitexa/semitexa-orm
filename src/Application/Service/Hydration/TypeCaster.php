@@ -102,10 +102,10 @@ class TypeCaster
             'array' => is_array($value) ? $value : json_decode((string) $value, true),
             'DateTimeImmutable', '\DateTimeImmutable' => $value instanceof \DateTimeImmutable
                 ? $value
-                : new \DateTimeImmutable((string) $value),
+                : new \DateTimeImmutable((string) $value, new \DateTimeZone('UTC')),
             'DateTime', '\DateTime' => $value instanceof \DateTime
                 ? $value
-                : new \DateTime((string) $value),
+                : new \DateTime((string) $value, new \DateTimeZone('UTC')),
             default => $this->castToEnum($value, $phpType),
         };
     }
@@ -207,11 +207,13 @@ class TypeCaster
                 MySqlType::Date, SqliteType::Date => $value->format('Y-m-d'),
                 MySqlType::Time, SqliteType::Time => $value->format('H:i:s'),
                 // A datetime column holds no offset and castToDateTime() reads
-                // it in the default zone, so write it in that zone too: a
-                // value carrying +05:00 used to be stored as its own wall
-                // clock and come back five hours off.
+                // it as UTC, so write it as UTC too: a value carrying +05:00
+                // used to be stored as its own wall clock and come back five
+                // hours off. UTC, not the default zone: a zone with daylight
+                // saving has a wall-clock hour that names two instants.
+                // MySqlSessionTimeZone keeps TIMESTAMP columns on the same zone.
                 default                           => \DateTimeImmutable::createFromInterface($value)
-                    ->setTimezone(new \DateTimeZone(date_default_timezone_get()))
+                    ->setTimezone(new \DateTimeZone('UTC'))
                     ->format('Y-m-d H:i:s'),
             };
         }
@@ -244,7 +246,9 @@ class TypeCaster
             return $value;
         }
 
-        return new \DateTimeImmutable((string) $value);
+        // Stored without an offset, written as UTC by castToDb(); an explicit
+        // offset in the string still wins over the zone given here.
+        return new \DateTimeImmutable((string) $value, new \DateTimeZone('UTC'));
     }
     /**
      * Cache: phpType → true (backed enum) | false (not a backed enum).

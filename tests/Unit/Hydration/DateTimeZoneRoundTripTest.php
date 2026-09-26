@@ -46,6 +46,27 @@ final class DateTimeZoneRoundTripTest extends TestCase
     }
 
     #[Test]
+    public function the_repeated_daylight_saving_hour_round_trips_under_a_non_utc_default_zone(): void
+    {
+        // 01:30 happens twice in New York on 2026-11-01. Written as that wall
+        // clock, the second occurrence could not be told from the first.
+        date_default_timezone_set('America/New_York');
+        $caster = new TypeCaster();
+
+        foreach ([MySqlType::Datetime, MySqlType::Timestamp] as $type) {
+            $column = new ColumnDefinition(name: 'at', type: $type, phpType: \DateTimeImmutable::class);
+            foreach (['2026-11-01T01:30:00-04:00', '2026-11-01T01:30:00-05:00'] as $instant) {
+                $written = new \DateTimeImmutable($instant);
+
+                $read = $caster->castFromDb($caster->castToDb($written, $column), $column);
+
+                self::assertInstanceOf(\DateTimeImmutable::class, $read);
+                self::assertSame($written->getTimestamp(), $read->getTimestamp(), $instant);
+            }
+        }
+    }
+
+    #[Test]
     public function a_date_column_keeps_the_calendar_day_it_was_given(): void
     {
         $column = new ColumnDefinition(name: 'on', type: MySqlType::Date, phpType: \DateTimeImmutable::class);
