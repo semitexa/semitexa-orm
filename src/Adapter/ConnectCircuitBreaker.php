@@ -77,13 +77,17 @@ final class ConnectCircuitBreaker
 
         $isProbe = false;
         $claim = null;
-        if ($this->lastFailure !== null) {
+        // Read into a local: calling the clock closure makes static analysis
+        // forget the property's null-check (the value cannot change here —
+        // there is no yield point before the throw).
+        $lastFailure = $this->lastFailure;
+        if ($lastFailure !== null) {
             $now = ($this->clock)();
             $probeInFlight = $this->probeStartedAt !== null
                 && ($now - $this->probeStartedAt) < $this->probeLeaseSeconds;
 
             if ($now < $this->openUntil || $probeInFlight) {
-                throw ConnectCircuitOpenException::from($this->lastFailure);
+                throw ConnectCircuitOpenException::from($lastFailure);
             }
 
             $this->probeStartedAt = $now;

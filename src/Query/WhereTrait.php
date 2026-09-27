@@ -167,7 +167,6 @@ trait WhereTrait
         // Placeholders inside quoted strings/identifiers and comments are
         // not bindings (same scanner as ResourceModelQuery::whereRaw()).
         $offsets = RawSqlScanner::placeholderOffsets($sql);
-        $bindings = array_values($bindings);
         if (count($offsets) !== count($bindings)) {
             throw new \InvalidArgumentException(sprintf(
                 'whereRaw() expects exactly %d binding(s), got %d.',
@@ -248,7 +247,12 @@ trait WhereTrait
         // Parenthesized: a fragment containing OR must not bind looser than
         // the conditions it is ANDed with (`a = ? AND b = ? OR c = ?`).
         if ($type === 'raw') {
-            return '(' . $where['sql'] . ')';
+            $sql = $where['sql'];
+            if (!is_string($sql)) {
+                throw new \LogicException('Raw WHERE condition sql must be a string.');
+            }
+
+            return '(' . $sql . ')';
         }
 
         // Support qualified column (e.g. alias.column) for relation filters.
