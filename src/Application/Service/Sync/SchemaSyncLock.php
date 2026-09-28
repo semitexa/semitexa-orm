@@ -66,8 +66,14 @@ final class SchemaSyncLock
             try {
                 return $cycle();
             } finally {
-                $release = $pdo->prepare('SELECT RELEASE_LOCK(:name)');
-                $release->execute(['name' => $name]);
+                // A failed release must not mask the cycle's own error — on a
+                // connection that died mid-DDL it would. The lock ends with the
+                // session anyway.
+                try {
+                    $release = $pdo->prepare('SELECT RELEASE_LOCK(:name)');
+                    $release->execute(['name' => $name]);
+                } catch (\Throwable) {
+                }
             }
         } finally {
             $pool->push($pdo);
