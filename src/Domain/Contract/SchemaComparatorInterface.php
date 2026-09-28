@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Domain\Contract;
 
 use Semitexa\Orm\Domain\Model\SchemaDiff;
+use Semitexa\Orm\Domain\Model\TableDefinition;
 
 
 interface SchemaComparatorInterface

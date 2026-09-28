@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Application\Service\Sync;
 
+use Semitexa\Orm\Exception\SchemaSyncLockLostException;
 use Semitexa\Orm\Exception\SchemaSyncLockTimeoutException;
 use Semitexa\Orm\OrmManager;
 
@@ -43,6 +44,7 @@ final class SchemaSyncLock
      * @return T
      *
      * @throws SchemaSyncLockTimeoutException when another sync held it for longer than the wait
+     * @throws SchemaSyncLockLostException    when the lock's session ended before the cycle did
      */
     public function run(callable $cycle): mixed
     {
@@ -64,7 +66,24 @@ final class SchemaSyncLock
             }
 
             try {
-                return $cycle();
+                $result = $cycle();
+
+                // MySQL releases a named lock when its session ends. If the
+                // lock's connection died during the cycle, the pool carried on
+                // with a fresh session and another node may have been syncing
+                // alongside this one; say so rather than report a clean run.
+                try {
+                    $held = $pdo->prepare('SELECT IS_USED_LOCK(:name) = CONNECTION_ID()');
+                    $held->execute(['name' => $name]);
+                    $stillHeld = (string) $held->fetchColumn() === '1';
+                } catch (\PDOException $e) {
+                    throw SchemaSyncLockLostException::for($name, $e); // the lock's session is gone
+                }
+                if (!$stillHeld) {
+                    throw SchemaSyncLockLostException::for($name);
+                }
+
+                return $result;
             } finally {
                 // A failed release must not mask the cycle's own error — on a
                 // connection that died mid-DDL it would. The lock ends with the

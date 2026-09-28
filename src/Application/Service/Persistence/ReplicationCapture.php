@@ -36,6 +36,16 @@ final class ReplicationCapture
         self::$resolver = $resolver;
     }
 
+    /**
+     * The registered resolver, so a test that replaces it can put it back.
+     *
+     * @return (\Closure(): ?ReplicationCaptureInterface)|null
+     */
+    public static function resolver(): ?\Closure
+    {
+        return self::$resolver;
+    }
+
     public static function active(ResourceModelMetadata $metadata): ?ReplicationCaptureInterface
     {
         if (!$metadata->replicated || self::$resolver === null) {
@@ -80,14 +90,45 @@ final class ReplicationCapture
         ?array $before,
         ?array $after,
     ): RowChange {
+        // #[PrimaryKey(strategy: 'uuid')] generates a UUIDv7 only for an empty
+        // key; a caller can still supply any value. On a replicated row that
+        // value names the row on every node, so it must be one no other node
+        // can produce: a UUIDv7.
+        if (!self::isUuidV7($primaryKeyValue)) {
+            throw new \InvalidArgumentException(sprintf(
+                '#[Replicated] %s needs a UUIDv7 primary key; got %s. Leave the key empty to have one generated.',
+                $metadata->className,
+                is_string($primaryKeyValue) && mb_check_encoding($primaryKeyValue, 'UTF-8')
+                    ? "'{$primaryKeyValue}'"
+                    : get_debug_type($primaryKeyValue),
+            ));
+        }
+
         return new RowChange(
             resourceModelClass: $metadata->className,
             tableName: $metadata->tableName,
             primaryKeyColumn: $primaryKeyColumn,
-            primaryKeyValue: (string) $primaryKeyValue,
+            primaryKeyValue: $primaryKeyValue,
             operation: $operation,
             before: $before,
             after: $after,
         );
+    }
+
+    /**
+     * A UUIDv7, as text or as its 16 raw bytes (BINARY(16) keys).
+     *
+     * @phpstan-assert-if-true =string $value
+     */
+    public static function isUuidV7(mixed $value): bool
+    {
+        if (!is_string($value)) {
+            return false;
+        }
+        if (strlen($value) === 16) {
+            return (ord($value[6]) >> 4) === 7 && (ord($value[8]) & 0xC0) === 0x80;
+        }
+
+        return preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i', $value) === 1;
     }
 }

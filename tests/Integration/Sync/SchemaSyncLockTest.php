@@ -7,6 +7,7 @@ namespace Semitexa\Orm\Tests\Integration\Sync;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Semitexa\Orm\Application\Service\Sync\SchemaSyncLock;
+use Semitexa\Orm\Exception\SchemaSyncLockLostException;
 use Semitexa\Orm\Exception\SchemaSyncLockTimeoutException;
 use Semitexa\Orm\OrmManager;
 
@@ -80,14 +81,37 @@ final class SchemaSyncLockTest extends TestCase
         self::assertSame('applied', $lock->run(fn (): string => 'applied'));
         self::assertSame(1, $this->isFree());
 
+        $thrown = null;
         try {
             $lock->run(static function (): never {
-                throw new \RuntimeException('DDL failed');
+                throw new \DomainException('DDL failed');
             });
-        } catch (\RuntimeException) {
+        } catch (\DomainException $e) {
+            // Only the cycle's own exception: a lock timeout (also a
+            // RuntimeException) must not pass for "the cycle ran and threw".
+            $thrown = $e;
         }
 
+        self::assertSame('DDL failed', $thrown?->getMessage(), 'the cycle must have run and its own error must surface');
         self::assertSame(1, $this->isFree(), 'a failed sync must not leave the schema locked');
+    }
+
+    #[Test]
+    public function a_sync_whose_lock_session_died_midway_is_reported_not_passed_as_clean(): void
+    {
+        $lock = new SchemaSyncLock($this->orm, waitSeconds: 1);
+
+        $this->expectException(SchemaSyncLockLostException::class);
+
+        $lock->run(function (): string {
+            // Another session ends the lock holder's connection mid-cycle;
+            // MySQL releases the lock with it.
+            $holder = (int) $this->otherSql('SELECT IS_USED_LOCK(:n)');
+            self::assertGreaterThan(0, $holder, 'the cycle must be running under the lock');
+            $this->otherSession->exec('KILL ' . $holder);
+
+            return 'plan applied';
+        });
     }
 
     private function isFree(): int

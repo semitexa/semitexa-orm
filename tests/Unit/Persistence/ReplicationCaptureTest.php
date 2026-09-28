@@ -13,9 +13,11 @@ use Semitexa\Orm\Domain\Contract\ReplicationCaptureInterface;
 use Semitexa\Orm\Domain\Enum\ResourceChangeOperation;
 use Semitexa\Orm\Domain\Model\ConnectionConfig;
 use Semitexa\Orm\Domain\Model\RowChange;
+use Semitexa\Orm\Exception\InvalidRelationDeclarationException;
 use Semitexa\Orm\Exception\InvalidResourceModelException;
 use Semitexa\Orm\Metadata\ResourceModelMetadataRegistry;
 use Semitexa\Orm\OrmManager;
+use Semitexa\Orm\Tests\Fixture\Metadata\InvalidCascadeToReplicatedResourceModel;
 use Semitexa\Orm\Tests\Fixture\Metadata\InvalidReplicatedKeyResourceModel;
 use Semitexa\Orm\Tests\Fixture\Metadata\ReplicatedNoteResourceModel;
 use Semitexa\Orm\Tests\Fixture\Metadata\ValidCategoryResourceModel;
@@ -138,6 +140,43 @@ final class ReplicationCaptureTest extends TestCase
         $this->expectExceptionMessage("strategy: 'uuid'");
 
         (new ResourceModelMetadataRegistry())->for(InvalidReplicatedKeyResourceModel::class);
+    }
+
+    #[Test]
+    public function a_cascade_owned_relation_to_a_replicated_resource_is_refused(): void
+    {
+        $this->expectException(InvalidRelationDeclarationException::class);
+        $this->expectExceptionMessage('$notes is CascadeOwned but its target');
+
+        (new ResourceModelMetadataRegistry())->for(InvalidCascadeToReplicatedResourceModel::class);
+    }
+
+    #[Test]
+    public function a_caller_supplied_key_that_is_not_a_uuidv7_is_refused_and_nothing_is_written(): void
+    {
+        try {
+            $this->orm->getAggregateWriteEngine()->insert(
+                new ReplicatedNote('6f1c2a44-8e0b-4c3d-9f6a-2b7d1e0c5a91', 't', 'b'), // a UUIDv4
+                ReplicatedNoteResourceModel::class,
+                $this->registry(),
+            );
+            self::fail('a non-UUIDv7 key on a replicated row must be refused');
+        } catch (\InvalidArgumentException $e) {
+            self::assertStringContainsString("needs a UUIDv7 primary key; got '6f1c2a44-8e0b-4c3d-9f6a-2b7d1e0c5a91'", $e->getMessage());
+        }
+
+        self::assertSame(0, $this->rowsIn('replicated_notes'));
+    }
+
+    #[Test]
+    public function uuidv7_is_recognised_as_text_and_as_raw_bytes(): void
+    {
+        $v7 = '01a0e7a0-0000-7000-8000-000000000001';
+
+        self::assertTrue(ReplicationCapture::isUuidV7($v7));
+        self::assertTrue(ReplicationCapture::isUuidV7(hex2bin(str_replace('-', '', $v7))));
+        self::assertFalse(ReplicationCapture::isUuidV7('6f1c2a44-8e0b-4c3d-9f6a-2b7d1e0c5a91'));
+        self::assertFalse(ReplicationCapture::isUuidV7('42'));
     }
 
     private function rowsIn(string $table): int
