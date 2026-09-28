@@ -5,8 +5,11 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Application\Console\Command;
 
 use Semitexa\Core\Attribute\AsCommand;
+use Semitexa\Core\Attribute\InjectAsReadonly;
 use Semitexa\Core\Console\BaseCommand;
 use Semitexa\Orm\Application\Service\Connection\ConnectionRegistry;
+use Semitexa\Orm\Application\Service\Sync\SchemaSyncLock;
+use Semitexa\Orm\OrmManager;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
@@ -16,11 +19,8 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 #[AsCommand(name: 'orm:sync', description: 'Synchronize ORM schema with the database')]
 class OrmSyncCommand extends BaseCommand
 {
-    public function __construct(
-        private readonly ConnectionRegistry $connections,
-    ) {
-        parent::__construct();
-    }
+    #[InjectAsReadonly]
+    protected ConnectionRegistry $connections;
 
     protected function configure(): void
     {
@@ -77,72 +77,14 @@ class OrmSyncCommand extends BaseCommand
 
             $io->text(sprintf('Found %d table(s) in code.', count($codeSchema)));
 
-            // 2. Compare with DB
-            $io->section('Comparing with database...');
-            $comparator = $orm->getSchemaComparator();
-            $diff = $comparator->compare($codeSchema);
-
-            if ($diff->isEmpty()) {
-                $io->success('Database is up to date. No changes needed.');
-
-                return Command::SUCCESS;
-            }
-
-            // 3. Build execution plan
-            $syncEngine = $orm->getSyncEngine();
-            $plan = $syncEngine->buildPlan($diff);
-
-            $io->text($plan->getSummary());
-            $io->newLine();
-
-            // Show plan details
-            $safeOps = $plan->getSafeOperations();
-            $destructiveOps = $plan->getDestructiveOperations();
-
-            if ($safeOps !== []) {
-                $io->section('Safe operations:');
-                foreach ($safeOps as $op) {
-                    $io->text("  <info>[{$op->type->value}]</info> {$op->description}");
-                    if ($output->isVerbose()) {
-                        $io->text("    SQL: {$op->sql}");
-                    }
-                }
-            }
-
-            if ($destructiveOps !== []) {
-                $io->section('Destructive operations:');
-                foreach ($destructiveOps as $op) {
-                    $io->text("  <fg=red>[{$op->type->value}]</> {$op->description}");
-                    if ($output->isVerbose()) {
-                        $io->text("    SQL: {$op->sql}");
-                    }
-                }
-
-                if (!$allowDestructive) {
-                    $io->warning('Destructive operations will be skipped. Use --allow-destructive to include them.');
-                }
-            }
-
-            // Save to file if requested
-            if ($outputFile !== null) {
-                $statements = $plan->toSqlStatements($allowDestructive);
-                $content = implode(";\n", $statements) . ";\n";
-                file_put_contents($outputFile, $content);
-                $io->text("SQL plan saved to: {$outputFile}");
-            }
-
-            // Execute if not dry-run
-            if ($dryRun) {
-                $io->note('Dry run mode — no changes applied.');
-
-                return Command::SUCCESS;
-            }
-
-            $executed = $syncEngine->execute($plan, $allowDestructive);
-            $io->success(sprintf('Executed %d operation(s).', count($executed)));
+            // 2-4. Compare, plan and apply — under the schema lock, so nodes
+            // deploying together do not run the same DDL twice. A dry run
+            // changes nothing and takes no lock.
+            $cycle = fn (): int => $this->compareAndApply($orm, $codeSchema, $io, $output, $dryRun, $allowDestructive, $outputFile);
+            $result = $dryRun ? $cycle() : (new SchemaSyncLock($orm))->run($cycle);
 
             $orm->shutdown();
-            return Command::SUCCESS;
+            return $result;
         } catch (\Throwable $e) {
             $io->error('Sync failed: ' . $e->getMessage());
             if ($output->isVerbose()) {
@@ -150,5 +92,84 @@ class OrmSyncCommand extends BaseCommand
             }
             return Command::FAILURE;
         }
+    }
+
+    /**
+     * @param array<string, \Semitexa\Orm\Domain\Model\TableDefinition> $codeSchema
+     */
+    private function compareAndApply(
+        OrmManager $orm,
+        array $codeSchema,
+        SymfonyStyle $io,
+        OutputInterface $output,
+        bool $dryRun,
+        bool $allowDestructive,
+        ?string $outputFile,
+    ): int {
+        // 2. Compare with DB
+        $io->section('Comparing with database...');
+        $comparator = $orm->getSchemaComparator();
+        $diff = $comparator->compare($codeSchema);
+
+        if ($diff->isEmpty()) {
+            $io->success('Database is up to date. No changes needed.');
+
+            return Command::SUCCESS;
+        }
+
+        // 3. Build execution plan
+        $syncEngine = $orm->getSyncEngine();
+        $plan = $syncEngine->buildPlan($diff);
+
+        $io->text($plan->getSummary());
+        $io->newLine();
+
+        // Show plan details
+        $safeOps = $plan->getSafeOperations();
+        $destructiveOps = $plan->getDestructiveOperations();
+
+        if ($safeOps !== []) {
+            $io->section('Safe operations:');
+            foreach ($safeOps as $op) {
+                $io->text("  <info>[{$op->type->value}]</info> {$op->description}");
+                if ($output->isVerbose()) {
+                    $io->text("    SQL: {$op->sql}");
+                }
+            }
+        }
+
+        if ($destructiveOps !== []) {
+            $io->section('Destructive operations:');
+            foreach ($destructiveOps as $op) {
+                $io->text("  <fg=red>[{$op->type->value}]</> {$op->description}");
+                if ($output->isVerbose()) {
+                    $io->text("    SQL: {$op->sql}");
+                }
+            }
+
+            if (!$allowDestructive) {
+                $io->warning('Destructive operations will be skipped. Use --allow-destructive to include them.');
+            }
+        }
+
+        // Save to file if requested
+        if ($outputFile !== null) {
+            $statements = $plan->toSqlStatements($allowDestructive);
+            $content = implode(";\n", $statements) . ";\n";
+            file_put_contents($outputFile, $content);
+            $io->text("SQL plan saved to: {$outputFile}");
+        }
+
+        // Execute if not dry-run
+        if ($dryRun) {
+            $io->note('Dry run mode — no changes applied.');
+
+            return Command::SUCCESS;
+        }
+
+        $executed = $syncEngine->execute($plan, $allowDestructive);
+        $io->success(sprintf('Executed %d operation(s).', count($executed)));
+
+        return Command::SUCCESS;
     }
 }
