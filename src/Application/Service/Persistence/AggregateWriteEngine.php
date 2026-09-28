@@ -80,10 +80,10 @@ final class AggregateWriteEngine
             : $this->transactions;
 
         if ($transactions === null) {
-            return $work($this->adapter);
+            return ReplicatedWriteGuard::permit(fn (): mixed => $work($this->adapter));
         }
 
-        return $transactions->run($work);
+        return ReplicatedWriteGuard::permit(static fn (): mixed => $transactions->run($work));
     }
 
     /**

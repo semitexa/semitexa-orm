@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Application\Service\Transaction;
 
+use Semitexa\Orm\Application\Service\Persistence\ReplicatedWriteGuard;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Adapter\DriverErrorClassifier;
 use Semitexa\Orm\Adapter\QueryRecorder;
@@ -53,6 +54,8 @@ class SingleConnectionAdapter implements DatabaseAdapterInterface
 
     public function execute(string $sql, array $params = []): QueryResult
     {
+        ReplicatedWriteGuard::check($sql);
+
         // Same recording seam as MysqlAdapter: without it, every query run
         // INSIDE a transaction was invisible to traces/profiles — exactly the
         // path you want to see when debugging a slow or deadlocking write.
@@ -115,6 +118,8 @@ class SingleConnectionAdapter implements DatabaseAdapterInterface
 
     public function query(string $sql): QueryResult
     {
+        ReplicatedWriteGuard::check($sql);
+
         if (!QueryRecorder::isRecording() && SlowQueryLog::thresholdMs() <= 0) {
             return $this->queryUnrecorded($sql);
         }

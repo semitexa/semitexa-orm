@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Adapter;
 
+use Semitexa\Orm\Application\Service\Persistence\ReplicatedWriteGuard;
 use Semitexa\Orm\Exception\ConnectionLostException;
 
 class MysqlAdapter implements DatabaseAdapterInterface
@@ -64,6 +65,8 @@ class MysqlAdapter implements DatabaseAdapterInterface
 
     public function execute(string $sql, array $params = []): QueryResult
     {
+        ReplicatedWriteGuard::check($sql);
+
         // Two boolean checks when nothing observes, which is every production
         // process with slow-query logging off. The measurement wraps the call
         // rather than living inside it so the original body keeps its own
@@ -86,6 +89,8 @@ class MysqlAdapter implements DatabaseAdapterInterface
 
     public function query(string $sql): QueryResult
     {
+        ReplicatedWriteGuard::check($sql);
+
         if (!QueryRecorder::isRecording() && SlowQueryLog::thresholdMs() <= 0) {
             return $this->queryRecorded($sql);
         }
