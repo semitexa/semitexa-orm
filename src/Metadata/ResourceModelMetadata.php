@@ -21,6 +21,8 @@ final readonly class ResourceModelMetadata
         public ?string $primaryKeyProperty = null,
         public string $connectionName = 'default',
         public ?string $versionProperty = null,
+        /** #[Replicated]: writes are captured for multi-master replication. */
+        public bool $replicated = false,
     ) {}
 
     /**

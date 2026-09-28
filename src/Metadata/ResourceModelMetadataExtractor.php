@@ -12,6 +12,10 @@ use Semitexa\Orm\Attribute\HasMany;
 use Semitexa\Orm\Attribute\ManyToMany;
 use Semitexa\Orm\Attribute\OneToOne;
 use Semitexa\Orm\Attribute\PrimaryKey;
+use Semitexa\Orm\Attribute\Replicated;
+use Semitexa\Orm\Exception\InvalidResourceModelException;
+use Semitexa\Orm\Domain\Enum\RelationWritePolicy;
+use Semitexa\Orm\Exception\InvalidRelationDeclarationException;
 use Semitexa\Orm\Attribute\SoftDelete;
 use Semitexa\Orm\Attribute\Version;
 use Semitexa\Orm\Attribute\TenantScoped;
@@ -86,6 +90,13 @@ final class ResourceModelMetadataExtractor
             }
         }
 
+        $this->assertNoCascadeOwnedReplicatedTarget($resourceModelClass, $relationsByProperty);
+
+        $replicated = $ref->getAttributes(Replicated::class) !== [];
+        if ($replicated) {
+            $this->assertReplicable($resourceModelClass, $primaryKeyProperty, $columnsByProperty);
+        }
+
         return new ResourceModelMetadata(
             className: $resourceModelClass,
             tableName: $fromTable->name,
@@ -96,7 +107,61 @@ final class ResourceModelMetadataExtractor
             primaryKeyProperty: $primaryKeyProperty,
             connectionName: $connectionName,
             versionProperty: $versionProperty,
+            replicated: $replicated,
         );
+    }
+
+    /**
+     * A CascadeOwned relation rewrites its children with one bulk DELETE and
+     * fresh INSERTs. Only the inserts pass through the write engine, so for a
+     * #[Replicated] child the deletes would never be captured: other nodes
+     * would keep the old children and gain the new ones. Refused until
+     * relations replicate as a whole (ADR 0001 §4).
+     *
+     * @param array<string, RelationMetadata> $relationsByProperty
+     */
+    private function assertNoCascadeOwnedReplicatedTarget(string $resourceModelClass, array $relationsByProperty): void
+    {
+        foreach ($relationsByProperty as $relation) {
+            if ($relation->writePolicy !== RelationWritePolicy::CascadeOwned || !class_exists($relation->targetClass)) {
+                continue;
+            }
+            if ((new \ReflectionClass($relation->targetClass))->getAttributes(Replicated::class) === []) {
+                continue;
+            }
+
+            throw new InvalidRelationDeclarationException(sprintf(
+                '%s::$%s is CascadeOwned but its target %s is #[Replicated]: cascade writes delete children in bulk, '
+                . 'and those deletes are not captured for replication. Use a reference relation, or write the children '
+                . 'through their own repository.',
+                $resourceModelClass,
+                $relation->propertyName,
+                $relation->targetClass,
+            ));
+        }
+    }
+
+    /**
+     * Every node creates rows on its own, so a replicated row's key must be
+     * unique without asking anyone: an auto-increment id from two nodes would
+     * name two different rows the same.
+     *
+     * @param array<string, ColumnMetadata> $columnsByProperty
+     */
+    private function assertReplicable(string $resourceModelClass, ?string $primaryKeyProperty, array $columnsByProperty): void
+    {
+        $strategy = $primaryKeyProperty !== null
+            ? $columnsByProperty[$primaryKeyProperty]->primaryKeyStrategy
+            : null;
+
+        if ($strategy !== 'uuid') {
+            throw new InvalidResourceModelException(sprintf(
+                '#[Replicated] resource %s needs #[PrimaryKey(strategy: \'uuid\')]%s: nodes create rows independently, '
+                . 'and only a UUIDv7 key cannot collide between them.',
+                $resourceModelClass,
+                $primaryKeyProperty === null ? '' : sprintf(' (it has \'%s\' on $%s)', (string) $strategy, $primaryKeyProperty),
+            ));
+        }
     }
 
     private function extractColumn(\ReflectionProperty $property): ?ColumnMetadata
