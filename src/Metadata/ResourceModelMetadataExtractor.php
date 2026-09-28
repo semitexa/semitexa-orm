@@ -12,6 +12,8 @@ use Semitexa\Orm\Attribute\HasMany;
 use Semitexa\Orm\Attribute\ManyToMany;
 use Semitexa\Orm\Attribute\OneToOne;
 use Semitexa\Orm\Attribute\PrimaryKey;
+use Semitexa\Orm\Attribute\Replicated;
+use Semitexa\Orm\Exception\InvalidResourceModelException;
 use Semitexa\Orm\Attribute\SoftDelete;
 use Semitexa\Orm\Attribute\Version;
 use Semitexa\Orm\Attribute\TenantScoped;
@@ -86,6 +88,11 @@ final class ResourceModelMetadataExtractor
             }
         }
 
+        $replicated = $ref->getAttributes(Replicated::class) !== [];
+        if ($replicated) {
+            $this->assertReplicable($resourceModelClass, $primaryKeyProperty, $columnsByProperty);
+        }
+
         return new ResourceModelMetadata(
             className: $resourceModelClass,
             tableName: $fromTable->name,
@@ -96,7 +103,31 @@ final class ResourceModelMetadataExtractor
             primaryKeyProperty: $primaryKeyProperty,
             connectionName: $connectionName,
             versionProperty: $versionProperty,
+            replicated: $replicated,
         );
+    }
+
+    /**
+     * Every node creates rows on its own, so a replicated row's key must be
+     * unique without asking anyone: an auto-increment id from two nodes would
+     * name two different rows the same.
+     *
+     * @param array<string, ColumnMetadata> $columnsByProperty
+     */
+    private function assertReplicable(string $resourceModelClass, ?string $primaryKeyProperty, array $columnsByProperty): void
+    {
+        $strategy = $primaryKeyProperty !== null
+            ? $columnsByProperty[$primaryKeyProperty]->primaryKeyStrategy
+            : null;
+
+        if ($strategy !== 'uuid') {
+            throw new InvalidResourceModelException(sprintf(
+                '#[Replicated] resource %s needs #[PrimaryKey(strategy: \'uuid\')]%s: nodes create rows independently, '
+                . 'and only a UUIDv7 key cannot collide between them.',
+                $resourceModelClass,
+                $primaryKeyProperty === null ? '' : sprintf(' (it has \'%s\' on $%s)', (string) $strategy, $primaryKeyProperty),
+            ));
+        }
     }
 
     private function extractColumn(\ReflectionProperty $property): ?ColumnMetadata

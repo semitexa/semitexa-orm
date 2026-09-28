@@ -223,6 +223,7 @@ final class AggregateWriteEngine
         $this->validateReferenceOnlyRelations($resourceModel, $metadata);
         $resourceModel = $this->executeInsert($resourceModel, $metadata, $adapter);
         $this->persistOwnedRelations($resourceModel, $metadata, true, $adapter, $scope);
+        $this->captureReplicated($metadata, $resourceModel, ResourceChangeOperation::Insert, null, $adapter);
 
         return $resourceModel;
     }
@@ -238,8 +239,10 @@ final class AggregateWriteEngine
         $resourceModel = $this->applyTenantScope($resourceModel, $metadata, $scope);
         $this->assertTargetWithinTenantScope($resourceModel, $metadata, $adapter, $scope);
         $this->validateReferenceOnlyRelations($resourceModel, $metadata);
+        $before = $this->replicatedRowBefore($metadata, $resourceModel, $adapter);
         $resourceModel = $this->executeUpdate($resourceModel, $metadata, $adapter, $scope);
         $this->persistOwnedRelations($resourceModel, $metadata, false, $adapter, $scope);
+        $this->captureReplicated($metadata, $resourceModel, ResourceChangeOperation::Update, $before, $adapter);
 
         return $resourceModel;
     }
@@ -253,9 +256,11 @@ final class AggregateWriteEngine
         $metadata = $this->metadata($resourceModel::class);
         $resourceModel = $this->applyTenantScope($resourceModel, $metadata, $scope);
         $this->assertTargetWithinTenantScope($resourceModel, $metadata, $adapter, $scope);
+        $before = $this->replicatedRowBefore($metadata, $resourceModel, $adapter);
 
         if ($metadata->softDelete !== null) {
             $this->executeSoftDelete($resourceModel, $metadata, $adapter, $scope);
+            $this->captureReplicated($metadata, $resourceModel, ResourceChangeOperation::Delete, $before, $adapter);
             return;
         }
 
@@ -269,6 +274,61 @@ final class AggregateWriteEngine
 
         $this->deleteOwnedRelations($resourceModel, $metadata, $adapter, $scope);
         $this->executeDelete($resourceModel, $metadata, $adapter, $scope);
+        $this->captureReplicated($metadata, $resourceModel, ResourceChangeOperation::Delete, $before, $adapter, rowRemoved: true);
+    }
+
+    /**
+     * Lock and read a #[Replicated] row before it is written. The lock orders
+     * concurrent writers of the row, and so the clocks the capture gives them.
+     *
+     * @return array<string, mixed>|null null when the row is not replicated (or absent)
+     */
+    private function replicatedRowBefore(ResourceModelMetadata $metadata, object $resourceModel, DatabaseAdapterInterface $adapter): ?array
+    {
+        if (ReplicationCapture::active($metadata) === null) {
+            return null;
+        }
+
+        $primaryKey = $this->requirePrimaryKey($metadata);
+
+        return ReplicationCapture::readRow(
+            $metadata,
+            $metadata->column($primaryKey)->columnName,
+            $this->propertyValue($resourceModel, $primaryKey),
+            $adapter,
+            lock: true,
+        );
+    }
+
+    /**
+     * Hand a #[Replicated] write to the capture on the write's own transaction:
+     * the row before it and the row as now stored (null once removed).
+     *
+     * @param array<string, mixed>|null $before
+     */
+    private function captureReplicated(
+        ResourceModelMetadata $metadata,
+        object $resourceModel,
+        ResourceChangeOperation $operation,
+        ?array $before,
+        DatabaseAdapterInterface $adapter,
+        bool $rowRemoved = false,
+    ): void {
+        $capture = ReplicationCapture::active($metadata);
+        if ($capture === null) {
+            return;
+        }
+
+        $primaryKey = $this->requirePrimaryKey($metadata);
+        $pkColumn = $metadata->column($primaryKey)->columnName;
+        $pkValue = $this->propertyValue($resourceModel, $primaryKey);
+        $after = $rowRemoved ? null : ReplicationCapture::readRow($metadata, $pkColumn, $pkValue, $adapter, lock: false);
+
+        if ($before === null && $after === null) {
+            return; // nothing was there and nothing is — no change to replicate
+        }
+
+        $capture->capture(ReplicationCapture::change($metadata, $pkColumn, $pkValue, $operation, $before, $after), $adapter);
     }
 
     /**
