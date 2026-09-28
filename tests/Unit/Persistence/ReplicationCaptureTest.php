@@ -177,6 +177,7 @@ final class ReplicationCaptureTest extends TestCase
         self::assertTrue(ReplicationCapture::isUuidV7(hex2bin(str_replace('-', '', $v7))));
         self::assertFalse(ReplicationCapture::isUuidV7('6f1c2a44-8e0b-4c3d-9f6a-2b7d1e0c5a91'));
         self::assertFalse(ReplicationCapture::isUuidV7('42'));
+        self::assertFalse(ReplicationCapture::isUuidV7($v7 . "\n"), 'a trailing newline is not part of a key');
     }
 
     private function rowsIn(string $table): int

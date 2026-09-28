@@ -129,6 +129,8 @@ final class ReplicationCapture
             return (ord($value[6]) >> 4) === 7 && (ord($value[8]) & 0xC0) === 0x80;
         }
 
-        return preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i', $value) === 1;
+        // \z, not $: $ also matches before a trailing newline, which would let
+        // "<uuid>\n" through as a key.
+        return preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/i', $value) === 1;
     }
 }
