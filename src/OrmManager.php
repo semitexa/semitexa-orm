@@ -101,7 +101,7 @@ class OrmManager
             if ($driver === 'sqlite') {
                 $this->adapter = $this->createSqliteAdapter();
             } else {
-                $this->adapter = new MysqlAdapter($this->getPool());
+                $this->adapter = new MysqlAdapter($this->getPool(), $this->connectionName);
             }
         }
 
@@ -229,9 +229,9 @@ class OrmManager
             // adapter would spread them and return an open-tx connection to the
             // pool). SQLite has no pool — its adapter already owns a single PDO.
             $this->syncEngine = new SyncEngine(
-                $this->getAdapter(),
-                new AuditLogger($historyDir),
+                $this->getAdapter(), new AuditLogger($historyDir),
                 $this->resolveDriver() === 'sqlite' ? null : $this->getPool(),
+                $this->connectionName,
             );
         }
 
@@ -903,7 +903,7 @@ class OrmManager
     {
         if ($this->config !== null) {
             if ($this->config->sqliteMemory) {
-                return new SqliteAdapter('sqlite::memory:');
+                return new SqliteAdapter('sqlite::memory:', connectionName: $this->connectionName);
             }
 
             $path = $this->config->sqlitePath;
@@ -913,7 +913,7 @@ class OrmManager
         } else {
             $memory = Environment::getEnvValue('DB_SQLITE_MEMORY');
             if (in_array(strtolower((string) $memory), ['1', 'true', 'yes'], true)) {
-                return new SqliteAdapter('sqlite::memory:');
+                return new SqliteAdapter('sqlite::memory:', connectionName: $this->connectionName);
             }
 
             $path = Environment::getEnvValue('DB_SQLITE_PATH');
@@ -928,6 +928,6 @@ class OrmManager
             mkdir($dir, 0755, true);
         }
 
-        return new SqliteAdapter("sqlite:{$path}");
+        return new SqliteAdapter("sqlite:{$path}", connectionName: $this->connectionName);
     }
 }

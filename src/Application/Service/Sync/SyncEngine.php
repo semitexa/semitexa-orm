@@ -10,6 +10,7 @@ use Semitexa\Orm\Domain\Model\ExecutionPlan;
 
 use Semitexa\Orm\Adapter\ConnectionPoolInterface;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
+use Semitexa\Orm\Application\Service\Persistence\ReplicatedWriteGuard;
 use Semitexa\Orm\Application\Service\Transaction\SingleConnectionAdapter;
 use Semitexa\Orm\Adapter\MySqlType;
 use Semitexa\Orm\Adapter\SqlIdentifier;
@@ -28,6 +29,7 @@ class SyncEngine
         private readonly DatabaseAdapterInterface $adapter,
         private readonly ?AuditLogger $auditLogger = null,
         private readonly ?ConnectionPoolInterface $pool = null,
+        private readonly string $connectionName = ReplicatedWriteGuard::DEFAULT_CONNECTION,
     ) {}
 
     public function buildPlan(SchemaDiff $diff): ExecutionPlan
@@ -357,7 +359,7 @@ class SyncEngine
             $pdo = $this->pool->pop();
             try {
                 return $this->executeOperationsOn(
-                    new SingleConnectionAdapter($pdo, $serverVersion),
+                    new SingleConnectionAdapter($pdo, $serverVersion, $this->connectionName),
                     $operations,
                     $useTransaction,
                     $isSqlite,

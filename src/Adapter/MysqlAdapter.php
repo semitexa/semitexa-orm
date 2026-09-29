@@ -33,8 +33,13 @@ class MysqlAdapter implements DatabaseAdapterInterface
      */
     private \WeakMap $statements;
 
+    /**
+     * @param string $connectionName the connection this adapter serves; the
+     *        replicated-write guard judges its SQL against that connection's tables
+     */
     public function __construct(
         private readonly ConnectionPoolInterface $pool,
+        private readonly string $connectionName = ReplicatedWriteGuard::DEFAULT_CONNECTION,
     ) {
         $this->statements = new \WeakMap();
     }
@@ -65,7 +70,7 @@ class MysqlAdapter implements DatabaseAdapterInterface
 
     public function execute(string $sql, array $params = []): QueryResult
     {
-        ReplicatedWriteGuard::check($sql);
+        ReplicatedWriteGuard::check($sql, $this->connectionName);
 
         // Two boolean checks when nothing observes, which is every production
         // process with slow-query logging off. The measurement wraps the call
@@ -89,7 +94,7 @@ class MysqlAdapter implements DatabaseAdapterInterface
 
     public function query(string $sql): QueryResult
     {
-        ReplicatedWriteGuard::check($sql);
+        ReplicatedWriteGuard::check($sql, $this->connectionName);
 
         if (!QueryRecorder::isRecording() && SlowQueryLog::thresholdMs() <= 0) {
             return $this->queryRecorded($sql);

@@ -25,10 +25,12 @@ class SqliteAdapter implements DatabaseAdapterInterface
     /**
      * @param string $dsn SQLite DSN (e.g. "sqlite:/path/to/db.sqlite" or "sqlite::memory:")
      * @param array<string, mixed> $options PDO options
+     * @param string $connectionName the connection this adapter serves (see MysqlAdapter)
      */
     public function __construct(
         private readonly string $dsn,
         private readonly array $options = [],
+        private readonly string $connectionName = ReplicatedWriteGuard::DEFAULT_CONNECTION,
     ) {
     }
 
@@ -48,7 +50,7 @@ class SqliteAdapter implements DatabaseAdapterInterface
 
     public function execute(string $sql, array $params = []): QueryResult
     {
-        ReplicatedWriteGuard::check($sql);
+        ReplicatedWriteGuard::check($sql, $this->connectionName);
 
         // Two boolean checks when nothing observes, which is every production
         // process with slow-query logging off. The measurement wraps the call
@@ -72,7 +74,7 @@ class SqliteAdapter implements DatabaseAdapterInterface
 
     public function query(string $sql): QueryResult
     {
-        ReplicatedWriteGuard::check($sql);
+        ReplicatedWriteGuard::check($sql, $this->connectionName);
 
         if (!QueryRecorder::isRecording() && SlowQueryLog::thresholdMs() <= 0) {
             return $this->classified(fn (): QueryResult => $this->queryRecorded($sql));

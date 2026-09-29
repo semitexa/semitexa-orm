@@ -292,7 +292,7 @@ class TransactionManager
             // corrupts every subsequent transaction into the nested-savepoint
             // branch. A pushed-back dead connection is healed by the pool's
             // ensureAlive() on the next pop().
-            $connAdapter = new SingleConnectionAdapter($pdo, $serverVersion);
+            $connAdapter = new SingleConnectionAdapter($pdo, $serverVersion, $this->connectionName);
             $this->setCurrentAdapter($connAdapter);
             try {
                 // beginTransaction() runs on the raw PDO, so it bypasses the
@@ -405,7 +405,7 @@ class TransactionManager
             $this->setActiveConnection($pdo);
             $this->setDepth(1);
 
-            $connAdapter = new SingleConnectionAdapter($pdo, $serverVersion);
+            $connAdapter = new SingleConnectionAdapter($pdo, $serverVersion, $this->connectionName);
             $this->setCurrentAdapter($connAdapter);
 
             // INSIDE the try, like the pooled path: a beginTransaction() that
@@ -514,7 +514,7 @@ class TransactionManager
         $this->setDepth($depth);
         $savepointName = 'sp_' . $depth;
 
-        $connAdapter = new SingleConnectionAdapter($pdo, $this->adapter->getServerVersion());
+        $connAdapter = new SingleConnectionAdapter($pdo, $this->adapter->getServerVersion(), $this->connectionName);
 
         // Transaction-control statements go through the classifier too. They
         // run as raw PDO calls, so without this a connection lost while
