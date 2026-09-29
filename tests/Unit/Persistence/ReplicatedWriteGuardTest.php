@@ -27,8 +27,12 @@ final class ReplicatedWriteGuardTest extends TestCase
 {
     private OrmManager $orm;
 
+    /** @var list<string> the process-global registry as it was before this test */
+    private array $registeredBefore = [];
+
     protected function setUp(): void
     {
+        $this->registeredBefore = ReplicatedWriteGuard::registered();
         ReplicatedWriteGuard::reset();
         $this->orm = new OrmManager(config: new ConnectionConfig(driver: 'sqlite', sqliteMemory: true));
         $this->orm->getAdapter()->execute('CREATE TABLE replicated_notes (id TEXT PRIMARY KEY, title TEXT, body TEXT)');
@@ -39,6 +43,9 @@ final class ReplicatedWriteGuardTest extends TestCase
     protected function tearDown(): void
     {
         ReplicatedWriteGuard::reset();
+        foreach ($this->registeredBefore as $table) {
+            ReplicatedWriteGuard::register($table);
+        }
     }
 
     /** @return iterable<string, array{string}> */
@@ -55,6 +62,14 @@ final class ReplicatedWriteGuardTest extends TestCase
         yield 'delete, leading space'=> ["\n   DELETE FROM `replicated_notes` WHERE id = '1'"];
         yield 'truncate'             => ['TRUNCATE TABLE replicated_notes'];
         yield 'table name, other case' => ['DELETE FROM Replicated_Notes'];
+        yield 'sqlite insert or replace' => ["INSERT OR REPLACE INTO replicated_notes (id) VALUES ('1')"];
+        yield 'sqlite update or ignore'  => ["UPDATE OR IGNORE replicated_notes SET title = 'x'"];
+        yield 'leading block comment'    => ["/* nightly fix */ UPDATE replicated_notes SET title = 'x'"];
+        yield 'leading line comments'    => ["-- fix\n# again\nDELETE FROM replicated_notes"];
+        yield 'cte then update'          => ["WITH stale AS (SELECT id FROM other_notes) UPDATE replicated_notes SET title = 'x' WHERE id IN (SELECT id FROM stale)"];
+        yield 'mysql modifiers, delete'  => ['DELETE LOW_PRIORITY QUICK IGNORE FROM replicated_notes'];
+        yield 'mysql modifiers, insert'  => ["INSERT LOW_PRIORITY IGNORE INTO replicated_notes (id) VALUES ('1')"];
+        yield 'multi-table delete'       => ['DELETE n FROM replicated_notes n JOIN other_notes o ON o.id = n.id'];
     }
 
     #[Test]
@@ -82,6 +97,23 @@ final class ReplicatedWriteGuardTest extends TestCase
         }
     }
 
+    /** @return iterable<string, array{string}> */
+    public static function notWrites(): iterable
+    {
+        yield 'cte then select'            => ['WITH x AS (SELECT id FROM replicated_notes) SELECT * FROM x'];
+        yield 'a select that says update'  => ["SELECT 'UPDATE replicated_notes' AS note"];
+        yield 'another table, with modifiers' => ['DELETE LOW_PRIORITY FROM other_notes'];
+        yield 'another table after a comment' => ["/* c */ INSERT OR REPLACE INTO other_notes (id) VALUES ('1')"];
+    }
+
+    #[Test]
+    #[DataProvider('notWrites')]
+    public function statements_that_do_not_write_a_replicated_table_pass(string $sql): void
+    {
+        ReplicatedWriteGuard::check($sql);
+        $this->addToAssertionCount(1); // reaching here is the assertion: check() did not throw
+    }
+
     #[Test]
     public function reads_ddl_and_other_tables_are_left_alone(): void
     {
@@ -103,7 +135,11 @@ final class ReplicatedWriteGuardTest extends TestCase
 
         $note = $engine->insert(new ReplicatedNote('', 't', 'b'), ReplicatedNoteResourceModel::class, $mappers);
         self::assertInstanceOf(ReplicatedNote::class, $note);
+        self::assertSame([['title' => 't', 'body' => 'b']], $this->orm->getAdapter()->query('SELECT title, body FROM replicated_notes')->rows);
+
         $engine->update(new ReplicatedNote($note->id, 't', 'edited'), ReplicatedNoteResourceModel::class, $mappers);
+        self::assertSame([['title' => 't', 'body' => 'edited']], $this->orm->getAdapter()->query('SELECT title, body FROM replicated_notes')->rows);
+
         $engine->delete(new ReplicatedNote($note->id, 't', 'edited'), ReplicatedNoteResourceModel::class, $mappers);
 
         self::assertSame(0, (int) $this->orm->getAdapter()->query('SELECT COUNT(*) AS c FROM replicated_notes')->rows[0]['c']);

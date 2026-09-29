@@ -29,11 +29,24 @@ final class ReplicatedWriteGuard
 {
     private const PERMIT_KEY = 'orm.replicated_write_permit';
 
+    /** A table reference, optionally schema-qualified and quoted; group 1 is the table. */
+    private const TABLE = '(?:[`"]?\w+[`"]?\.)?[`"]?(\w+)[`"]?';
+
+    /** SQLite's conflict clause on INSERT / UPDATE. */
+    private const CONFLICT = 'OR\s+(?:REPLACE|IGNORE|ABORT|FAIL|ROLLBACK)';
+
     /**
-     * Statements that write, and the table they write first. Multi-table
-     * forms (UPDATE a JOIN b, DELETE t FROM …) are judged by that first table.
+     * The write statements and where their target sits, modifiers included.
+     * Multi-table forms (UPDATE a JOIN b) are judged by the first table.
      */
-    private const WRITE = '/^\s*(?:INSERT(?:\s+IGNORE)?(?:\s+INTO)?|REPLACE(?:\s+INTO)?|UPDATE(?:\s+IGNORE)?|DELETE(?:\s+IGNORE)?\s+FROM|TRUNCATE(?:\s+TABLE)?)\s+(?:[`"]?\w+[`"]?\.)?[`"]?(\w+)[`"]?/i';
+    private const TARGETS = [
+        '/^(?:INSERT|REPLACE)(?:\s+(?:LOW_PRIORITY|DELAYED|HIGH_PRIORITY|IGNORE|' . self::CONFLICT . '))*(?:\s+INTO)?\s+' . self::TABLE . '/i',
+        '/^UPDATE(?:\s+(?:LOW_PRIORITY|IGNORE|' . self::CONFLICT . '))*\s+' . self::TABLE . '/i',
+        '/^DELETE(?:\s+(?:LOW_PRIORITY|QUICK|IGNORE))*\s+FROM\s+' . self::TABLE . '/i',
+        '/^TRUNCATE(?:\s+TABLE)?\s+' . self::TABLE . '/i',
+    ];
+
+    private const WRITE_VERB = '/^(?:INSERT|REPLACE|UPDATE|DELETE|TRUNCATE)\b/i';
 
     /** @var array<string, true> lower-cased table name => true */
     #[WorkerState('The #[Replicated] tables of this process, registered once at start from discovery; never request data.')]
@@ -83,13 +96,65 @@ final class ReplicatedWriteGuard
         if (self::$tables === []) {
             return;
         }
-        if (preg_match(self::WRITE, $sql, $match) !== 1 || !isset(self::$tables[strtolower($match[1])])) {
-            return;
-        }
-        if (Row::asInt(CoroutineLocal::get(self::PERMIT_KEY, 0)) > 0) {
+
+        $table = self::writtenTable($sql);
+        if ($table === null || Row::asInt(CoroutineLocal::get(self::PERMIT_KEY, 0)) > 0) {
             return;
         }
 
-        throw ReplicatedTableWriteException::for($match[1], $sql);
+        throw ReplicatedTableWriteException::for($table, $sql);
+    }
+
+    /**
+     * The registered table $sql writes, or null. A statement that writes but
+     * whose target this parser cannot place (DELETE t FROM …, an unusual
+     * dialect form) is judged conservatively: refused when it names any
+     * registered table at all.
+     */
+    private static function writtenTable(string $sql): ?string
+    {
+        $statement = self::withoutLeadingComments($sql);
+
+        // WITH … UPDATE / DELETE / INSERT: the write follows the CTEs.
+        if (preg_match('/^WITH\b/i', $statement) === 1) {
+            if (preg_match('/\b(?:INSERT|REPLACE|UPDATE|DELETE)\b/i', $statement, $verb, PREG_OFFSET_CAPTURE) !== 1) {
+                return null; // WITH … SELECT
+            }
+            $statement = substr($statement, $verb[0][1]);
+        }
+
+        if (preg_match(self::WRITE_VERB, $statement) !== 1) {
+            return null;
+        }
+
+        foreach (self::TARGETS as $pattern) {
+            if (preg_match($pattern, $statement, $match) === 1) {
+                return isset(self::$tables[strtolower($match[1])]) ? $match[1] : null;
+            }
+        }
+
+        foreach (array_keys(self::$tables) as $table) {
+            if (preg_match('/(?<![\w])[`"]?' . preg_quote($table, '/') . '[`"]?(?![\w])/i', $statement) === 1) {
+                return $table;
+            }
+        }
+
+        return null;
+    }
+
+    private static function withoutLeadingComments(string $sql): string
+    {
+        $rest = ltrim($sql);
+        while (true) {
+            if (str_starts_with($rest, '/*')) {
+                $end = strpos($rest, '*/');
+                $rest = $end === false ? '' : ltrim(substr($rest, $end + 2));
+            } elseif (str_starts_with($rest, '--') || str_starts_with($rest, '#')) {
+                $end = strpos($rest, "\n");
+                $rest = $end === false ? '' : ltrim(substr($rest, $end + 1));
+            } else {
+                return $rest;
+            }
+        }
     }
 }
