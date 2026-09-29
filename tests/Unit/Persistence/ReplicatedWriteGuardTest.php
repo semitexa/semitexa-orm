@@ -67,6 +67,9 @@ final class ReplicatedWriteGuardTest extends TestCase
         yield 'leading block comment'    => ["/* nightly fix */ UPDATE replicated_notes SET title = 'x'"];
         yield 'leading line comments'    => ["-- fix\n# again\nDELETE FROM replicated_notes"];
         yield 'cte then update'          => ["WITH stale AS (SELECT id FROM other_notes) UPDATE replicated_notes SET title = 'x' WHERE id IN (SELECT id FROM stale)"];
+        yield 'comment between the ctes and the write' => ["WITH s AS (SELECT id FROM other_notes) /* fix */ UPDATE replicated_notes SET title = 'x'"];
+        yield 'a ) inside a comment in a cte body'     => ["WITH x AS (SELECT 1 /* ) */) DELETE FROM replicated_notes"];
+        yield 'comments between cte tokens'            => ["WITH /* a */ x /* b */ AS /* c */ (SELECT 1 -- )\n) -- d\nINSERT INTO replicated_notes (id) VALUES ('1')"];
         yield 'recursive ctes then insert' => ["WITH RECURSIVE n (i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 3), m AS MATERIALIZED (SELECT i FROM n) INSERT INTO replicated_notes (id) SELECT i FROM m"];
         yield 'mysql modifiers, delete'  => ['DELETE LOW_PRIORITY QUICK IGNORE FROM replicated_notes'];
         yield 'mysql modifiers, insert'  => ["INSERT LOW_PRIORITY IGNORE INTO replicated_notes (id) VALUES ('1')"];
@@ -104,6 +107,7 @@ final class ReplicatedWriteGuardTest extends TestCase
         yield 'cte then select'            => ['WITH x AS (SELECT id FROM replicated_notes) SELECT * FROM x'];
         yield 'cte calling REPLACE()'      => ["WITH x AS (SELECT REPLACE(title, 'a', 'b') AS t FROM replicated_notes) SELECT * FROM x"];
         yield 'cte aliasing update/delete' => ['WITH x AS (SELECT title AS `update`, body AS `delete` FROM replicated_notes) SELECT * FROM x'];
+        yield 'cte with comments, then select' => ["WITH x /* ) */ AS (SELECT 1 /* UPDATE replicated_notes */) SELECT * FROM x"];
         yield 'two ctes, a paren in a string' => ["WITH a AS (SELECT ')' AS p FROM replicated_notes), b (n) AS (SELECT 1) SELECT * FROM a, b"];
         yield 'a select that says update'  => ["SELECT 'UPDATE replicated_notes' AS note"];
         yield 'another table, with modifiers' => ['DELETE LOW_PRIORITY FROM other_notes'];

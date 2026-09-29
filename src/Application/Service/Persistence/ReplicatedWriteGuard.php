@@ -160,38 +160,49 @@ final class ReplicatedWriteGuard
      */
     private static function afterCtes(string $statement): ?string
     {
-        $rest = ltrim(substr($statement, 4));
-        if (preg_match('/^RECURSIVE\s/i', $rest) === 1) {
-            $rest = ltrim(substr($rest, 9));
+        // Comments may sit between any two tokens; each step skips them.
+        $rest = self::withoutLeadingComments(substr($statement, 4));
+        if (preg_match('/^RECURSIVE\b/i', $rest) === 1) {
+            $rest = self::withoutLeadingComments(substr($rest, 9));
         }
 
         while (true) {
-            if (preg_match('/^(?:`[^`]+`|"[^"]+"|\w+)\s*/', $rest, $name) !== 1) {
+            if (preg_match('/^(?:`[^`]+`|"[^"]+"|\w+)/', $rest, $name) !== 1) {
                 return null;
             }
-            $rest = substr($rest, strlen($name[0]));
+            $rest = self::withoutLeadingComments(substr($rest, strlen($name[0])));
             if (str_starts_with($rest, '(')) { // column list
                 $rest = self::afterBalanced($rest);
                 if ($rest === null) {
                     return null;
                 }
             }
-            if (preg_match('/^AS\s*(?:NOT\s+MATERIALIZED\s*|MATERIALIZED\s*)?/i', $rest, $as) !== 1
-                || !str_starts_with(substr($rest, strlen($as[0])), '(')) {
+            if (preg_match('/^AS\b/i', $rest) !== 1) {
                 return null;
             }
-            $rest = self::afterBalanced(substr($rest, strlen($as[0])));
+            $rest = self::withoutLeadingComments(substr($rest, 2));
+            if (preg_match('/^(?:NOT\s+)?MATERIALIZED\b/i', $rest, $materialized) === 1) {
+                $rest = self::withoutLeadingComments(substr($rest, strlen($materialized[0])));
+            }
+            if (!str_starts_with($rest, '(')) {
+                return null;
+            }
+            $rest = self::afterBalanced($rest);
             if ($rest === null) {
                 return null;
             }
             if (!str_starts_with($rest, ',')) {
                 return $rest;
             }
-            $rest = ltrim(substr($rest, 1));
+            $rest = self::withoutLeadingComments(substr($rest, 1));
         }
     }
 
-    /** $sql starts with "("; the text after its matching ")", left-trimmed, or null. */
+    /**
+     * $sql starts with "("; the text after its matching ")", with leading
+     * comments skipped, or null. Quotes and comments are stepped over, so a
+     * parenthesis inside either never moves the depth.
+     */
     private static function afterBalanced(string $sql): ?string
     {
         $depth = 0;
@@ -204,12 +215,28 @@ final class ReplicatedWriteGuard
                 }
                 continue;
             }
+            if ($c === '/' && ($sql[$i + 1] ?? '') === '*') {
+                $end = strpos($sql, '*/', $i + 2);
+                if ($end === false) {
+                    return null;
+                }
+                $i = $end + 1;
+                continue;
+            }
+            if (($c === '-' && ($sql[$i + 1] ?? '') === '-') || $c === '#') {
+                $end = strpos($sql, "\n", $i);
+                if ($end === false) {
+                    return null;
+                }
+                $i = $end;
+                continue;
+            }
             if ($c === "'" || $c === '"' || $c === '`') {
                 $quote = $c;
             } elseif ($c === '(') {
                 $depth++;
             } elseif ($c === ')' && --$depth === 0) {
-                return ltrim(substr($sql, $i + 1));
+                return self::withoutLeadingComments(substr($sql, $i + 1));
             }
         }
 
