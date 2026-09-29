@@ -46,7 +46,8 @@ final class ReplicatedWriteGuard
         '/^TRUNCATE(?:\s+TABLE)?\s+' . self::TABLE . '/i',
     ];
 
-    private const WRITE_VERB = '/^(?:INSERT|REPLACE|UPDATE|DELETE|TRUNCATE)\b/i';
+    /** A write verb followed by whitespace: REPLACE( is a string function, not a write. */
+    private const WRITE_VERB = '/^(?:INSERT|REPLACE|UPDATE|DELETE|TRUNCATE)\s/i';
 
     /** @var array<string, true> lower-cased table name => true */
     #[WorkerState('The #[Replicated] tables of this process, registered once at start from discovery; never request data.')]
@@ -115,12 +116,18 @@ final class ReplicatedWriteGuard
     {
         $statement = self::withoutLeadingComments($sql);
 
-        // WITH … UPDATE / DELETE / INSERT: the write follows the CTEs.
-        if (preg_match('/^WITH\b/i', $statement) === 1) {
-            if (preg_match('/\b(?:INSERT|REPLACE|UPDATE|DELETE)\b/i', $statement, $verb, PREG_OFFSET_CAPTURE) !== 1) {
-                return null; // WITH … SELECT
+        // WITH …: judge the main statement after the CTE bodies, never a
+        // word inside them (a CTE may call REPLACE() or alias `update`).
+        if (preg_match('/^WITH\s/i', $statement) === 1) {
+            $main = self::afterCtes($statement);
+            if ($main === null) {
+                // The CTE list could not be walked: refuse only a statement
+                // that plainly writes and names a registered table.
+                return preg_match('/\b(?:INSERT|REPLACE|UPDATE|DELETE)\s/i', $statement) === 1
+                    ? self::mentionedTable($statement)
+                    : null;
             }
-            $statement = substr($statement, $verb[0][1]);
+            $statement = $main;
         }
 
         if (preg_match(self::WRITE_VERB, $statement) !== 1) {
@@ -133,9 +140,76 @@ final class ReplicatedWriteGuard
             }
         }
 
+        return self::mentionedTable($statement);
+    }
+
+    private static function mentionedTable(string $statement): ?string
+    {
         foreach (array_keys(self::$tables) as $table) {
             if (preg_match('/(?<![\w])[`"]?' . preg_quote($table, '/') . '[`"]?(?![\w])/i', $statement) === 1) {
                 return $table;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * The main statement of `WITH [RECURSIVE] name [(cols)] AS [[NOT] MATERIALIZED] (…) [, …] main`,
+     * or null when the CTE list cannot be walked.
+     */
+    private static function afterCtes(string $statement): ?string
+    {
+        $rest = ltrim(substr($statement, 4));
+        if (preg_match('/^RECURSIVE\s/i', $rest) === 1) {
+            $rest = ltrim(substr($rest, 9));
+        }
+
+        while (true) {
+            if (preg_match('/^(?:`[^`]+`|"[^"]+"|\w+)\s*/', $rest, $name) !== 1) {
+                return null;
+            }
+            $rest = substr($rest, strlen($name[0]));
+            if (str_starts_with($rest, '(')) { // column list
+                $rest = self::afterBalanced($rest);
+                if ($rest === null) {
+                    return null;
+                }
+            }
+            if (preg_match('/^AS\s*(?:NOT\s+MATERIALIZED\s*|MATERIALIZED\s*)?/i', $rest, $as) !== 1
+                || !str_starts_with(substr($rest, strlen($as[0])), '(')) {
+                return null;
+            }
+            $rest = self::afterBalanced(substr($rest, strlen($as[0])));
+            if ($rest === null) {
+                return null;
+            }
+            if (!str_starts_with($rest, ',')) {
+                return $rest;
+            }
+            $rest = ltrim(substr($rest, 1));
+        }
+    }
+
+    /** $sql starts with "("; the text after its matching ")", left-trimmed, or null. */
+    private static function afterBalanced(string $sql): ?string
+    {
+        $depth = 0;
+        $quote = null;
+        for ($i = 0, $n = strlen($sql); $i < $n; $i++) {
+            $c = $sql[$i];
+            if ($quote !== null) {
+                if ($c === $quote) {
+                    $quote = null;
+                }
+                continue;
+            }
+            if ($c === "'" || $c === '"' || $c === '`') {
+                $quote = $c;
+            } elseif ($c === '(') {
+                $depth++;
+            } elseif ($c === ')' && --$depth === 0) {
+                return ltrim(substr($sql, $i + 1));
             }
         }
 

@@ -67,6 +67,7 @@ final class ReplicatedWriteGuardTest extends TestCase
         yield 'leading block comment'    => ["/* nightly fix */ UPDATE replicated_notes SET title = 'x'"];
         yield 'leading line comments'    => ["-- fix\n# again\nDELETE FROM replicated_notes"];
         yield 'cte then update'          => ["WITH stale AS (SELECT id FROM other_notes) UPDATE replicated_notes SET title = 'x' WHERE id IN (SELECT id FROM stale)"];
+        yield 'recursive ctes then insert' => ["WITH RECURSIVE n (i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 3), m AS MATERIALIZED (SELECT i FROM n) INSERT INTO replicated_notes (id) SELECT i FROM m"];
         yield 'mysql modifiers, delete'  => ['DELETE LOW_PRIORITY QUICK IGNORE FROM replicated_notes'];
         yield 'mysql modifiers, insert'  => ["INSERT LOW_PRIORITY IGNORE INTO replicated_notes (id) VALUES ('1')"];
         yield 'multi-table delete'       => ['DELETE n FROM replicated_notes n JOIN other_notes o ON o.id = n.id'];
@@ -101,6 +102,9 @@ final class ReplicatedWriteGuardTest extends TestCase
     public static function notWrites(): iterable
     {
         yield 'cte then select'            => ['WITH x AS (SELECT id FROM replicated_notes) SELECT * FROM x'];
+        yield 'cte calling REPLACE()'      => ["WITH x AS (SELECT REPLACE(title, 'a', 'b') AS t FROM replicated_notes) SELECT * FROM x"];
+        yield 'cte aliasing update/delete' => ['WITH x AS (SELECT title AS `update`, body AS `delete` FROM replicated_notes) SELECT * FROM x'];
+        yield 'two ctes, a paren in a string' => ["WITH a AS (SELECT ')' AS p FROM replicated_notes), b (n) AS (SELECT 1) SELECT * FROM a, b"];
         yield 'a select that says update'  => ["SELECT 'UPDATE replicated_notes' AS note"];
         yield 'another table, with modifiers' => ['DELETE LOW_PRIORITY FROM other_notes'];
         yield 'another table after a comment' => ["/* c */ INSERT OR REPLACE INTO other_notes (id) VALUES ('1')"];
