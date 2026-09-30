@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Application\Console\Command;
 
 use Semitexa\Core\Attribute\AsCommand;
+use Semitexa\Core\Attribute\InjectAsReadonly;
 use Semitexa\Core\Console\BaseCommand;
 use Semitexa\Orm\Application\Service\Connection\ConnectionRegistry;
 use Symfony\Component\Console\Command\Command;
@@ -16,11 +17,8 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 #[AsCommand(name: 'orm:diff', description: 'Show differences between code schema and database')]
 class OrmDiffCommand extends BaseCommand
 {
-    public function __construct(
-        private readonly ConnectionRegistry $connections,
-    ) {
-        parent::__construct();
-    }
+    #[InjectAsReadonly]
+    protected ConnectionRegistry $connections;
 
     protected function configure(): void
     {
