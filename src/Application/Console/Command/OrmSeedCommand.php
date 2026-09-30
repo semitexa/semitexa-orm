@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Application\Console\Command;
 
 use Semitexa\Core\Attribute\AsCommand;
+use Semitexa\Core\Attribute\InjectAsReadonly;
 use Semitexa\Core\Console\BaseCommand;
 use Semitexa\Orm\OrmManager;
 use Symfony\Component\Console\Command\Command;
@@ -15,11 +16,8 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 #[AsCommand(name: 'orm:seed', description: 'Run defaults() upsert for all Resource classes with seed data')]
 class OrmSeedCommand extends BaseCommand
 {
-    public function __construct(
-        private readonly OrmManager $orm,
-    ) {
-        parent::__construct();
-    }
+    #[InjectAsReadonly]
+    protected OrmManager $orm;
 
     protected function configure(): void
     {

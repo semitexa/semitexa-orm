@@ -23,7 +23,8 @@ final class ReplicatedTableRegistration
             if (!class_exists($class) || (new \ReflectionClass($class))->getAttributes(FromTable::class) === []) {
                 continue;
             }
-            ReplicatedWriteGuard::register($metadata->for($class)->tableName);
+            $resource = $metadata->for($class);
+            ReplicatedWriteGuard::register($resource->tableName, $resource->connectionName);
         }
     }
 }

@@ -14,6 +14,7 @@ use Semitexa\Orm\Application\Service\Persistence\ReplicatedWriteGuard;
 use Semitexa\Orm\Domain\Model\ConnectionConfig;
 use Semitexa\Orm\Exception\ReplicatedTableWriteException;
 use Semitexa\Orm\OrmManager;
+use Semitexa\Orm\Tests\Fixture\Metadata\ArchivedReplicatedNoteResourceModel;
 use Semitexa\Orm\Tests\Fixture\Metadata\ReplicatedNoteResourceModel;
 use Semitexa\Orm\Tests\Fixture\Persistence\ReplicatedNote;
 use Semitexa\Orm\Tests\Fixture\Persistence\ReplicatedNoteMapper;
@@ -184,5 +185,55 @@ final class ReplicatedWriteGuardTest extends TestCase
 
         self::assertSame(['replicated_notes'], ReplicatedWriteGuard::registered());
         ReplicatedWriteGuard::check("INSERT INTO categories (id, name) VALUES ('1', 'x')"); // not replicated: allowed
+    }
+
+    #[Test]
+    public function a_table_of_the_same_name_on_another_connection_is_not_refused(): void
+    {
+        // replicated_notes is registered on 'default'; 'archive' is another
+        // database whose own replicated_notes nothing replicates.
+        ReplicatedWriteGuard::check("UPDATE replicated_notes SET title = 'x'", 'archive');
+
+        $this->expectException(ReplicatedTableWriteException::class);
+        ReplicatedWriteGuard::check("UPDATE replicated_notes SET title = 'x'");
+    }
+
+    #[Test]
+    public function a_registration_takes_the_connection_its_resource_declares(): void
+    {
+        ReplicatedWriteGuard::reset();
+        $discovery = $this->createStub(ClassDiscovery::class);
+        $discovery->method('findClassesWithAttribute')->willReturn([ArchivedReplicatedNoteResourceModel::class]);
+
+        ReplicatedTableRegistration::fromDiscovery($discovery);
+
+        self::assertSame(['replicated_notes'], ReplicatedWriteGuard::registered('archive'));
+        self::assertSame([], ReplicatedWriteGuard::registered());
+    }
+
+    #[Test]
+    public function each_managers_adapters_are_judged_against_their_own_connection(): void
+    {
+        // The name travels from the manager into its adapter and into the
+        // single-connection adapter a transaction runs on.
+        $archive = new OrmManager(config: new ConnectionConfig(driver: 'sqlite', sqliteMemory: true), connectionName: 'archive');
+        $archive->getAdapter()->execute('CREATE TABLE replicated_notes (id TEXT PRIMARY KEY, title TEXT)');
+
+        $archive->getAdapter()->execute("INSERT INTO replicated_notes (id, title) VALUES ('1', 'kept')");
+        $archive->getTransactionManager()->run(static function ($db): void {
+            $db->execute("UPDATE replicated_notes SET title = 'moved' WHERE id = '1'");
+        });
+        self::assertSame('moved', $archive->getAdapter()->execute('SELECT title FROM replicated_notes')->rows[0]['title'] ?? null);
+
+        ReplicatedWriteGuard::register('replicated_notes', 'archive');
+        try {
+            $archive->getTransactionManager()->run(static function ($db): void {
+                $db->execute("UPDATE replicated_notes SET title = 'raw' WHERE id = '1'");
+            });
+            self::fail('a replicated table on its own connection is still guarded');
+        } catch (ReplicatedTableWriteException) {
+        } finally {
+            $archive->shutdown();
+        }
     }
 }

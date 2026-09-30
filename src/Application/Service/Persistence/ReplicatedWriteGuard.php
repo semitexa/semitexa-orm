@@ -24,6 +24,12 @@ use Semitexa\Orm\Exception\ReplicatedTableWriteException;
  * The replicated tables are registered at process start (server and console)
  * from discovery. Nothing registered, nothing refused: the check costs one
  * empty-array test on every statement.
+ *
+ * A registration belongs to the connection its resource declares
+ * (#[Connection]), and each adapter checks against its own: a table of the
+ * same name in another database is a different table, and writing it used to
+ * be refused. Connections are told apart by name — two names pointed at one
+ * database are two scopes to the guard.
  */
 final class ReplicatedWriteGuard
 {
@@ -49,19 +55,21 @@ final class ReplicatedWriteGuard
     /** A write verb followed by whitespace: REPLACE( is a string function, not a write. */
     private const WRITE_VERB = '/^(?:INSERT|REPLACE|UPDATE|DELETE|TRUNCATE)\s/i';
 
-    /** @var array<string, true> lower-cased table name => true */
+    public const DEFAULT_CONNECTION = 'default';
+
+    /** @var array<string, array<string, true>> connection name => lower-cased table name => true */
     #[WorkerState('The #[Replicated] tables of this process, registered once at start from discovery; never request data.')]
     private static array $tables = [];
 
-    public static function register(string $table): void
+    public static function register(string $table, string $connection = self::DEFAULT_CONNECTION): void
     {
-        self::$tables[strtolower($table)] = true;
+        self::$tables[$connection][strtolower($table)] = true;
     }
 
-    /** @return list<string> */
-    public static function registered(): array
+    /** @return list<string> the tables registered on $connection */
+    public static function registered(string $connection = self::DEFAULT_CONNECTION): array
     {
-        return array_keys(self::$tables);
+        return array_keys(self::$tables[$connection] ?? []);
     }
 
     /** Forget every registration (tests). */
@@ -90,15 +98,21 @@ final class ReplicatedWriteGuard
     }
 
     /**
-     * @throws ReplicatedTableWriteException when $sql writes a replicated table outside permit()
+     * @param string $connection the connection $sql runs on
+     * @throws ReplicatedTableWriteException when $sql writes a table replicated on $connection outside permit()
      */
-    public static function check(string $sql): void
+    public static function check(string $sql, string $connection = self::DEFAULT_CONNECTION): void
     {
         if (self::$tables === []) {
             return;
         }
 
-        $table = self::writtenTable($sql);
+        $tables = self::$tables[$connection] ?? [];
+        if ($tables === []) {
+            return;
+        }
+
+        $table = self::writtenTable($sql, $tables);
         if ($table === null || Row::asInt(CoroutineLocal::get(self::PERMIT_KEY, 0)) > 0) {
             return;
         }
@@ -111,8 +125,10 @@ final class ReplicatedWriteGuard
      * whose target this parser cannot place (DELETE t FROM …, an unusual
      * dialect form) is judged conservatively: refused when it names any
      * registered table at all.
+     *
+     * @param array<string, true> $tables the tables replicated on this connection
      */
-    private static function writtenTable(string $sql): ?string
+    private static function writtenTable(string $sql, array $tables): ?string
     {
         $statement = self::withoutLeadingComments($sql);
 
@@ -124,7 +140,7 @@ final class ReplicatedWriteGuard
                 // The CTE list could not be walked: refuse only a statement
                 // that plainly writes and names a registered table.
                 return preg_match('/\b(?:INSERT|REPLACE|UPDATE|DELETE)\s/i', $statement) === 1
-                    ? self::mentionedTable($statement)
+                    ? self::mentionedTable($statement, $tables)
                     : null;
             }
             $statement = $main;
@@ -136,16 +152,17 @@ final class ReplicatedWriteGuard
 
         foreach (self::TARGETS as $pattern) {
             if (preg_match($pattern, $statement, $match) === 1) {
-                return isset(self::$tables[strtolower($match[1])]) ? $match[1] : null;
+                return isset($tables[strtolower($match[1])]) ? $match[1] : null;
             }
         }
 
-        return self::mentionedTable($statement);
+        return self::mentionedTable($statement, $tables);
     }
 
-    private static function mentionedTable(string $statement): ?string
+    /** @param array<string, true> $tables */
+    private static function mentionedTable(string $statement, array $tables): ?string
     {
-        foreach (array_keys(self::$tables) as $table) {
+        foreach (array_keys($tables) as $table) {
             if (preg_match('/(?<![\w])[`"]?' . preg_quote($table, '/') . '[`"]?(?![\w])/i', $statement) === 1) {
                 return $table;
             }

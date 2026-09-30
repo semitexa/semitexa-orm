@@ -32,9 +32,13 @@ class SingleConnectionAdapter implements DatabaseAdapterInterface
      */
     private array $statements = [];
 
+    /**
+     * @param string $connectionName the connection $connection was taken from (see MysqlAdapter)
+     */
     public function __construct(
         private readonly \PDO $connection,
         private readonly string $serverVersion,
+        private readonly string $connectionName = ReplicatedWriteGuard::DEFAULT_CONNECTION,
     ) {}
 
     public function supports(ServerCapability $capability): bool
@@ -54,7 +58,7 @@ class SingleConnectionAdapter implements DatabaseAdapterInterface
 
     public function execute(string $sql, array $params = []): QueryResult
     {
-        ReplicatedWriteGuard::check($sql);
+        ReplicatedWriteGuard::check($sql, $this->connectionName);
 
         // Same recording seam as MysqlAdapter: without it, every query run
         // INSIDE a transaction was invisible to traces/profiles — exactly the
@@ -118,7 +122,7 @@ class SingleConnectionAdapter implements DatabaseAdapterInterface
 
     public function query(string $sql): QueryResult
     {
-        ReplicatedWriteGuard::check($sql);
+        ReplicatedWriteGuard::check($sql, $this->connectionName);
 
         if (!QueryRecorder::isRecording() && SlowQueryLog::thresholdMs() <= 0) {
             return $this->queryUnrecorded($sql);
