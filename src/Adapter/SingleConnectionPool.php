@@ -28,6 +28,16 @@ final class SingleConnectionPool implements TenantSwitchingConnectionPoolInterfa
     /** Coroutine that currently owns the cached connection; -1 = none / non-coroutine. */
     private int $ownerCid = -1;
 
+    /**
+     * How many pop()s of the cached connection are not yet pushed back.
+     *
+     * One connection means a borrow can be NESTED: TransactionManager holds it
+     * for a transaction while a read inside that transaction (a repository
+     * calling OrmManager::getAdapter()->execute()) pops it again. Only the
+     * outermost push() may clean the connection up — see push().
+     */
+    private int $borrows = 0;
+
     public function __construct(
         private readonly \Closure $factory,
     ) {}
@@ -56,6 +66,11 @@ final class SingleConnectionPool implements TenantSwitchingConnectionPoolInterfa
             return ($this->factory)();
         }
 
+        // A new owner starts its own count: borrows a dead coroutine never
+        // returned must not make this one's pushes look nested forever.
+        if ($this->ownerCid !== $cid) {
+            $this->borrows = 0;
+        }
         $this->ownerCid = $cid;
 
         return $this->reuseOrCreate();
@@ -88,6 +103,18 @@ final class SingleConnectionPool implements TenantSwitchingConnectionPoolInterfa
             return;
         }
 
+        // An inner borrow returning the connection its outer holder still uses.
+        // The cleanup below would roll back the OUTER caller's transaction:
+        // measured 2026-10-01 in `semitexa:demo:seed`, where a COUNT read inside
+        // TransactionManager::run() sent a bare ROLLBACK, every later write ran
+        // in autocommit and the next RELEASE SAVEPOINT failed with 1305.
+        if ($this->borrows > 1) {
+            --$this->borrows;
+
+            return;
+        }
+        $this->borrows = 0;
+
         // Never re-cache a connection mid-transaction: the next caller would
         // inherit the open transaction and its writes would ride someone
         // else's commit/rollback. (Tracks PDO::beginTransaction() only — same
@@ -115,6 +142,7 @@ final class SingleConnectionPool implements TenantSwitchingConnectionPoolInterfa
     {
         $this->connection = null;
         $this->ownerCid   = -1;
+        $this->borrows    = 0;
     }
 
     /**
@@ -169,6 +197,8 @@ final class SingleConnectionPool implements TenantSwitchingConnectionPoolInterfa
 
     private function reuseOrCreate(): \PDO
     {
+        ++$this->borrows;
+
         if ($this->connection === null) {
             $this->connection = ($this->factory)();
         } else {

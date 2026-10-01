@@ -107,6 +107,46 @@ final class SingleConnectionPoolTest extends TestCase
         self::assertNotSame($stale, $fresh);
         self::assertInstanceOf(HealthyPdo::class, $fresh);
     }
+
+    #[Test]
+    public function a_nested_borrow_does_not_end_the_outer_transaction(): void
+    {
+        // TransactionManager holds the connection for a transaction; a read
+        // inside it (OrmManager::getAdapter()->execute()) pops the same PDO and
+        // pushes it back. That push used to roll the outer transaction back.
+        $pool = new SingleConnectionPool(static fn (): \PDO => new \PDO('sqlite::memory:'));
+
+        $outer = $pool->pop();
+        $outer->exec('CREATE TABLE t (id INTEGER)');
+        $outer->beginTransaction();
+        $outer->exec('INSERT INTO t VALUES (1)');
+
+        $inner = $pool->pop();
+        self::assertSame($outer, $inner);
+        $inner->query('SELECT COUNT(*) FROM t');
+        $pool->push($inner);
+
+        self::assertTrue($outer->inTransaction(), 'the inner push ended the outer transaction');
+        $outer->commit();
+        $pool->push($outer);
+
+        self::assertSame(1, (int) $pool->pop()->query('SELECT COUNT(*) FROM t')->fetchColumn());
+    }
+
+    #[Test]
+    public function the_outermost_push_still_rolls_back_a_leaked_transaction(): void
+    {
+        $pool = new SingleConnectionPool(static fn (): \PDO => new \PDO('sqlite::memory:'));
+
+        $connection = $pool->pop();
+        $connection->exec('CREATE TABLE t (id INTEGER)');
+        $connection->beginTransaction();
+        $connection->exec('INSERT INTO t VALUES (1)');
+        $pool->push($connection);
+
+        self::assertFalse($connection->inTransaction());
+        self::assertSame(0, (int) $pool->pop()->query('SELECT COUNT(*) FROM t')->fetchColumn());
+    }
 }
 
 final class HealthyPdo extends \PDO
