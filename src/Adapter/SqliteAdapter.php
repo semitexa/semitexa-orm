@@ -192,14 +192,38 @@ class SqliteAdapter implements DatabaseAdapterInterface
             $this->dsn,
             null,
             null,
-            array_merge($defaultOptions, $this->options),
+            // `+`, not array_merge(): PDO attributes are integer keys, and
+            // array_merge renumbered them 0, 1, 2 — so ERRMODE_EXCEPTION and
+            // FETCH_ASSOC were never set and ATTR_TIMEOUT (2) became false: a
+            // zero lock wait, "database is locked" at once (found 2026-10-02).
+            $this->options + $defaultOptions,
         );
 
         // Enable foreign key constraints (disabled by default in SQLite)
         $pdo->exec('PRAGMA foreign_keys = ON');
 
-        // Enable WAL mode for better concurrent read/write performance
-        $pdo->exec('PRAGMA journal_mode = WAL');
+        // Wait for a lock instead of failing at once. Set before anything that
+        // can need one — unless the caller chose its own wait (PDO::ATTR_TIMEOUT
+        // sets the same busy handler, and this would silently replace it).
+        if (!array_key_exists(\PDO::ATTR_TIMEOUT, $this->options)) {
+            $pdo->exec('PRAGMA busy_timeout = 10000');
+        }
+
+        // Enable WAL mode for better concurrent read/write performance. Only
+        // when it is not WAL already: switching the journal mode takes a lock
+        // of its own, and opening a connection while another process wrote
+        // failed right here with "database is locked" (measured 2026-10-02,
+        // parallel project-graph refreshes). WAL is persistent in the file.
+        $mode = $pdo->query('PRAGMA journal_mode');
+        $current = $mode === false ? '' : strtolower((string) $mode->fetchColumn());
+        // An open cursor is an open read transaction: "cannot change into wal
+        // mode from within a transaction" on every fresh file.
+        if ($mode !== false) {
+            $mode->closeCursor();
+        }
+        if ($current !== 'wal' && $current !== 'memory') {
+            $pdo->exec('PRAGMA journal_mode = WAL');
+        }
 
         return $pdo;
     }
