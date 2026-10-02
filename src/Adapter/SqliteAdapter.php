@@ -24,7 +24,7 @@ class SqliteAdapter implements DatabaseAdapterInterface
 
     /**
      * @param string $dsn SQLite DSN (e.g. "sqlite:/path/to/db.sqlite" or "sqlite::memory:")
-     * @param array<string, mixed> $options PDO options
+     * @param array<int, mixed> $options PDO attributes, keyed by PDO::ATTR_* constants
      * @param string $connectionName the connection this adapter serves (see MysqlAdapter)
      */
     public function __construct(
@@ -222,7 +222,18 @@ class SqliteAdapter implements DatabaseAdapterInterface
             $mode->closeCursor();
         }
         if ($current !== 'wal' && $current !== 'memory') {
-            $pdo->exec('PRAGMA journal_mode = WAL');
+            try {
+                $pdo->exec('PRAGMA journal_mode = WAL');
+            } catch (\PDOException $e) {
+                // Another connection holds a lock on a rollback-journal file:
+                // the switch fails with SQLITE_BUSY (5) / SQLITE_LOCKED (6) at
+                // once, and the connection is still usable in its current mode.
+                // WAL is an optimisation — the next connection switches.
+                $driverCode = $e->errorInfo[1] ?? null;
+                if ($driverCode !== 5 && $driverCode !== 6) {
+                    throw $e;
+                }
+            }
         }
 
         return $pdo;

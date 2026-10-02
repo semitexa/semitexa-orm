@@ -38,6 +38,7 @@ final class SingleConnectionPool implements TenantSwitchingConnectionPoolInterfa
      */
     private int $borrows = 0;
 
+    /** @param \Closure(): \PDO $factory */
     public function __construct(
         private readonly \Closure $factory,
     ) {}
@@ -138,6 +139,32 @@ final class SingleConnectionPool implements TenantSwitchingConnectionPoolInterfa
         $this->ownerCid   = -1;
     }
 
+    /**
+     * Forget a borrow whose connection died instead of pushing it back.
+     *
+     * MysqlAdapter discards a connection that lost the server rather than
+     * re-queueing it. Without this the borrow stays counted, and every later
+     * outermost push() is taken for a nested one — it skips the rollback of a
+     * leaked transaction and never releases ownership.
+     */
+    public function discard(\PDO $connection): void
+    {
+        // Crash-avoidance mints were never counted; a foreign coroutine does
+        // not own the count (same rule as push()).
+        if ($this->connection !== $connection) {
+            return;
+        }
+        if ($this->ownerCid >= 0 && $this->ownerCid !== $this->currentCid()) {
+            return;
+        }
+
+        $this->connection = null;
+        $this->borrows = max(0, $this->borrows - 1);
+        if ($this->borrows === 0) {
+            $this->ownerCid = -1;
+        }
+    }
+
     public function close(): void
     {
         $this->connection = null;
@@ -197,15 +224,17 @@ final class SingleConnectionPool implements TenantSwitchingConnectionPoolInterfa
 
     private function reuseOrCreate(): \PDO
     {
+        $connection = $this->connection === null
+            ? ($this->factory)()
+            : $this->ensureAlive($this->connection);
+        $this->connection = $connection;
+
+        // Counted only once a connection is in hand: a factory that throws
+        // (database down) leaves the caller nothing to push, and a borrow
+        // counted anyway would make every later outermost push() look nested.
         ++$this->borrows;
 
-        if ($this->connection === null) {
-            $this->connection = ($this->factory)();
-        } else {
-            $this->connection = $this->ensureAlive($this->connection);
-        }
-
-        return $this->connection;
+        return $connection;
     }
 
     private function currentCid(): int

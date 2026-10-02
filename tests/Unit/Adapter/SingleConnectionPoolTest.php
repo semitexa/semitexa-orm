@@ -6,6 +6,7 @@ namespace Semitexa\Orm\Tests\Unit\Adapter;
 
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
+use Semitexa\Orm\Adapter\MysqlAdapter;
 use Semitexa\Orm\Adapter\SingleConnectionPool;
 
 final class SingleConnectionPoolTest extends TestCase
@@ -146,6 +147,74 @@ final class SingleConnectionPoolTest extends TestCase
 
         self::assertFalse($connection->inTransaction());
         self::assertSame(0, (int) $pool->pop()->query('SELECT COUNT(*) FROM t')->fetchColumn());
+    }
+
+    #[Test]
+    public function a_failed_connect_leaves_no_borrow_counted(): void
+    {
+        // A borrow counted before the factory threw had nothing to push back:
+        // every later outermost push() looked nested and skipped the rollback.
+        $attempts = 0;
+        $pool = new SingleConnectionPool(static function () use (&$attempts): \PDO {
+            if (++$attempts === 1) {
+                throw new \PDOException('SQLSTATE[HY000] [2002] Connection refused');
+            }
+
+            return new \PDO('sqlite::memory:');
+        });
+
+        try {
+            $pool->pop();
+            self::fail('the failed connect must surface');
+        } catch (\PDOException $e) {
+            self::assertSame('SQLSTATE[HY000] [2002] Connection refused', $e->getMessage());
+        }
+
+        $connection = $pool->pop();
+        $connection->beginTransaction();
+        $pool->push($connection);
+
+        self::assertSame(2, $attempts);
+        self::assertFalse($connection->inTransaction(), 'the outermost push was taken for a nested one');
+    }
+
+    #[Test]
+    public function a_connection_the_adapter_discards_leaves_no_borrow_counted(): void
+    {
+        // MysqlAdapter discards a connection that lost the server and replays a
+        // read once. The pool used to keep both the dead connection and its
+        // borrow: the replay got the same dead PDO back.
+        $dropped = new DroppedConnectionPdo();
+        $connections = [$dropped];
+        $pool = new SingleConnectionPool(static function () use (&$connections): \PDO {
+            return array_shift($connections) ?? new \PDO('sqlite::memory:');
+        });
+
+        $result = (new MysqlAdapter($pool))->execute('SELECT 42 AS answer');
+        self::assertSame(42, $result->fetchColumn());
+
+        $connection = $pool->pop();
+        self::assertNotSame($dropped, $connection);
+        $connection->beginTransaction();
+        $pool->push($connection);
+
+        self::assertFalse($connection->inTransaction(), 'the outermost push was taken for a nested one');
+    }
+}
+
+/** Answers the health check, but every statement fails like a dropped MySQL connection. */
+final class DroppedConnectionPdo extends \PDO
+{
+    public function __construct()
+    {
+        parent::__construct('sqlite::memory:');
+    }
+
+    public function prepare(string $query, array $options = []): \PDOStatement|false
+    {
+        $e = new \PDOException('MySQL server has gone away');
+        $e->errorInfo = ['HY000', 2006, 'MySQL server has gone away'];
+        throw $e;
     }
 }
 

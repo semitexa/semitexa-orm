@@ -266,12 +266,12 @@ class MysqlAdapter implements DatabaseAdapterInterface
     /**
      * Drop a dead connection instead of re-queueing it. ConnectionPool frees
      * the slot so a replacement can be minted; other pools simply lose the
-     * reference — SingleConnectionPool's next pop() health-checks its cached
-     * connection and re-mints anyway.
+     * reference. SingleConnectionPool forgets the borrow and its cached
+     * connection, so the next pop() mints a fresh one.
      */
     private function discardFromPool(\PDO $connection): void
     {
-        if ($this->pool instanceof ConnectionPool) {
+        if ($this->pool instanceof ConnectionPool || $this->pool instanceof SingleConnectionPool) {
             $this->pool->discard($connection);
         }
     }

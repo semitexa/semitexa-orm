@@ -38,7 +38,28 @@ final class SqliteAdapterJournalModeTest extends TestCase
 
         $adapter->execute('CREATE TABLE t (id INTEGER)');
 
-        self::assertSame('wal', strtolower((string) (new \PDO('sqlite:' . $this->path))->query('PRAGMA journal_mode')->fetchColumn()));
+        $statement = (new \PDO('sqlite:' . $this->path))->query('PRAGMA journal_mode');
+        self::assertNotFalse($statement);
+        self::assertSame('wal', strtolower((string) $statement->fetchColumn()));
+    }
+
+    #[Test]
+    public function a_rollback_journal_file_another_connection_is_writing_still_opens(): void
+    {
+        // Not WAL yet, and locked: the switch fails with SQLITE_BUSY at once.
+        // The connection works in its current mode; the next one switches.
+        $writer = new \PDO('sqlite:' . $this->path);
+        $writer->exec('CREATE TABLE t (id INTEGER)');
+        $writer->exec('BEGIN IMMEDIATE');
+        $writer->exec('INSERT INTO t VALUES (1)');
+
+        $reader = new SqliteAdapter('sqlite:' . $this->path, [\PDO::ATTR_TIMEOUT => 1]);
+        $count = $reader->execute('SELECT COUNT(*) AS c FROM t')->rows[0]['c'];
+        $mode = $reader->execute('PRAGMA journal_mode')->rows[0]['journal_mode'];
+
+        $writer->exec('COMMIT');
+        self::assertSame(0, $count);
+        self::assertSame('delete', $mode);
     }
 
     #[Test]
