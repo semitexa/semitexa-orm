@@ -145,7 +145,8 @@ final class SingleConnectionPool implements TenantSwitchingConnectionPoolInterfa
      * MysqlAdapter discards a connection that lost the server rather than
      * re-queueing it. Without this the borrow stays counted, and every later
      * outermost push() is taken for a nested one — it skips the rollback of a
-     * leaked transaction and never releases ownership.
+     * leaked transaction and never releases ownership. The same holds for the
+     * borrows of an outer holder of the dead connection: they are retired too.
      */
     public function discard(\PDO $connection): void
     {
@@ -158,11 +159,14 @@ final class SingleConnectionPool implements TenantSwitchingConnectionPoolInterfa
             return;
         }
 
+        // Every counted borrow was of THIS connection (only the cached one is
+        // counted), so all of them die with it. An outer holder's later push()
+        // of the dead PDO is ignored as foreign; leaving its borrow counted made
+        // every later outermost push() look nested and skip the rollback, so the
+        // next caller inherited an open transaction.
         $this->connection = null;
-        $this->borrows = max(0, $this->borrows - 1);
-        if ($this->borrows === 0) {
-            $this->ownerCid = -1;
-        }
+        $this->borrows = 0;
+        $this->ownerCid = -1;
     }
 
     public function close(): void

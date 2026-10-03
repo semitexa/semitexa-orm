@@ -200,6 +200,35 @@ final class SingleConnectionPoolTest extends TestCase
 
         self::assertFalse($connection->inTransaction(), 'the outermost push was taken for a nested one');
     }
+
+    #[Test]
+    public function discarding_a_connection_an_outer_caller_still_holds_retires_its_borrow_too(): void
+    {
+        // An outer holder (TransactionManager) and a nested read share the
+        // connection; the read loses it and replays on a fresh one. The outer
+        // push() of the dead PDO is ignored, so its borrow used to stay counted:
+        // every later outermost push() looked nested and skipped the rollback,
+        // and the next caller inherited an open transaction (review of orm#84).
+        $dropped = new DroppedConnectionPdo();
+        $connections = [$dropped];
+        $pool = new SingleConnectionPool(static function () use (&$connections): \PDO {
+            return array_shift($connections) ?? new \PDO('sqlite::memory:');
+        });
+
+        $outer = $pool->pop();
+        self::assertSame($dropped, $outer);
+
+        $result = (new MysqlAdapter($pool))->execute('SELECT 42 AS answer');
+        self::assertSame(42, $result->fetchColumn());
+        $pool->push($outer);
+
+        $connection = $pool->pop();
+        self::assertNotSame($dropped, $connection);
+        $connection->beginTransaction();
+        $pool->push($connection);
+
+        self::assertFalse($connection->inTransaction(), 'the outermost push was taken for a nested one');
+    }
 }
 
 /** Answers the health check, but every statement fails like a dropped MySQL connection. */
