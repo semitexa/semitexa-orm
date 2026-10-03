@@ -28,6 +28,17 @@ final class SingleConnectionPool implements TenantSwitchingConnectionPoolInterfa
     /** Coroutine that currently owns the cached connection; -1 = none / non-coroutine. */
     private int $ownerCid = -1;
 
+    /**
+     * How many pop()s of the cached connection are not yet pushed back.
+     *
+     * One connection means a borrow can be NESTED: TransactionManager holds it
+     * for a transaction while a read inside that transaction (a repository
+     * calling OrmManager::getAdapter()->execute()) pops it again. Only the
+     * outermost push() may clean the connection up — see push().
+     */
+    private int $borrows = 0;
+
+    /** @param \Closure(): \PDO $factory */
     public function __construct(
         private readonly \Closure $factory,
     ) {}
@@ -56,6 +67,11 @@ final class SingleConnectionPool implements TenantSwitchingConnectionPoolInterfa
             return ($this->factory)();
         }
 
+        // A new owner starts its own count: borrows a dead coroutine never
+        // returned must not make this one's pushes look nested forever.
+        if ($this->ownerCid !== $cid) {
+            $this->borrows = 0;
+        }
         $this->ownerCid = $cid;
 
         return $this->reuseOrCreate();
@@ -88,6 +104,18 @@ final class SingleConnectionPool implements TenantSwitchingConnectionPoolInterfa
             return;
         }
 
+        // An inner borrow returning the connection its outer holder still uses.
+        // The cleanup below would roll back the OUTER caller's transaction:
+        // measured 2026-10-01 in `semitexa:demo:seed`, where a COUNT read inside
+        // TransactionManager::run() sent a bare ROLLBACK, every later write ran
+        // in autocommit and the next RELEASE SAVEPOINT failed with 1305.
+        if ($this->borrows > 1) {
+            --$this->borrows;
+
+            return;
+        }
+        $this->borrows = 0;
+
         // Never re-cache a connection mid-transaction: the next caller would
         // inherit the open transaction and its writes would ride someone
         // else's commit/rollback. (Tracks PDO::beginTransaction() only — same
@@ -111,10 +139,41 @@ final class SingleConnectionPool implements TenantSwitchingConnectionPoolInterfa
         $this->ownerCid   = -1;
     }
 
+    /**
+     * Forget a borrow whose connection died instead of pushing it back.
+     *
+     * MysqlAdapter discards a connection that lost the server rather than
+     * re-queueing it. Without this the borrow stays counted, and every later
+     * outermost push() is taken for a nested one — it skips the rollback of a
+     * leaked transaction and never releases ownership. The same holds for the
+     * borrows of an outer holder of the dead connection: they are retired too.
+     */
+    public function discard(\PDO $connection): void
+    {
+        // Crash-avoidance mints were never counted; a foreign coroutine does
+        // not own the count (same rule as push()).
+        if ($this->connection !== $connection) {
+            return;
+        }
+        if ($this->ownerCid >= 0 && $this->ownerCid !== $this->currentCid()) {
+            return;
+        }
+
+        // Every counted borrow was of THIS connection (only the cached one is
+        // counted), so all of them die with it. An outer holder's later push()
+        // of the dead PDO is ignored as foreign; leaving its borrow counted made
+        // every later outermost push() look nested and skip the rollback, so the
+        // next caller inherited an open transaction.
+        $this->connection = null;
+        $this->borrows = 0;
+        $this->ownerCid = -1;
+    }
+
     public function close(): void
     {
         $this->connection = null;
         $this->ownerCid   = -1;
+        $this->borrows    = 0;
     }
 
     /**
@@ -169,13 +228,17 @@ final class SingleConnectionPool implements TenantSwitchingConnectionPoolInterfa
 
     private function reuseOrCreate(): \PDO
     {
-        if ($this->connection === null) {
-            $this->connection = ($this->factory)();
-        } else {
-            $this->connection = $this->ensureAlive($this->connection);
-        }
+        $connection = $this->connection === null
+            ? ($this->factory)()
+            : $this->ensureAlive($this->connection);
+        $this->connection = $connection;
 
-        return $this->connection;
+        // Counted only once a connection is in hand: a factory that throws
+        // (database down) leaves the caller nothing to push, and a borrow
+        // counted anyway would make every later outermost push() look nested.
+        ++$this->borrows;
+
+        return $connection;
     }
 
     private function currentCid(): int
