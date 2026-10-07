@@ -25,6 +25,23 @@ use Semitexa\Orm\Metadata\ResourceModelMetadataRegistry;
  */
 final class OwnedRelationTypingTest extends TestCase
 {
+    /** @var array<string, mixed> the registry's static state before the test, put back after it */
+    private array $registryBefore = [];
+
+    protected function setUp(): void
+    {
+        foreach (['cache', 'default'] as $name) {
+            $this->registryBefore[$name] = (new \ReflectionProperty(ResourceModelMetadataRegistry::class, $name))->getValue();
+        }
+    }
+
+    protected function tearDown(): void
+    {
+        foreach ($this->registryBefore as $name => $value) {
+            (new \ReflectionProperty(ResourceModelMetadataRegistry::class, $name))->setValue(null, $value);
+        }
+    }
+
     #[Test]
     public function an_owned_relation_typed_as_a_plain_array_is_refused(): void
     {
