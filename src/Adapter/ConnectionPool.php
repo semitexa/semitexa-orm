@@ -116,9 +116,6 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface, Ephemera
      * A pool built during boot is inherited by every worker the server forks,
      * and none of the state below survives that honestly — see
      * {@see adoptForCurrentProcess()}.
-     *
-     * getmypid() is false only where the platform cannot report a pid; the
-     * comparison in adoptForCurrentProcess() still holds for that value.
      */
     private int|false $ownerPid;
 
@@ -189,12 +186,9 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface, Ephemera
         'warmed' => 0,
     ];
 
-    /**
-     * @param \Closure(): \PDO $factory
-     */
     public function __construct(
         private readonly int $size,
-        private readonly \Closure $factory,
+        /** @var \Closure(): \PDO */ private readonly \Closure $factory,
     ) {
         self::registerShutdownHookOnce();
         $this->pool        = new Channel($size);
@@ -332,7 +326,6 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface, Ephemera
                 ? self::WAIT_SLICE_SECONDS
                 : min($remaining, self::WAIT_SLICE_SECONDS);
 
-            // The channel holds only PDOs; pop() gives false on timeout.
             $connection = $pool->pop($wait);
             if ($connection instanceof \PDO) {
                 return $this->lendToCoroutine($this->ensureAliveIfIdle($connection));

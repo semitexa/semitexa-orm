@@ -163,7 +163,6 @@ class OrmManager
 
         $this->ensureCoroutineSafePool();
 
-        // The swap above replaces the pool, never clears it.
         return $this->pool ?? throw new \LogicException('The connection pool was dropped while it was being healed.');
     }
 

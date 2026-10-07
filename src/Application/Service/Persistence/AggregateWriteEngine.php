@@ -78,9 +78,7 @@ final class AggregateWriteEngine
      */
     private function atomically(callable $work): mixed
     {
-        $transactions = $this->transactions instanceof \Closure
-            ? ($this->transactions)()
-            : $this->transactions;
+        $transactions = $this->transactions instanceof \Closure ? ($this->transactions)() : $this->transactions;
 
         if ($transactions === null) {
             return ReplicatedWriteGuard::permit(fn (): mixed => $work($this->adapter));
@@ -211,9 +209,7 @@ final class AggregateWriteEngine
             // TransactionManager instead; it flushes after the outer commit
             // and clears on rollback. Late-wire the dispatcher so the flush
             // can actually deliver.
-            $transactions = $this->transactions instanceof \Closure
-                ? ($this->transactions)()
-                : $this->transactions;
+            $transactions = $this->transactions instanceof \Closure ? ($this->transactions)() : $this->transactions;
             if ($transactions !== null && $transactions->isActive()) {
                 $transactions->setEventDispatcher($dispatcher);
                 $transactions->bufferEvent($event);
