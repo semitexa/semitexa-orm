@@ -74,10 +74,24 @@ class TypeCaster
         };
     }
 
-    /** A float the driver already made of a DECIMAL (SQLite may), without exponent notation. */
+    /**
+     * A float the driver already made of a DECIMAL (SQLite may), without exponent
+     * notation. It starts from the float's shortest round-trip form, so every
+     * significant digit it has survives: a fixed '%.14F' turned 1e-15 into "0".
+     */
     private static function decimalString(float $value): string
     {
-        $text = rtrim(rtrim(sprintf('%.14F', $value), '0'), '.');
+        $repr = var_export($value, true);
+        if (preg_match('/^(-?)(\d+)(?:\.(\d+))?E([+-]?\d+)$/i', $repr, $m) === 1) {
+            $digits = $m[2] . $m[3];
+            $point = strlen($m[2]) + (int) $m[4];
+            $repr = $m[1] . match (true) {
+                $point <= 0 => '0.' . str_repeat('0', -$point) . $digits,
+                $point >= strlen($digits) => $digits . str_repeat('0', $point - strlen($digits)),
+                default => substr($digits, 0, $point) . '.' . substr($digits, $point),
+            };
+        }
+        $text = str_contains($repr, '.') ? rtrim(rtrim($repr, '0'), '.') : $repr;
 
         return $text === '-0' ? '0' : $text;
     }

@@ -45,5 +45,10 @@ final class DecimalPrecisionTest extends TestCase
 
         self::assertSame('0.00001', (new TypeCaster())->castFromDb(0.00001, $column));
         self::assertSame('19.9', (new TypeCaster())->castFromDb(19.9, $column));
+        self::assertSame('0.000000000000001', (new TypeCaster())->castFromDb(0.000000000000001, $column), 'below 14 places is not zero');
+        self::assertSame('-0.0000000000000012345', (new TypeCaster())->castFromDb(-1.2345e-15, $column));
+        self::assertSame('100000000000000000000', (new TypeCaster())->castFromDb(1e20, $column));
+        self::assertSame('5', (new TypeCaster())->castFromDb(5.0, $column));
+        self::assertSame('0', (new TypeCaster())->castFromDb(-0.0, $column));
     }
 }
