@@ -50,6 +50,9 @@ final class AggregateWriteEngine
      * pool that OrmManager later self-heals/swaps — resolve per write. When
      * null (hand-built engines in tests), writes run on the bare adapter with
      * NO transaction, i.e. the legacy non-atomic behaviour.
+     *
+     * @param EventDispatcherInterface|(\Closure(): ?EventDispatcherInterface)|null $events
+     * @param TransactionManager|(\Closure(): ?TransactionManager)|null $transactions
      */
     public function __construct(
         private readonly DatabaseAdapterInterface                  $adapter,

@@ -53,7 +53,7 @@ class TypeCaster
             // scale ("19.90"). Through a float it came back "19.9" to a string
             // property and lost digits past ~15 significant ones; a float
             // property still gets its float from castToPropertyType().
-            MySqlType::Decimal, SqliteType::Decimal           => is_float($value) ? self::decimalString($value) : (string) $value,
+            MySqlType::Decimal, SqliteType::Decimal           => self::decimalFromDb($value),
             MySqlType::Boolean,
             SqliteType::Boolean                               => (bool) $value,
             MySqlType::Varchar, MySqlType::Char,
@@ -71,6 +71,23 @@ class TypeCaster
             MySqlType::Datetime, MySqlType::Timestamp,
             MySqlType::Date                                   => $this->castToDateTime($value),
             default                                           => $value,
+        };
+    }
+
+    /**
+     * A DECIMAL as the driver returned it: a string keeps every digit, a float
+     * is spelled out by decimalString(), an int needs no scale.
+     */
+    private static function decimalFromDb(mixed $value): string
+    {
+        return match (true) {
+            is_string($value) => $value,
+            is_float($value) => self::decimalString($value),
+            is_int($value), is_bool($value), $value instanceof \Stringable => (string) $value,
+            default => throw new \InvalidArgumentException(sprintf(
+                'A DECIMAL column cannot hold a %s value.',
+                get_debug_type($value),
+            )),
         };
     }
 

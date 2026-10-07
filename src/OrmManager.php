@@ -158,12 +158,13 @@ class OrmManager
                 throw new \LogicException('getPool() is not applicable for SQLite adapter. Use getAdapter() directly.');
             }
 
-            $this->pool = $this->createPool();
-        } else {
-            $this->ensureCoroutineSafePool();
+            return $this->pool = $this->createPool();
         }
 
-        return $this->pool;
+        $this->ensureCoroutineSafePool();
+
+        // The swap above replaces the pool, never clears it.
+        return $this->pool ?? throw new \LogicException('The connection pool was dropped while it was being healed.');
     }
 
     public function getSchemaCollector(): SchemaCollector

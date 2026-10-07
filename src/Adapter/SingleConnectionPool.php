@@ -249,7 +249,9 @@ final class SingleConnectionPool implements TenantSwitchingConnectionPoolInterfa
             return -1;
         }
 
-        return \Swoole\Coroutine::getCid();
+        $cid = \Swoole\Coroutine::getCid();
+
+        return is_int($cid) ? $cid : -1;
     }
 
     /**
