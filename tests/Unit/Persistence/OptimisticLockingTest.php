@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Tests\Unit\Persistence;
 
+use Semitexa\Orm\Domain\Model\RelationState;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Semitexa\Orm\Adapter\MySqlType;
@@ -232,7 +233,7 @@ final readonly class OlNoteFixture
             foreignKey: 'noteId',
             writePolicy: \Semitexa\Orm\Domain\Enum\RelationWritePolicy::CascadeOwned,
         )]
-        public array $comments = [],
+        public array|RelationState $comments = [],
     ) {}
 }
 

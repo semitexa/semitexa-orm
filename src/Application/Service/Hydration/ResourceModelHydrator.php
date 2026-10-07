@@ -110,7 +110,7 @@ final class ResourceModelHydrator
 
             if ($metadata->hasRelation($name)) {
                 $type = $parameter->getType();
-                if ($type instanceof \ReflectionNamedType && $type->getName() === RelationState::class) {
+                if (RelationState::admittedBy($type)) {
                     $parameters[] = HydrationParameter::relationState();
                 } elseif ($hasDefault) {
                     $parameters[] = HydrationParameter::literal($default);

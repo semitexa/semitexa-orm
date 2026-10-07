@@ -34,5 +34,12 @@
         "mysql",
         "schema",
         "attributes"
-    ]
+    ],
+    "extra": {
+        "semitexa": {
+            "floors": {
+                "semitexa/core": "next"
+            }
+        }
+    }
 }

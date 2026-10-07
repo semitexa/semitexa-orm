@@ -97,16 +97,10 @@ final class AggregateWriteEngine
         ?SystemScopeToken $systemScopeToken = null,
     ): object
     {
-        $scope = TenantWriteScope::from($tenantValue, $systemScopeToken);
         $rootResourceModel = $mapperRegistry->mapToSourceModel($domainModel, $resourceModelClass);
-        $rootResourceModel = $this->atomically(
-            fn (DatabaseAdapterInterface $adapter): object => $this->insertResourceModel($rootResourceModel, $adapter, $scope),
-        );
-        $domainResult = $mapperRegistry->mapToDomain($rootResourceModel, $domainModel::class);
+        $rootResourceModel = $this->write(ResourceChangeOperation::Insert, $rootResourceModel, $tenantValue, $systemScopeToken);
 
-        $this->dispatchResourceChanged($resourceModelClass, ResourceChangeOperation::Insert);
-
-        return $domainResult;
+        return $mapperRegistry->mapToDomain($rootResourceModel, $domainModel::class);
     }
 
     /**
@@ -120,13 +114,8 @@ final class AggregateWriteEngine
         ?SystemScopeToken $systemScopeToken = null,
     ): object
     {
-        $scope = TenantWriteScope::from($tenantValue, $systemScopeToken);
         $rootResourceModel = $mapperRegistry->mapToSourceModel($domainModel, $resourceModelClass);
-        $updatedResourceModel = $this->atomically(
-            fn (DatabaseAdapterInterface $adapter): object => $this->updateResourceModel($rootResourceModel, $adapter, $scope),
-        );
-
-        $this->dispatchResourceChanged($resourceModelClass, ResourceChangeOperation::Update);
+        $updatedResourceModel = $this->write(ResourceChangeOperation::Update, $rootResourceModel, $tenantValue, $systemScopeToken);
 
         // On a #[Version] resource the row now carries version+1 — return the
         // BUMPED domain so `update($x); update($x);` keeps working. Returning
@@ -153,13 +142,37 @@ final class AggregateWriteEngine
         ?SystemScopeToken $systemScopeToken = null,
     ): void
     {
-        $scope = TenantWriteScope::from($tenantValue, $systemScopeToken);
         $rootResourceModel = $mapperRegistry->mapToSourceModel($domainModel, $resourceModelClass);
-        $this->atomically(function (DatabaseAdapterInterface $adapter) use ($rootResourceModel, $scope): void {
-            $this->deleteResourceModel($rootResourceModel, $adapter, $scope);
+        $this->write(ResourceChangeOperation::Delete, $rootResourceModel, $tenantValue, $systemScopeToken);
+    }
+
+    /**
+     * Write one resource model as an aggregate root, atomically, with the
+     * same tenant stamping, version check, owned relations, replication
+     * capture and change event as insert() / update() / delete() — which map
+     * a domain model and come here. A caller that already holds the resource
+     * model (a generic CRUD screen over a model it has no domain class for)
+     * writes it directly instead of declaring a mapper that copies it.
+     *
+     * @return object the resource model as persisted (the input on delete)
+     */
+    public function write(
+        ResourceChangeOperation $operation,
+        object $resourceModel,
+        mixed $tenantValue = null,
+        ?SystemScopeToken $systemScopeToken = null,
+    ): object
+    {
+        $scope = TenantWriteScope::from($tenantValue, $systemScopeToken);
+        $written = $this->atomically(fn (DatabaseAdapterInterface $adapter): object => match ($operation) {
+            ResourceChangeOperation::Insert => $this->insertResourceModel($resourceModel, $adapter, $scope),
+            ResourceChangeOperation::Update => $this->updateResourceModel($resourceModel, $adapter, $scope),
+            ResourceChangeOperation::Delete => $this->deleteResourceModel($resourceModel, $adapter, $scope),
         });
 
-        $this->dispatchResourceChanged($resourceModelClass, ResourceChangeOperation::Delete);
+        $this->dispatchResourceChanged($resourceModel::class, $operation);
+
+        return $written;
     }
 
     /**
@@ -251,7 +264,7 @@ final class AggregateWriteEngine
         object $resourceModel,
         DatabaseAdapterInterface $adapter,
         TenantWriteScope $scope,
-    ): void
+    ): object
     {
         $metadata = $this->metadata($resourceModel::class);
         $resourceModel = $this->applyTenantScope($resourceModel, $metadata, $scope);
@@ -261,7 +274,7 @@ final class AggregateWriteEngine
         if ($metadata->softDelete !== null) {
             $this->executeSoftDelete($resourceModel, $metadata, $adapter, $scope);
             $this->captureReplicated($metadata, $resourceModel, ResourceChangeOperation::Delete, $before, $adapter);
-            return;
+            return $resourceModel;
         }
 
         // THE VERSION IS CHECKED BEFORE THE CHILDREN GO. A cascade delete
@@ -275,6 +288,8 @@ final class AggregateWriteEngine
         $this->deleteOwnedRelations($resourceModel, $metadata, $adapter, $scope);
         $this->executeDelete($resourceModel, $metadata, $adapter, $scope);
         $this->captureReplicated($metadata, $resourceModel, ResourceChangeOperation::Delete, $before, $adapter, rowRemoved: true);
+
+        return $resourceModel;
     }
 
     /**

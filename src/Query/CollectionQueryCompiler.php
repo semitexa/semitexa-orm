@@ -85,6 +85,8 @@ final class CollectionQueryCompiler implements CollectionQueryCompilerInterface
             match ($term->operator) {
                 FilterOperator::Eq       => $filtered->where($column, Operator::Equals, $term->value),
                 FilterOperator::In       => $filtered->whereIn($column, (array) $term->value),
+                FilterOperator::Gte      => $filtered->where($column, Operator::GreaterThanOrEquals, $term->value),
+                FilterOperator::Lte      => $filtered->where($column, Operator::LessThanOrEquals, $term->value),
                 FilterOperator::Contains => $filtered->whereLike(
                     $column,
                     '%' . self::escapeLikePattern((string) $term->value) . '%',

@@ -68,6 +68,25 @@ final class ResourceModelMetadataValidator
                 ));
             }
 
+            // An owned relation is WRITTEN from the property: its children or
+            // pivot rows become exactly what it holds. A plain `array $tags = []`
+            // reads back as [] when the relation was not loaded — "none", not
+            // "unknown" — and saving that model deleted every row. Only a type
+            // that can hold RelationState::notLoaded() tells the two apart.
+            if (
+                in_array($relation->writePolicy, [\Semitexa\Orm\Domain\Enum\RelationWritePolicy::CascadeOwned, \Semitexa\Orm\Domain\Enum\RelationWritePolicy::SyncPivotOnly], true)
+                && $ref->hasProperty($relation->propertyName)
+                && !\Semitexa\Orm\Domain\Model\RelationState::admittedBy($ref->getProperty($relation->propertyName)->getType())
+            ) {
+                throw new InvalidRelationDeclarationException(sprintf(
+                    'Owned relation %s::$%s must be typed to hold %s (e.g. `array|RelationState $%s = []`): as a plain value, "not loaded" reads as "none" and saving the model deletes its rows.',
+                    $metadata->className,
+                    $relation->propertyName,
+                    \Semitexa\Orm\Domain\Model\RelationState::class,
+                    $relation->propertyName,
+                ));
+            }
+
             if (
                 $relation->kind === RelationKind::ManyToMany
                 && ($relation->pivotTable === null || $relation->relatedKey === null)

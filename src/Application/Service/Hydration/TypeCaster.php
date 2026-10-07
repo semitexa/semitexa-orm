@@ -48,9 +48,12 @@ class TypeCaster
             SqliteType::TinyInt, SqliteType::SmallInt,
             SqliteType::Int, SqliteType::Bigint               => (int) $value,
             MySqlType::Float, MySqlType::Double,
-            MySqlType::Decimal,
-            SqliteType::Float, SqliteType::Double,
-            SqliteType::Decimal                               => (float) $value,
+            SqliteType::Float, SqliteType::Double             => (float) $value,
+            // A DECIMAL is exact: the driver's string keeps every digit and the
+            // scale ("19.90"). Through a float it came back "19.9" to a string
+            // property and lost digits past ~15 significant ones; a float
+            // property still gets its float from castToPropertyType().
+            MySqlType::Decimal, SqliteType::Decimal           => is_float($value) ? self::decimalString($value) : (string) $value,
             MySqlType::Boolean,
             SqliteType::Boolean                               => (bool) $value,
             MySqlType::Varchar, MySqlType::Char,
@@ -69,6 +72,14 @@ class TypeCaster
             MySqlType::Date                                   => $this->castToDateTime($value),
             default                                           => $value,
         };
+    }
+
+    /** A float the driver already made of a DECIMAL (SQLite may), without exponent notation. */
+    private static function decimalString(float $value): string
+    {
+        $text = rtrim(rtrim(sprintf('%.14F', $value), '0'), '.');
+
+        return $text === '-0' ? '0' : $text;
     }
 
     /**
