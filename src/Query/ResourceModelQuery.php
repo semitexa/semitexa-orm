@@ -197,7 +197,7 @@ final class ResourceModelQuery
      * outside. Patterns are bound as parameters; callers escape LIKE
      * wildcards in user input themselves.
      *
-     * @param non-empty-list<ColumnRef> $columns
+     * @param list<ColumnRef> $columns at least one; an empty list is refused
      */
     public function whereAnyLike(array $columns, string $pattern): self
     {
