@@ -4,6 +4,10 @@ Attribute-driven ORM with schema definition, connection pooling, and MySQL 8.0+ 
 
 > **Schema migrations are owned by this package.** `orm:diff` (preview) and `orm:sync` (apply) are the only entry points that change database structure. Other Semitexa packages — including [`semitexa/update`](https://github.com/semitexa/semitexa-update/blob/master/README.md) — must not issue schema DDL; they call ORM through a public seam and the ORM remains the source of truth for what the schema should look like. Post-schema *data* patches (backfills, normalizations) belong to `semitexa/update`.
 
+## Install
+
+Included in every project created by the installer (https://semitexa.com/install.sh).
+
 ## Purpose
 
 Maps PHP classes to database tables using PHP 8.4 attributes. Provides Swoole-compatible connection pooling, typed column definitions, relation mapping, and a filtering architecture with auto-indexed filterable fields.
@@ -12,7 +16,7 @@ The source of truth for schema is the entity classes themselves (`#[FromTable]`,
 
 ## Role in Semitexa
 
-Depends on Core and Tenancy. Depended on by Cache, Media, Scheduler, Search, Storage, Workflow, and Platform modules. Central persistence layer for all database-backed functionality.
+Depends on Core and Tenancy. Depended on by Media, Scheduler, Search, Storage, Workflow, and Platform modules. Central persistence layer for all database-backed functionality.
 
 ## Key Features
 
@@ -23,7 +27,7 @@ Depends on Core and Tenancy. Depended on by Cache, Media, Scheduler, Search, Sto
 - Traits: `HasTimestamps`, `SoftDeletes`, `HasUuid`, `HasUuidV7` (BINARY(16) chronological)
 - Fail-closed tenant isolation for reads and writes; scoped writes cannot mutate tenant identity
 - `#[SoftDelete]` turns repository deletion into an optimistic, atomic marker update while preserving owned rows
-- Domain mapping via `ResourceModel`, `#[AsMapper]`, and `DomainRepository`
+- Domain mapping via resource model classes (`#[FromTable]`), `#[AsMapper]` mappers (`ResourceModelMapperInterface`) and `DomainRepository`
 - Swoole `Channel`-based connection pool
 - MySQL 8.0+ with version detection and capability checks
 - `SchemaCollector` for attribute-driven schema sync
@@ -39,6 +43,8 @@ ORM resources go in `Application/Db/MySQL/Model/`. Domain entities live in `Doma
 | `orm:status` | Show driver capabilities, schema summary, and pending diff |
 | `orm:diff` | Print the DDL plan to bring the database in sync with the entity model |
 | `orm:sync` | Execute the DDL plan; supports `--dry-run` and `--allow-destructive` |
-| `orm:seed` | Apply data seeds (fixture data) declared by entity factories |
+| `orm:seed` | Run the `defaults()` upsert for every resource class that declares seed data |
 
 Update orchestration calls `orm:sync` through `Semitexa\Update\Domain\Contract\OrmMigrationGatewayInterface` — never by reaching into ORM internals.
+
+Docs: https://semitexa.com/docs/data/orm-guide
