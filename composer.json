@@ -11,7 +11,7 @@
     ],
     "require": {
         "php": "^8.4",
-        "semitexa/core": ">=2026.09.27.0404 || dev-master",
+        "semitexa/core": ">=2026.10.08.0620 || dev-master",
         "semitexa/tenancy": "*"
     },
     "require-dev": {
@@ -38,7 +38,7 @@
     "extra": {
         "semitexa": {
             "floors": {
-                "semitexa/core": "next"
+                "semitexa/core": "2026.10.08.0620"
             }
         }
     }
