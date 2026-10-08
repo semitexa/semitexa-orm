@@ -16,6 +16,7 @@ use Semitexa\Core\Resource\Cursor\CollectionCursorPage;
 use Semitexa\Core\Resource\Exception\InvalidCursorException;
 use Semitexa\Core\Resource\Exception\InvalidPaginationException;
 use Semitexa\Core\Resource\Filter\FilterOperator;
+use Semitexa\Core\Resource\Filter\FilterTerm;
 use Semitexa\Core\Resource\Pagination\CollectionPage;
 use Semitexa\Core\Resource\Sort\CollectionSortRequest;
 use Semitexa\Core\Resource\Sort\SortDirection;
@@ -85,9 +86,11 @@ final class CollectionQueryCompiler implements CollectionQueryCompilerInterface
             match ($term->operator) {
                 FilterOperator::Eq       => $filtered->where($column, Operator::Equals, $term->value),
                 FilterOperator::In       => $filtered->whereIn($column, (array) $term->value),
+                FilterOperator::Gte      => $filtered->where($column, Operator::GreaterThanOrEquals, $term->value),
+                FilterOperator::Lte      => $filtered->where($column, Operator::LessThanOrEquals, $term->value),
                 FilterOperator::Contains => $filtered->whereLike(
                     $column,
-                    '%' . self::escapeLikePattern((string) $term->value) . '%',
+                    '%' . self::escapeLikePattern(self::singleValue($term)) . '%',
                 ),
             };
         }
@@ -162,7 +165,10 @@ final class CollectionQueryCompiler implements CollectionQueryCompilerInterface
     // Execution strategies
     // ------------------------------------------------------------------
 
-    /** @param array<string, string> $fieldMap */
+    /**
+     * @param class-string          $modelClass
+     * @param array<string, string> $fieldMap
+     */
     private function executePage(
         CollectionCriteria $criteria,
         ResourceModelQuery $filtered,
@@ -191,7 +197,10 @@ final class CollectionQueryCompiler implements CollectionQueryCompilerInterface
         );
     }
 
-    /** @param array<string, string> $fieldMap */
+    /**
+     * @param class-string          $modelClass
+     * @param array<string, string> $fieldMap
+     */
     private function executeSingle(
         CollectionCriteria $criteria,
         ResourceModelQuery $filtered,
@@ -222,7 +231,10 @@ final class CollectionQueryCompiler implements CollectionQueryCompilerInterface
         );
     }
 
-    /** @param array<string, string> $fieldMap */
+    /**
+     * @param class-string          $modelClass
+     * @param array<string, string> $fieldMap
+     */
     private function executeCursor(
         CollectionCriteria $criteria,
         ResourceModelQuery $filtered,
@@ -302,6 +314,7 @@ final class CollectionQueryCompiler implements CollectionQueryCompilerInterface
      * Column names come from ORM metadata ({@see ColumnRef}), values are
      * bound parameters; nothing user-supplied reaches the SQL string.
      *
+     * @param class-string          $modelClass
      * @param array<string, string> $fieldMap
      * @param list<SortTerm>        $effectiveTerms
      */
@@ -344,6 +357,7 @@ final class CollectionQueryCompiler implements CollectionQueryCompilerInterface
             $branches[] = count($parts) > 1 ? '(' . implode(' AND ', $parts) . ')' : $parts[0];
         }
 
+        // @phpstan-ignore semitexa.builtSqlFragment (every identifier above went through SqlIdentifier::quote(), the operators are literals, every value is a bound ?)
         $query->whereRaw(implode(' OR ', $branches), $bindings);
     }
 
@@ -373,7 +387,10 @@ final class CollectionQueryCompiler implements CollectionQueryCompilerInterface
         return $terms;
     }
 
-    /** @param array<string, string> $fieldMap */
+    /**
+     * @param class-string          $modelClass
+     * @param array<string, string> $fieldMap
+     */
     private function columnFor(string $modelClass, string $field, array $fieldMap): ColumnRef
     {
         return ColumnRef::for($modelClass, $fieldMap[$field] ?? $field);
@@ -458,6 +475,23 @@ final class CollectionQueryCompiler implements CollectionQueryCompilerInterface
      * literally (MySQL default escape character `\`). The pattern is
      * still bound as a parameter — this only neutralizes `%`/`_`.
      */
+    /**
+     * The one value of a single-valued operator. The filter parser hands a
+     * list to `in` only; a list here is a term built by hand.
+     */
+    private static function singleValue(FilterTerm $term): string
+    {
+        if (is_array($term->value)) {
+            throw new \InvalidArgumentException(sprintf(
+                'Filter "%s" with operator %s takes one value, not a list.',
+                $term->field,
+                $term->operator->name,
+            ));
+        }
+
+        return $term->value;
+    }
+
     private static function escapeLikePattern(string $value): string
     {
         return addcslashes($value, '\\%_');

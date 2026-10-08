@@ -117,7 +117,7 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface, Ephemera
      * and none of the state below survives that honestly — see
      * {@see adoptForCurrentProcess()}.
      */
-    private int $ownerPid;
+    private int|false $ownerPid;
 
     /**
      * Outstanding borrows, per coroutine: cid => (spl_object_id => PDO).
@@ -188,7 +188,7 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface, Ephemera
 
     public function __construct(
         private readonly int $size,
-        private readonly \Closure $factory,
+        /** @var \Closure(): \PDO */ private readonly \Closure $factory,
     ) {
         self::registerShutdownHookOnce();
         $this->pool        = new Channel($size);
@@ -327,7 +327,7 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface, Ephemera
                 : min($remaining, self::WAIT_SLICE_SECONDS);
 
             $connection = $pool->pop($wait);
-            if ($connection !== false) {
+            if ($connection instanceof \PDO) {
                 return $this->lendToCoroutine($this->ensureAliveIfIdle($connection));
             }
 

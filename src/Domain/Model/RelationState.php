@@ -11,6 +11,23 @@ final class RelationState
         private mixed $value,
     ) {}
 
+    /**
+     * Whether a property or parameter of this type can hold a RelationState —
+     * `RelationState`, or a union with it (`array|RelationState`). Only such a
+     * relation can say "not loaded" apart from "none".
+     */
+    public static function admittedBy(?\ReflectionType $type): bool
+    {
+        $types = $type instanceof \ReflectionUnionType ? $type->getTypes() : [$type];
+        foreach ($types as $one) {
+            if ($one instanceof \ReflectionNamedType && $one->getName() === self::class) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public static function notLoaded(): self
     {
         return new self(

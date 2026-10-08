@@ -197,7 +197,7 @@ final class ResourceModelQuery
      * outside. Patterns are bound as parameters; callers escape LIKE
      * wildcards in user input themselves.
      *
-     * @param non-empty-list<ColumnRef> $columns
+     * @param list<ColumnRef> $columns at least one; an empty list is refused
      */
     public function whereAnyLike(array $columns, string $pattern): self
     {
@@ -530,6 +530,36 @@ final class ResourceModelQuery
         foreach ($this->adapter->execute($sql, $params)->rows as $row) {
             $group = Row::of($row);
             $out[$group->string('__g')] = $group->int('__c');
+        }
+
+        return $out;
+    }
+
+    /**
+     * Matching rows per calendar day of a moment column, in one query:
+     * `['2026-10-05' => 3, '2026-10-06' => 7]`, oldest first, days with no
+     * row left out. Moments are stored in UTC, so these are UTC days. A
+     * dashboard trend used to need one COUNT per day.
+     *
+     * @return array<string, int>
+     */
+    public function countByDay(ColumnRef $moment): array
+    {
+        $this->assertColumnBelongsToCurrentResourceModel($moment);
+        [$whereSql, $params] = $this->buildWhereAndParams();
+        $sql = sprintf(
+            'SELECT DATE(%1$s) AS __d, COUNT(*) AS __c FROM %2$s%3$s GROUP BY DATE(%1$s) ORDER BY __d ASC',
+            SqlIdentifier::quote($moment->columnName),
+            SqlIdentifier::quote($this->metadata()->tableName),
+            $whereSql,
+        );
+
+        $out = [];
+        foreach ($this->adapter->execute($sql, $params)->rows as $row) {
+            $day = Row::of($row);
+            if ($day->string('__d') !== '') {
+                $out[substr($day->string('__d'), 0, 10)] = $day->int('__c');
+            }
         }
 
         return $out;

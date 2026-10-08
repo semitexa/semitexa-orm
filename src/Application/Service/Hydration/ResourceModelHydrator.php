@@ -110,7 +110,7 @@ final class ResourceModelHydrator
 
             if ($metadata->hasRelation($name)) {
                 $type = $parameter->getType();
-                if ($type instanceof \ReflectionNamedType && $type->getName() === RelationState::class) {
+                if (RelationState::admittedBy($type)) {
                     $parameters[] = HydrationParameter::relationState();
                 } elseif ($hasDefault) {
                     $parameters[] = HydrationParameter::literal($default);
@@ -150,6 +150,16 @@ final class ResourceModelHydrator
     private function hydrateColumnValueFromPlan(array $row, HydrationParameter $p, TypeCaster $typeCaster): mixed
     {
         $column = $p->column;
+        $columnDef = $p->columnDef;
+        if ($column === null || $columnDef === null) {
+            // HydrationParameter::column() always sets both; only a plan built
+            // by hand with the wrong kind could reach here.
+            throw new \LogicException(sprintf(
+                'Hydration parameter "%s" is a COLUMN parameter without column metadata.',
+                $p->name,
+            ));
+        }
+
         if (!array_key_exists($column->columnName, $row)) {
             if ($p->hasDefault) {
                 return $p->literal;
@@ -166,13 +176,13 @@ final class ResourceModelHydrator
             ));
         }
 
-        $value = $typeCaster->castFromDb($row[$column->columnName], $p->columnDef);
+        $value = $typeCaster->castFromDb($row[$column->columnName], $columnDef);
 
         return $typeCaster->castToPropertyTypeForColumn(
             $value,
             $column->phpType,
             $column->nullable || $p->allowsNull,
-            $p->columnDef,
+            $columnDef,
         );
     }
 

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Tests\Fixture\Metadata;
 
+use Semitexa\Orm\Domain\Model\RelationState;
 use DateTimeImmutable;
 use Semitexa\Orm\Adapter\MySqlType;
 use Semitexa\Orm\Attribute\BelongsTo;
@@ -54,6 +55,6 @@ final readonly class ValidProductResourceModel
             foreignKey: 'productId',
             writePolicy: RelationWritePolicy::CascadeOwned,
         )]
-        public array $reviews = [],
+        public array|RelationState $reviews = [],
     ) {}
 }

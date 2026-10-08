@@ -76,7 +76,9 @@ class TransactionManager
     /** Active PDO connection for the current coroutine's (outermost) transaction, null when idle. */
     private function activeConnection(): ?\PDO
     {
-        return CoroutineLocal::get($this->key(self::KEY_ACTIVE_CONNECTION));
+        $connection = CoroutineLocal::get($this->key(self::KEY_ACTIVE_CONNECTION));
+
+        return $connection instanceof \PDO ? $connection : null;
     }
 
     private function setActiveConnection(?\PDO $pdo): void
@@ -98,7 +100,11 @@ class TransactionManager
     /** @return object[] Buffered events for the current coroutine, dispatched after successful outer commit. */
     private function pendingEvents(): array
     {
-        return CoroutineLocal::get($this->key(self::KEY_PENDING_EVENTS), []);
+        // Only setPendingEvents() writes this key, and it takes object[].
+        /** @var object[] $events */
+        $events = CoroutineLocal::get($this->key(self::KEY_PENDING_EVENTS), []);
+
+        return $events;
     }
 
     /** @param object[] $events */

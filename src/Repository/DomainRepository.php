@@ -44,6 +44,8 @@ final class DomainRepository
     /**
      * @param class-string $resourceModelClass
      * @param class-string $domainModelClass
+     * @param EventDispatcherInterface|(\Closure(): ?EventDispatcherInterface)|null $events
+     * @param TransactionManager|(\Closure(): ?TransactionManager)|null $transactions
      */
     public function __construct(
         private readonly string                         $resourceModelClass,

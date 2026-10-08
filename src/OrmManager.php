@@ -28,6 +28,7 @@ use Semitexa\Orm\Application\Service\Hydration\ResourceModelRelationLoader;
 use Semitexa\Orm\Application\Service\Mapping\MapperRegistry;
 use Semitexa\Orm\Metadata\ResourceModelMetadataRegistry;
 use Semitexa\Orm\Application\Service\Persistence\AggregateWriteEngine;
+use Semitexa\Orm\Query\ResourceModelQuery;
 use Semitexa\Orm\Repository\DomainRepository;
 use Semitexa\Orm\Application\Service\Schema\SchemaCollector;
 use Semitexa\Orm\Application\Service\Schema\SchemaComparator;
@@ -157,12 +158,12 @@ class OrmManager
                 throw new \LogicException('getPool() is not applicable for SQLite adapter. Use getAdapter() directly.');
             }
 
-            $this->pool = $this->createPool();
-        } else {
-            $this->ensureCoroutineSafePool();
+            return $this->pool = $this->createPool();
         }
 
-        return $this->pool;
+        $this->ensureCoroutineSafePool();
+
+        return $this->pool ?? throw new \LogicException('The connection pool was dropped while it was being healed.');
     }
 
     public function getSchemaCollector(): SchemaCollector
@@ -420,6 +421,24 @@ class OrmManager
     public function validateBootstrap(): OrmBootstrapReport
     {
         return $this->getBootstrapValidator()->validate();
+    }
+
+    /**
+     * A query over a resource model alone (a read that projects rows itself, no
+     * domain model); state the tenant scope for a tenant-scoped model.
+     *
+     * @param class-string $resourceModelClass
+     */
+    public function query(string $resourceModelClass): ResourceModelQuery
+    {
+        return new ResourceModelQuery(
+            $resourceModelClass,
+            $this->getTransactionAwareAdapter(),
+            $this->getResourceModelHydrator(),
+            $this->getResourceModelRelationLoader(),
+            $this->getResourceModelMetadataRegistry(),
+            mapperRegistry: $this->getMapperRegistry(),
+        );
     }
 
     /**

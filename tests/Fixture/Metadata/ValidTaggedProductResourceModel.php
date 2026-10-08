@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Tests\Fixture\Metadata;
 
+use Semitexa\Orm\Domain\Model\RelationState;
 use Semitexa\Orm\Adapter\MySqlType;
 use Semitexa\Orm\Attribute\Column;
 use Semitexa\Orm\Attribute\FromTable;
@@ -37,6 +38,6 @@ final readonly class ValidTaggedProductResourceModel
             relatedKey: 'tagId',
             writePolicy: RelationWritePolicy::SyncPivotOnly,
         )]
-        public array $tags = [],
+        public array|RelationState $tags = [],
     ) {}
 }

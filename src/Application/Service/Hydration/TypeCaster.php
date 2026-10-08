@@ -48,9 +48,12 @@ class TypeCaster
             SqliteType::TinyInt, SqliteType::SmallInt,
             SqliteType::Int, SqliteType::Bigint               => (int) $value,
             MySqlType::Float, MySqlType::Double,
-            MySqlType::Decimal,
-            SqliteType::Float, SqliteType::Double,
-            SqliteType::Decimal                               => (float) $value,
+            SqliteType::Float, SqliteType::Double             => (float) $value,
+            // A DECIMAL is exact: the driver's string keeps every digit and the
+            // scale ("19.90"). Through a float it came back "19.9" to a string
+            // property and lost digits past ~15 significant ones; a float
+            // property still gets its float from castToPropertyType().
+            MySqlType::Decimal, SqliteType::Decimal           => self::decimalFromDb($value),
             MySqlType::Boolean,
             SqliteType::Boolean                               => (bool) $value,
             MySqlType::Varchar, MySqlType::Char,
@@ -69,6 +72,45 @@ class TypeCaster
             MySqlType::Date                                   => $this->castToDateTime($value),
             default                                           => $value,
         };
+    }
+
+    /**
+     * A DECIMAL as the driver returned it: a string keeps every digit, a float
+     * is spelled out by decimalString(), an int needs no scale.
+     */
+    private static function decimalFromDb(mixed $value): string
+    {
+        return match (true) {
+            is_string($value) => $value,
+            is_float($value) => self::decimalString($value),
+            is_int($value), is_bool($value), $value instanceof \Stringable => (string) $value,
+            default => throw new \InvalidArgumentException(sprintf(
+                'A DECIMAL column cannot hold a %s value.',
+                get_debug_type($value),
+            )),
+        };
+    }
+
+    /**
+     * A float the driver already made of a DECIMAL (SQLite may), without exponent
+     * notation. It starts from the float's shortest round-trip form, so every
+     * significant digit it has survives: a fixed '%.14F' turned 1e-15 into "0".
+     */
+    private static function decimalString(float $value): string
+    {
+        $repr = var_export($value, true);
+        if (preg_match('/^(-?)(\d+)(?:\.(\d+))?E([+-]?\d+)$/i', $repr, $m) === 1) {
+            $digits = $m[2] . $m[3];
+            $point = strlen($m[2]) + (int) $m[4];
+            $repr = $m[1] . match (true) {
+                $point <= 0 => '0.' . str_repeat('0', -$point) . $digits,
+                $point >= strlen($digits) => $digits . str_repeat('0', $point - strlen($digits)),
+                default => substr($digits, 0, $point) . '.' . substr($digits, $point),
+            };
+        }
+        $text = str_contains($repr, '.') ? rtrim(rtrim($repr, '0'), '.') : $repr;
+
+        return $text === '-0' ? '0' : $text;
     }
 
     /**

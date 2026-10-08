@@ -103,6 +103,21 @@ final class QueryAggregationTest extends TestCase
         $this->query()->sum(ColumnRef::for(ForeignAggFixture::class, 'amount'));
     }
 
+    #[Test]
+    public function count_by_day_buckets_moments_into_utc_days_in_one_query(): void
+    {
+        $adapter = $this->orm->getAdapter();
+        $adapter->execute('CREATE TABLE agg_events (id TEXT PRIMARY KEY, kind TEXT, at TEXT)');
+        $adapter->execute("INSERT INTO agg_events VALUES ('1', 'a', '2026-10-04 23:59:59'), ('2', 'a', '2026-10-06 00:00:00'), ('3', 'b', '2026-10-06 18:30:00'), ('4', 'a', NULL)");
+        $query = new ResourceModelQuery(AggEventFixture::class, $adapter, $this->orm->getResourceModelHydrator(), $this->orm->getResourceModelRelationLoader());
+
+        self::assertSame(['2026-10-04' => 1, '2026-10-06' => 2], $query->countByDay(ColumnRef::for(AggEventFixture::class, 'at')), 'a day without rows is left out, a NULL moment too');
+
+        $onlyA = (new ResourceModelQuery(AggEventFixture::class, $adapter, $this->orm->getResourceModelHydrator(), $this->orm->getResourceModelRelationLoader()))
+            ->where(ColumnRef::for(AggEventFixture::class, 'kind'), Operator::Equals, 'a');
+        self::assertSame(['2026-10-04' => 1, '2026-10-06' => 1], $onlyA->countByDay(ColumnRef::for(AggEventFixture::class, 'at')));
+    }
+
     private static function amount(): ColumnRef
     {
         return ColumnRef::for(AggOrderFixture::class, 'amount');
@@ -140,5 +155,21 @@ final readonly class ForeignAggFixture
 
         #[Column(type: MySqlType::Int)]
         public int $amount,
+    ) {}
+}
+
+#[FromTable(name: 'agg_events')]
+final readonly class AggEventFixture
+{
+    public function __construct(
+        #[PrimaryKey(strategy: 'uuid')]
+        #[Column(type: MySqlType::Varchar, length: 36)]
+        public string $id,
+
+        #[Column(type: MySqlType::Varchar, length: 8)]
+        public string $kind,
+
+        #[Column(type: MySqlType::Datetime, nullable: true)]
+        public ?\DateTimeImmutable $at = null,
     ) {}
 }

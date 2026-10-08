@@ -141,6 +141,31 @@ final class ResourceChangedEventDispatchTest extends TestCase
     }
 
     #[Test]
+    public function a_resource_model_written_directly_is_stamped_and_announced_like_a_mapped_one(): void
+    {
+        // write() is what insert()/update()/delete() share; a CRUD screen with
+        // no domain class calls it with the resource model it already holds.
+        $adapter = new FakeDatabaseAdapter([]);
+        $dispatcher = $this->capturingDispatcher();
+        $engine = new AggregateWriteEngine($adapter, new ResourceModelHydrator(), null, $dispatcher);
+
+        $persisted = $engine->write(
+            ResourceChangeOperation::Insert,
+            new ValidProductResourceModel(id: '', tenantId: '', name: 'Direct', categoryId: 'category-1'),
+            tenantValue: 'tenant-7',
+        );
+
+        $this->assertInstanceOf(ValidProductResourceModel::class, $persisted);
+        $this->assertNotSame('', $persisted->id, 'the uuid primary key is generated');
+        $this->assertSame('tenant-7', $persisted->tenantId, 'the tenant is stamped from the scope, not the caller');
+        $this->assertCount(1, $adapter->executed, 'root only: no reviews were given');
+        $this->assertSame(['products', ResourceChangeOperation::Insert], [$dispatcher->captured[0]->resourceKey, $dispatcher->captured[0]->operation]);
+
+        $engine->write(ResourceChangeOperation::Delete, $persisted, systemScopeToken: SystemScopeToken::issue());
+        $this->assertSame(ResourceChangeOperation::Delete, $dispatcher->captured[1]->operation);
+    }
+
+    #[Test]
     public function a_bypass_write_path_raw_update_query_emits_no_event(): void
     {
         // GATE-1 demonstration: raw ResourceModelQuery write paths (UpdateQuery here)
