@@ -188,7 +188,11 @@ class SqliteAdapter implements DatabaseAdapterInterface
             \PDO::ATTR_EMULATE_PREPARES => false,
         ];
 
-        $pdo = new \PDO(
+        // PDO::connect(), not `new PDO`: it returns the driver subclass
+        // (Pdo\Sqlite), whose createFunction() is the supported way to add a
+        // SQL function. On a plain PDO the old sqliteCreateFunction() is a
+        // magic driver method that some PHP 8.4 builds no longer expose.
+        $pdo = \PDO::connect(
             $this->dsn,
             null,
             null,
