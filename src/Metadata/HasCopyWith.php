@@ -29,6 +29,11 @@ trait HasCopyWith
             $overrides['updated_at'] = new \DateTimeImmutable();
         }
 
-        return new static(...array_merge($vars, $overrides));
+        // Named arguments from a map: PHPStan reads every one as mixed, so the
+        // constructor is reached through reflection, which takes the same map.
+        /** @var static $copy */
+        $copy = (new \ReflectionClass(static::class))->newInstanceArgs(array_merge($vars, $overrides));
+
+        return $copy;
     }
 }
