@@ -121,6 +121,8 @@ class SmartUpsert
         // Exact for conflicts on the PRIMARY KEY, which is what seeding upserts
         // on. A row whose new primary key collides on ANOTHER unique key is
         // updated by MySQL through that key and still counted here as an insert.
+        // And exact only when upserts into one table do not overlap: two that
+        // both count a key as absent before either writes report two inserts.
         $existing = $this->countExisting($table, $pkColumn, array_map(static fn (array $row): mixed => $row[$pkColumn], $rows));
 
         $result = $this->adapter->execute($sql, $params);

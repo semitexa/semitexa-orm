@@ -71,7 +71,8 @@ final class SeedingTest extends TestCase
         // Never drop a table this test did not create: a database that already
         // has one by this name keeps it, and the test says why it did not run.
         // verify:accept-test-change review (orm#89): the old setup dropped any existing seeding_test_roles in the configured database; a table it does not own now skips instead
-        if ($db->query("SHOW TABLES LIKE 'seeding_test_roles'")->fetchAll() !== []) {
+        // information_schema, not SHOW TABLES LIKE: there `_` is a wildcard.
+        if ($db->query("SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'seeding_test_roles'")->fetchAll() !== []) {
             $orm->shutdown();
             self::markTestSkipped('seeding_test_roles already exists in this database; it is not this test\'s to drop.');
         }
