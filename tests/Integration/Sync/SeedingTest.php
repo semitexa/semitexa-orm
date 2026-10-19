@@ -68,8 +68,15 @@ final class SeedingTest extends TestCase
             self::markTestSkipped('MySQL unavailable: ' . $e->getMessage());
         }
 
-        $db->execute('DROP TABLE IF EXISTS seeding_test_roles');
+        // Never drop a table this test did not create: a database that already
+        // has one by this name keeps it, and the test says why it did not run.
+        // verify:accept-test-change review (orm#89): the old setup dropped any existing seeding_test_roles in the configured database; a table it does not own now skips instead
+        if ($db->query("SHOW TABLES LIKE 'seeding_test_roles'")->fetchAll() !== []) {
+            $orm->shutdown();
+            self::markTestSkipped('seeding_test_roles already exists in this database; it is not this test\'s to drop.');
+        }
         $db->execute('CREATE TABLE seeding_test_roles (id VARCHAR(36) PRIMARY KEY, name VARCHAR(64) NOT NULL, `rank` INT NOT NULL)');
+        $adminName = SeedingDefaults::$adminName;
         try {
             $runner = new SeedRunner($db, new SeedingOneClassDiscovery());
 
@@ -84,7 +91,7 @@ final class SeedingTest extends TestCase
             self::assertSame(1, $changed['seeding_test_roles']['updated'] ?? null);
             self::assertSame('Admin', $db->query("SELECT name FROM seeding_test_roles WHERE id = 'r-admin'")->fetchAll()[0]['name']);
         } finally {
-            SeedingDefaults::$adminName = 'Administrator';
+            SeedingDefaults::$adminName = $adminName;
             $db->execute('DROP TABLE IF EXISTS seeding_test_roles');
             $orm->shutdown();
         }

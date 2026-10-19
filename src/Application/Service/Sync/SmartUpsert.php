@@ -118,6 +118,9 @@ class SmartUpsert
         // count alone has three unknowns and two equations, and read alone it
         // reported a single changed row as two inserts. With the existing rows
         // known it is exact: inserted = total - existing, updated from the rest.
+        // Exact for conflicts on the PRIMARY KEY, which is what seeding upserts
+        // on. A row whose new primary key collides on ANOTHER unique key is
+        // updated by MySQL through that key and still counted here as an insert.
         $existing = $this->countExisting($table, $pkColumn, array_map(static fn (array $row): mixed => $row[$pkColumn], $rows));
 
         $result = $this->adapter->execute($sql, $params);
