@@ -7,8 +7,10 @@ namespace Semitexa\Orm\Tests\Integration\Sync;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Semitexa\Core\Discovery\ClassDiscovery;
+use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Adapter\MySqlType;
 use Semitexa\Orm\Application\Service\Sync\SeedRunner;
+use Semitexa\Orm\Application\Service\Sync\SmartUpsert;
 use Semitexa\Orm\Attribute\Column;
 use Semitexa\Orm\Attribute\FromTable;
 use Semitexa\Orm\Attribute\PrimaryKey;
@@ -55,8 +57,82 @@ final class SeedingTest extends TestCase
     }
 
     #[Test]
+    public function create_fills_the_constructor_then_the_writable_properties(): void
+    {
+        // review: create() went constructor-only and refused `name` here, a
+        // shape that seeded before — optional constructor + a writable property.
+        $model = SeedingMutableModel::create(id: 'x', name: 'y');
+
+        self::assertSame(['x', 'y'], [$model->id, $model->name]);
+    }
+
+    #[Test]
+    public function create_names_a_property_it_cannot_write(): void
+    {
+        foreach (['stamp' => 'readonly', 'secret' => 'private', 'counter' => 'static', 'title' => 'missing'] as $name => $why) {
+            try {
+                SeedingMutableModel::create(...['id' => 'x', $name => 'z']);
+                self::fail("create() accepted the {$why} property '{$name}'");
+            } catch (\InvalidArgumentException $e) {
+                self::assertStringContainsString("'{$name}'", $e->getMessage(), $why);
+            }
+        }
+    }
+
+    #[Test]
+    public function seeding_a_batch_that_repeats_a_key_counts_one_insert(): void
+    {
+        [$orm, $db] = $this->ownTheRolesTable();
+        try {
+            // MySQL inserts the first row and updates it with the second
+            // (rowCount 3): one row in the table, so one insert and one update.
+            $stats = (new SmartUpsert($db))->upsert([
+                new SeedingRoleModel(id: 'e', name: 'E', rank: 1),
+                new SeedingRoleModel(id: 'e', name: 'E2', rank: 1),
+            ]);
+
+            self::assertSame(1, (int) $db->query('SELECT COUNT(*) AS n FROM seeding_test_roles')->fetchAll()[0]['n']);
+            self::assertSame(['inserted' => 1, 'updated' => 1, 'unchanged' => 0], $stats);
+        } finally {
+            $db->execute('DROP TABLE IF EXISTS seeding_test_roles');
+            $orm->shutdown();
+        }
+    }
+
+    #[Test]
     public function seeding_inserts_the_defaults_once_and_updates_a_changed_row(): void
     {
+        [$orm, $db] = $this->ownTheRolesTable();
+        $adminName = SeedingDefaults::$adminName;
+        try {
+            $runner = new SeedRunner($db, new SeedingOneClassDiscovery());
+
+            $first = $runner->run();
+            $again = $runner->run();
+            SeedingDefaults::$adminName = 'Admin';
+            $changed = $runner->run();
+
+            self::assertSame(2, $first['seeding_test_roles']['inserted'] ?? null);
+            self::assertSame(0, $again['seeding_test_roles']['inserted'] ?? null, 'seeding twice must not duplicate');
+            self::assertSame(2, (int) $db->query('SELECT COUNT(*) AS n FROM seeding_test_roles')->fetchAll()[0]['n']);
+            self::assertSame(1, $changed['seeding_test_roles']['updated'] ?? null);
+            self::assertSame('Admin', $db->query("SELECT name FROM seeding_test_roles WHERE id = 'r-admin'")->fetchAll()[0]['name']);
+        } finally {
+            SeedingDefaults::$adminName = $adminName;
+            $db->execute('DROP TABLE IF EXISTS seeding_test_roles');
+            $orm->shutdown();
+        }
+    }
+
+    /**
+     * Creates seeding_test_roles on MySQL, or skips: never a table this test
+     * did not create.
+     *
+     * @return array{0: OrmManager, 1: DatabaseAdapterInterface}
+     */
+    private function ownTheRolesTable(): array
+    {
+        // verify:accept-test-change the two skips are the existing MySQL-unavailable and table-not-ours skips moved unchanged out of seeding_inserts_the_defaults_once_and_updates_a_changed_row so the duplicate-key test shares them
         try {
             $orm = new OrmManager();
             if ($orm->getDriver() !== 'mysql') {
@@ -77,25 +153,8 @@ final class SeedingTest extends TestCase
             self::markTestSkipped('seeding_test_roles already exists in this database; it is not this test\'s to drop.');
         }
         $db->execute('CREATE TABLE seeding_test_roles (id VARCHAR(36) PRIMARY KEY, name VARCHAR(64) NOT NULL, `rank` INT NOT NULL)');
-        $adminName = SeedingDefaults::$adminName;
-        try {
-            $runner = new SeedRunner($db, new SeedingOneClassDiscovery());
 
-            $first = $runner->run();
-            $again = $runner->run();
-            SeedingDefaults::$adminName = 'Admin';
-            $changed = $runner->run();
-
-            self::assertSame(2, $first['seeding_test_roles']['inserted'] ?? null);
-            self::assertSame(0, $again['seeding_test_roles']['inserted'] ?? null, 'seeding twice must not duplicate');
-            self::assertSame(2, (int) $db->query('SELECT COUNT(*) AS n FROM seeding_test_roles')->fetchAll()[0]['n']);
-            self::assertSame(1, $changed['seeding_test_roles']['updated'] ?? null);
-            self::assertSame('Admin', $db->query("SELECT name FROM seeding_test_roles WHERE id = 'r-admin'")->fetchAll()[0]['name']);
-        } finally {
-            SeedingDefaults::$adminName = $adminName;
-            $db->execute('DROP TABLE IF EXISTS seeding_test_roles');
-            $orm->shutdown();
-        }
+        return [$orm, $db];
     }
 }
 
@@ -121,6 +180,27 @@ final readonly class SeedingRoleModel
             self::create(id: 'r-admin', name: SeedingDefaults::$adminName, rank: 1),
             self::create(id: 'r-editor', name: 'Editor', rank: 2),
         ];
+    }
+}
+
+/** Not readonly: an optional constructor plus properties set after it. */
+final class SeedingMutableModel
+{
+    use Seedable;
+
+    public string $name = '';
+    public readonly string $stamp;
+    private string $secret = '';
+    public static string $counter = '';
+
+    public function __construct(public ?string $id = null)
+    {
+        $this->stamp = 's';
+    }
+
+    public function secret(): string
+    {
+        return $this->secret;
     }
 }
 

@@ -117,20 +117,26 @@ class SmartUpsert
         // row, +2 for an updated one and 0 for one left identical: the affected
         // count alone has three unknowns and two equations, and read alone it
         // reported a single changed row as two inserts. With the existing rows
-        // known it is exact: inserted = total - existing, updated from the rest.
+        // known it is exact: inserted = distinct keys - existing, updated from
+        // the rest. Distinct, not total: a batch that repeats a key inserts it
+        // once and updates it with each repeat (+1, then +2 per repeat).
         // Exact for conflicts on the PRIMARY KEY, which is what seeding upserts
         // on. A row whose new primary key collides on ANOTHER unique key is
         // updated by MySQL through that key and still counted here as an insert.
         // And exact only when upserts into one table do not overlap: two that
         // both count a key as absent before either writes report two inserts.
-        $existing = $this->countExisting($table, $pkColumn, array_map(static fn (array $row): mixed => $row[$pkColumn], $rows));
+        $distinctKeys = array_values(array_unique(
+            array_map(static fn (array $row): mixed => $row[$pkColumn], $rows),
+            SORT_STRING,
+        ));
+        $existing = $this->countExisting($table, $pkColumn, $distinctKeys);
 
         $result = $this->adapter->execute($sql, $params);
 
         $total     = count($rows);
-        $inserted  = $total - $existing;
+        $inserted  = max(0, count($distinctKeys) - $existing);
         $updated   = max(0, intdiv($result->rowCount - $inserted, 2));
-        $unchanged = max(0, $existing - $updated);
+        $unchanged = max(0, $total - $inserted - $updated);
 
         return ['inserted' => $inserted, 'updated' => $updated, 'unchanged' => $unchanged];
     }
