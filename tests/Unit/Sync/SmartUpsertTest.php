@@ -33,12 +33,16 @@ final class SmartUpsertTest extends TestCase
             $this->product('p-2', 'Two'),
         ]);
 
-        self::assertCount(1, $adapter->executed, 'A batch must be one statement.');
-        $sql = $adapter->executed[0]['sql'];
+        // verify:accept-test-change the upsert first counts which keys exist (exact inserted/updated
+        // stats); the contract pinned here is unchanged — the batch is still ONE write statement.
+        $writes = self::writes($adapter);
+        self::assertCount(1, $writes, 'A batch must be one write statement.');
+        self::assertStringStartsWith('SELECT COUNT(*)', $adapter->executed[0]['sql'], 'the existing rows are counted before the write');
+        $sql = $writes[0]['sql'];
         self::assertStringContainsString('INSERT INTO `products`', $sql);
         self::assertStringContainsString('ON DUPLICATE KEY UPDATE', $sql);
 
-        $params = $adapter->executed[0]['params'];
+        $params = $writes[0]['params'];
         self::assertSame('p-1', $params['r0_id']);
         self::assertSame('p-2', $params['r1_id']);
         self::assertSame('One', $params['r0_name']);
@@ -74,8 +78,9 @@ final class SmartUpsertTest extends TestCase
             $this->partialProduct('p-2'),          // name/tenant/category uninitialized
         ]);
 
-        self::assertCount(1, $adapter->executed, 'A mixed batch is still one statement.');
-        $params = $adapter->executed[0]['params'];
+        $writes = self::writes($adapter);
+        self::assertCount(1, $writes, 'A mixed batch is still one write statement.');
+        $params = $writes[0]['params'];
         self::assertSame('One', $params['r0_name']);
         self::assertNull($params['r1_name'], "The partial row's missing column is null-filled.");
 
@@ -88,12 +93,18 @@ final class SmartUpsertTest extends TestCase
             $this->product('p-4', 'Four'),
         ]);
 
-        $sql2 = $adapter2->executed[0]['sql'];
-        $params2 = $adapter2->executed[0]['params'];
+        $sql2 = self::writes($adapter2)[0]['sql'];
+        $params2 = self::writes($adapter2)[0]['params'];
         self::assertStringNotContainsString('`name`', $sql2, 'Columns absent from the first row are dropped for the whole batch.');
         self::assertArrayNotHasKey('r1_name', $params2);
         self::assertSame('p-3', $params2['r0_id']);
         self::assertSame('p-4', $params2['r1_id']);
+    }
+
+    /** @return list<array{sql: string, params: array<string, mixed>}> the INSERTs, without the existence count */
+    private static function writes(FakeDatabaseAdapter $adapter): array
+    {
+        return array_values(array_filter($adapter->executed, static fn (array $e): bool => str_starts_with($e['sql'], 'INSERT')));
     }
 
     /** A resource with ONLY the PK initialized (reflection bypasses the ctor). */
