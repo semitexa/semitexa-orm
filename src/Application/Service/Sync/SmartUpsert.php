@@ -74,6 +74,7 @@ class SmartUpsert
      *   1 = row was inserted
      *   2 = row existed and was updated
      *   0 = row existed and was identical (no change)
+     * — read together with how many of the keys existed before (countExisting).
      *
      * @param array<int, array<string, mixed>> $rows
      * @return array{inserted: int, updated: int, unchanged: int}
@@ -112,26 +113,40 @@ class SmartUpsert
             implode(', ', $updateClauses),
         );
 
+        // Which rows exist BEFORE the write. MySQL reports +1 for an inserted
+        // row, +2 for an updated one and 0 for one left identical: the affected
+        // count alone has three unknowns and two equations, and read alone it
+        // reported a single changed row as two inserts. With the existing rows
+        // known it is exact: inserted = total - existing, updated from the rest.
+        $existing = $this->countExisting($table, $pkColumn, array_map(static fn (array $row): mixed => $row[$pkColumn], $rows));
+
         $result = $this->adapter->execute($sql, $params);
 
-        // MySQL affected-rows convention for ON DUPLICATE KEY UPDATE:
-        //   INSERT (new row)          → +1
-        //   UPDATE (row changed)      → +2
-        //   no-op  (row identical)    → +0
-        //
-        // Let I = inserted, U = updated, N = unchanged.
-        //   I + U + N = total
-        //   affectedRows = I + 2U  →  I = affectedRows - 2U
-        //
-        // Assuming N = 0 (conservative): U = affectedRows - total, I = total - U.
-        // When affectedRows < total some rows were no-ops — we report them as unchanged.
-        $affectedRows = $result->rowCount;
-        $total        = count($rows);
-        $updated      = max(0, $affectedRows - $total);
-        $inserted     = max(0, $affectedRows - $updated * 2);
-        $unchanged    = max(0, $total - $inserted - $updated);
+        $total     = count($rows);
+        $inserted  = $total - $existing;
+        $updated   = max(0, intdiv($result->rowCount - $inserted, 2));
+        $unchanged = max(0, $existing - $updated);
 
         return ['inserted' => $inserted, 'updated' => $updated, 'unchanged' => $unchanged];
+    }
+
+    /** @param list<mixed> $keys */
+    private function countExisting(string $table, string $pkColumn, array $keys): int
+    {
+        $placeholders = [];
+        $params = [];
+        foreach (array_values($keys) as $i => $key) {
+            $placeholders[] = ":pk{$i}";
+            $params["pk{$i}"] = $key;
+        }
+        $row = $this->adapter->execute(sprintf(
+            'SELECT COUNT(*) AS n FROM %s WHERE %s IN (%s)',
+            SqlIdentifier::quote($table),
+            SqlIdentifier::quote($pkColumn),
+            implode(', ', $placeholders),
+        ), $params)->fetchOne();
+
+        return (int) ($row['n'] ?? 0);
     }
 
 }
