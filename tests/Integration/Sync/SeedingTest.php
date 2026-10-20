@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Tests\Integration\Sync;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Semitexa\Core\Discovery\ClassDiscovery;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Adapter\MySqlType;
+use Semitexa\Orm\Adapter\SqliteAdapter;
 use Semitexa\Orm\Application\Service\Sync\SeedRunner;
 use Semitexa\Orm\Application\Service\Sync\SmartUpsert;
 use Semitexa\Orm\Attribute\Column;
@@ -24,9 +26,10 @@ use Semitexa\Orm\Trait\Seedable;
  * class whose constructor takes every column (ArgumentCountError). Nothing in
  * the workspace seeded through it, so nothing noticed (tk-parity-proof-gaps).
  *
- * The create() cases need no database. The end-to-end case runs the real
- * SeedRunner against MySQL and is skipped without one: the upsert is
- * `INSERT … ON DUPLICATE KEY UPDATE`, MySQL only.
+ * The create() cases need no database. The end-to-end cases run the real
+ * SeedRunner on in-memory SQLite always, and on MySQL when one is configured.
+ * REGRESSION (tk-orm-seed-sqlite): the upsert was `INSERT … ON DUPLICATE KEY
+ * UPDATE` only, and orm:seed failed on SQLite on the syntax.
  */
 final class SeedingTest extends TestCase
 {
@@ -79,13 +82,23 @@ final class SeedingTest extends TestCase
         }
     }
 
-    #[Test]
-    public function seeding_a_batch_that_repeats_a_key_counts_one_insert(): void
+    /** @return iterable<string, array{string}> */
+    public static function drivers(): iterable
     {
-        [$orm, $db] = $this->ownTheRolesTable();
+        yield 'sqlite' => ['sqlite'];
+        yield 'mysql' => ['mysql'];
+    }
+
+    #[Test]
+    #[DataProvider('drivers')]
+    public function seeding_a_batch_that_repeats_a_key_counts_one_insert(string $driver): void
+    {
+        // verify:accept-test-change tk-orm-seed-sqlite: the same case now runs per driver (SQLite always, MySQL when configured); the assertions are unchanged
+        [$orm, $db] = $this->ownTheRolesTable($driver);
         try {
             // MySQL inserts the first row and updates it with the second
-            // (rowCount 3): one row in the table, so one insert and one update.
+            // (rowCount 3), SQLite the same (2 changes): one row in the table,
+            // so one insert and one update.
             $stats = (new SmartUpsert($db))->upsert([
                 new SeedingRoleModel(id: 'e', name: 'E', rank: 1),
                 new SeedingRoleModel(id: 'e', name: 'E2', rank: 1),
@@ -95,14 +108,16 @@ final class SeedingTest extends TestCase
             self::assertSame(['inserted' => 1, 'updated' => 1, 'unchanged' => 0], $stats);
         } finally {
             $db->execute('DROP TABLE IF EXISTS seeding_test_roles');
-            $orm->shutdown();
+            $orm?->shutdown();
         }
     }
 
     #[Test]
-    public function seeding_inserts_the_defaults_once_and_updates_a_changed_row(): void
+    #[DataProvider('drivers')]
+    public function seeding_inserts_the_defaults_once_and_updates_a_changed_row(string $driver): void
     {
-        [$orm, $db] = $this->ownTheRolesTable();
+        // verify:accept-test-change tk-orm-seed-sqlite: runs per driver; adds the unchanged and second-insert counts, which SQLite derives differently from MySQL
+        [$orm, $db] = $this->ownTheRolesTable($driver);
         $adminName = SeedingDefaults::$adminName;
         try {
             $runner = new SeedRunner($db, new SeedingOneClassDiscovery());
@@ -114,24 +129,32 @@ final class SeedingTest extends TestCase
 
             self::assertSame(2, $first['seeding_test_roles']['inserted'] ?? null);
             self::assertSame(0, $again['seeding_test_roles']['inserted'] ?? null, 'seeding twice must not duplicate');
+            self::assertSame(['inserted' => 0, 'updated' => 0, 'unchanged' => 2], $again['seeding_test_roles'] ?? null, 'identical rows are not updates');
             self::assertSame(2, (int) $db->query('SELECT COUNT(*) AS n FROM seeding_test_roles')->fetchAll()[0]['n']);
-            self::assertSame(1, $changed['seeding_test_roles']['updated'] ?? null);
+            self::assertSame(['inserted' => 0, 'updated' => 1, 'unchanged' => 1], $changed['seeding_test_roles'] ?? null);
             self::assertSame('Admin', $db->query("SELECT name FROM seeding_test_roles WHERE id = 'r-admin'")->fetchAll()[0]['name']);
         } finally {
             SeedingDefaults::$adminName = $adminName;
             $db->execute('DROP TABLE IF EXISTS seeding_test_roles');
-            $orm->shutdown();
+            $orm?->shutdown();
         }
     }
 
     /**
-     * Creates seeding_test_roles on MySQL, or skips: never a table this test
-     * did not create.
+     * Creates seeding_test_roles on a fresh in-memory SQLite, or on MySQL —
+     * there it skips rather than touch a table this test did not create.
      *
-     * @return array{0: OrmManager, 1: DatabaseAdapterInterface}
+     * @return array{0: ?OrmManager, 1: DatabaseAdapterInterface}
      */
-    private function ownTheRolesTable(): array
+    private function ownTheRolesTable(string $driver): array
     {
+        if ($driver === 'sqlite') {
+            $db = new SqliteAdapter('sqlite::memory:');
+            $db->execute('CREATE TABLE seeding_test_roles (id VARCHAR(36) PRIMARY KEY, name VARCHAR(64) NOT NULL, "rank" INT NOT NULL)');
+
+            return [null, $db];
+        }
+
         // verify:accept-test-change the two skips are the existing MySQL-unavailable and table-not-ours skips moved unchanged out of seeding_inserts_the_defaults_once_and_updates_a_changed_row so the duplicate-key test shares them
         try {
             $orm = new OrmManager();
