@@ -143,6 +143,34 @@ final class DatabaseQueueTransportTest extends TestCase
     }
 
     #[Test]
+    public function a_delayed_message_waits_its_turn_and_does_not_hold_up_the_rest(): void
+    {
+        // The worker used to sleep the retry delay inside the consume loop;
+        // the table holds a delayed retry back by itself now.
+        $this->transport->publishDelayed($this->queue, '{"job":"retry"}', 60);
+        $this->transport->publish($this->queue, '{"job":"fresh"}');
+
+        $received = [];
+        $collector = function (string $p) use (&$received): void {
+            $received[] = $p;
+        };
+
+        self::assertTrue($this->transport->consumeOne($this->queue, $collector));
+        self::assertFalse($this->transport->consumeOne($this->queue, $collector), 'the delayed message is not due yet');
+        self::assertSame(['{"job":"fresh"}'], $received);
+        self::assertSame(1, $this->transport->depth($this->queue), 'a delayed message is still owed');
+        self::assertNull($this->transport->oldestAgeSeconds($this->queue), 'but it is not waiting yet');
+
+        $this->adapter->execute(
+            'UPDATE queue_messages SET queued_at = :due WHERE queue_name = :q',
+            ['due' => date('Y-m-d H:i:s', time() - 1), 'q' => $this->queue],
+        );
+
+        self::assertTrue($this->transport->consumeOne($this->queue, $collector));
+        self::assertSame(['{"job":"fresh"}', '{"job":"retry"}'], $received);
+    }
+
+    #[Test]
     public function emptyQueueClaimsNothing(): void
     {
         self::assertFalse($this->transport->consumeOne($this->queue, static fn (string $p) => null));

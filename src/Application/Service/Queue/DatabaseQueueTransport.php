@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Application\Service\Queue;
 
 use Semitexa\Core\Queue\DeadLetter;
+use Semitexa\Core\Queue\DelayedQueueTransportInterface;
 use Semitexa\Core\Queue\QueueInspectorInterface;
-use Semitexa\Core\Queue\QueueTransportInterface;
 use Semitexa\Core\Support\Row;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Application\Service\Uuid7;
@@ -22,7 +22,7 @@ use Semitexa\Orm\OrmManager;
  * The adapter is resolved lazily per call so constructing the transport (e.g.
  * during registry initialization) never touches the database.
  */
-final class DatabaseQueueTransport implements QueueTransportInterface, QueueInspectorInterface
+final class DatabaseQueueTransport implements DelayedQueueTransportInterface, QueueInspectorInterface
 {
     private const DEFAULT_MAX_ATTEMPTS = 5;
     private const LEASE_SECONDS = 300;
@@ -35,6 +35,22 @@ final class DatabaseQueueTransport implements QueueTransportInterface, QueueInsp
     private string $consumerId = '';
 
     public function publish(string $queueName, string $payload): void
+    {
+        $this->insert($queueName, $payload, time());
+    }
+
+    /**
+     * queued_at is when the message may first be claimed: a delayed one is
+     * written with it in the future, and the claim passes it by until then.
+     */
+    public function publishDelayed(string $queueName, string $payload, int $delaySeconds): void
+    {
+        // queued_at keeps whole seconds and the claim compares whole seconds,
+        // so the second is rounded up: a retry may run a little late, never early.
+        $this->insert($queueName, $payload, $delaySeconds > 0 ? time() + $delaySeconds + 1 : time());
+    }
+
+    private function insert(string $queueName, string $payload, int $availableAt): void
     {
         $this->adapter()->execute(
             'INSERT INTO queue_messages
@@ -49,7 +65,7 @@ final class DatabaseQueueTransport implements QueueTransportInterface, QueueInsp
                 'payload' => $payload,
                 'status' => 'queued',
                 'max_attempts' => self::DEFAULT_MAX_ATTEMPTS,
-                'queued_at' => date('Y-m-d H:i:s'),
+                'queued_at' => date('Y-m-d H:i:s', $availableAt),
             ],
         );
     }
@@ -85,7 +101,7 @@ final class DatabaseQueueTransport implements QueueTransportInterface, QueueInsp
                  SELECT id FROM (
                      SELECT id FROM queue_messages
                      WHERE queue_name = :queue_name
-                       AND (status = 'queued' OR (status = 'processing' AND lease_expires_at < :now_stale))
+                       AND ((status = 'queued' AND queued_at <= :now_due) OR (status = 'processing' AND lease_expires_at < :now_stale))
                        AND attempt_count < max_attempts
                      ORDER BY queued_at ASC, id ASC
                      LIMIT 1
@@ -95,6 +111,7 @@ final class DatabaseQueueTransport implements QueueTransportInterface, QueueInsp
                 'owner' => $this->consumerId(),
                 'lease_until' => date('Y-m-d H:i:s', time() + self::LEASE_SECONDS),
                 'queue_name' => $queue,
+                'now_due' => $now,
                 'now_stale' => $now,
             ],
         );
@@ -162,8 +179,9 @@ final class DatabaseQueueTransport implements QueueTransportInterface, QueueInsp
     public function oldestAgeSeconds(string $queue): ?int
     {
         $row = $this->adapter()->execute(
-            "SELECT MIN(queued_at) AS oldest FROM queue_messages WHERE queue_name = :queue_name AND status = 'queued'",
-            ['queue_name' => $this->normalizeQueue($queue)],
+            // A delayed retry is not waiting yet: its queued_at is in the future.
+            "SELECT MIN(queued_at) AS oldest FROM queue_messages WHERE queue_name = :queue_name AND status = 'queued' AND queued_at <= :now",
+            ['queue_name' => $this->normalizeQueue($queue), 'now' => date('Y-m-d H:i:s')],
         )->rows[0] ?? null;
         $oldestAt = $row === null ? '' : Row::of($row)->string('oldest');
         $oldest = $oldestAt === '' ? false : strtotime($oldestAt);
