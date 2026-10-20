@@ -393,23 +393,24 @@ final class AggregateWriteEngine
     private function executeInsert(object $resourceModel, ResourceModelMetadata $metadata, DatabaseAdapterInterface $adapter): object
     {
         $row = $this->hydrator->dehydrate($resourceModel);
-        $lastInsertId = (new InsertQuery($metadata->tableName, $adapter))->execute($row);
+
+        // An auto key not yet given (null, '' or a non-nullable int's 0) is not sent: as 0, MySQL
+        // assigned an id the model never got and SQLite stored 0. lastInsertId fills it.
         $primaryKey = $metadata->primaryKeyProperty;
-        if ($primaryKey === null) {
-            return $resourceModel;
+        $assigned = false;
+        if ($primaryKey !== null && $metadata->column($primaryKey)->primaryKeyStrategy === 'auto') {
+            $currentValue = $this->propertyValue($resourceModel, $primaryKey);
+            if ($currentValue === null || $currentValue === '' || $currentValue === 0) {
+                unset($row[$metadata->column($primaryKey)->columnName]);
+                $assigned = true;
+            }
         }
 
-        $column = $metadata->column($primaryKey);
-        if ($column->primaryKeyStrategy !== 'auto') {
-            return $resourceModel;
-        }
+        $lastInsertId = (new InsertQuery($metadata->tableName, $adapter))->execute($row);
 
-        $currentValue = $this->propertyValue($resourceModel, $primaryKey);
-        if ($currentValue !== null && $currentValue !== '') {
-            return $resourceModel;
-        }
-
-        return $this->withPropertyValue($resourceModel, $primaryKey, (int) $lastInsertId);
+        return $assigned && $primaryKey !== null
+            ? $this->withPropertyValue($resourceModel, $primaryKey, (int) $lastInsertId)
+            : $resourceModel;
     }
 
     /** @return object the input model, version-bumped when #[Version] applies */
