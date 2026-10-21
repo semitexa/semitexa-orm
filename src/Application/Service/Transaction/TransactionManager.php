@@ -139,6 +139,24 @@ class TransactionManager
         $this->setPendingEvents($events);
     }
 
+    /**
+     * Run $work once the outermost transaction on this connection commits, or
+     * now when none is open. A rollback drops it, and so does a rolled-back
+     * savepoint it was asked for in. For an effect a rollback cannot undo — a
+     * mail sent, a message published — which must not happen for a write that
+     * never happened, nor twice when runWithRetry() replays the unit. Inside a
+     * test transaction it never runs, like the events a commit would flush.
+     */
+    public function afterCommit(callable $work): void
+    {
+        if (!$this->isActive()) {
+            $work();
+
+            return;
+        }
+        $this->bufferEvent(new AfterCommit($work(...)));
+    }
+
     public function isActive(): bool
     {
         return $this->depth() > 0;
@@ -533,6 +551,7 @@ class TransactionManager
         $depth = $this->depth() + 1;
         $this->setDepth($depth);
         $savepointName = 'sp_' . $depth;
+        $buffered = count($this->pendingEvents());
 
         $connAdapter = new SingleConnectionAdapter($pdo, $this->adapter->getServerVersion(), $this->connectionName);
 
@@ -557,6 +576,8 @@ class TransactionManager
             // disables the entire retry machinery. ROLLBACK TO also leaves the
             // savepoint in place, so RELEASE keeps a long outer transaction
             // from accumulating them.
+            // What this savepoint asked for is undone with it.
+            $this->setPendingEvents(array_slice($this->pendingEvents(), 0, $buffered));
             try {
                 $pdo->exec("ROLLBACK TO SAVEPOINT {$savepointName}");
                 $pdo->exec("RELEASE SAVEPOINT {$savepointName}");
@@ -576,13 +597,12 @@ class TransactionManager
         $events = $this->pendingEvents();
         $this->setPendingEvents([]);
 
-        if ($this->eventDispatcher === null) {
-            return;
-        }
-
         foreach ($events as $event) {
+            if (!$event instanceof AfterCommit && $this->eventDispatcher === null) {
+                continue;
+            }
             try {
-                $this->eventDispatcher->dispatch($event);
+                $event instanceof AfterCommit ? ($event->work)() : $this->eventDispatcher?->dispatch($event);
             } catch (\Throwable $e) {
                 // Swallowed per event, but never silently: the transaction is
                 // already committed and these are best-effort invalidation
@@ -593,7 +613,7 @@ class TransactionManager
                 // buffer existed these errors propagated, and a broken
                 // ui.invalidate/SSE chain that vanishes without a trace is a
                 // debugging dead end.
-                StaticLoggerBridge::error('orm', 'A post-commit event listener failed; the transaction is committed and the signal is lost.', [
+                StaticLoggerBridge::error('orm', 'A post-commit event listener or afterCommit() work failed; the transaction is committed and its follow-up is lost.', [
                     'event' => $event::class,
                     'connection' => $this->connectionName,
                     'error' => $e->getMessage(),
