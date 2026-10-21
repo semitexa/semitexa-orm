@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Application\Service\Schema;
 
+use Semitexa\Orm\Application\Service\Sync\SyncEngine;
+
 use Semitexa\Orm\Domain\Model\ColumnDefinition;
 use Semitexa\Orm\Domain\Model\DbColumnState;
 use Semitexa\Orm\Domain\Model\DbIndexState;
@@ -52,6 +54,14 @@ class SchemaComparator extends AbstractSchemaComparator
             if (!isset($dbSchema[$tableName])) {
                 $diff->addCreateTable($tableDefinition);
                 continue;
+            }
+
+            // A table back in code keeps its deprecation mark unless it is
+            // cleared: phase 1 would then already be done, and the next sync
+            // that missed the table (a resource not discovered for once)
+            // dropped it straight away.
+            if ($dbSchema[$tableName]->tableComment === SyncEngine::DEPRECATED_COMMENT) {
+                $diff->addRestoreTable($tableName);
             }
 
             // Table exists — compare columns and indexes
@@ -204,6 +214,12 @@ class SchemaComparator extends AbstractSchemaComparator
             $fromStr = $db->defaultValue === null ? 'none' : "'{$db->defaultValue}'";
             $toStr   = $codeDefault      === null ? 'none' : "'{$codeDefault}'";
             $changes[] = "default: {$fromStr} → {$toStr}";
+        }
+
+        // A column back in code loses the mark phase 1 wrote on it (the MODIFY
+        // writes no comment); kept, the next sync that missed it dropped it.
+        if ($db->comment === SyncEngine::DEPRECATED_COMMENT && !$code->isDeprecated) {
+            $changes[] = 'comment: deprecation mark cleared (back in code)';
         }
 
         return $changes;

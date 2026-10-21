@@ -23,7 +23,7 @@ use Semitexa\Orm\Domain\Model\TableDefinition;
 
 class SyncEngine
 {
-    private const DEPRECATED_COMMENT = 'SEMITEXA_DEPRECATED';
+    public const DEPRECATED_COMMENT = 'SEMITEXA_DEPRECATED';
 
     public function __construct(
         private readonly DatabaseAdapterInterface $adapter,
@@ -35,6 +35,9 @@ class SyncEngine
     public function buildPlan(SchemaDiff $diff): ExecutionPlan
     {
         $plan = new ExecutionPlan();
+        foreach ($diff->getRestoreTables() as $tableName) { // first: a later failing step must not keep the mark
+            $plan->addOperation(new DdlOperation(sql: 'ALTER TABLE ' . SqlIdentifier::quote($tableName) . " COMMENT ''", type: DdlOperationType::AlterColumn, tableName: $tableName, isDestructive: false, description: "Clear the deprecation mark on '{$tableName}': it is back in code"));
+        }
 
         // 1. CREATE TABLEs first (sorted by dependencies)
         $sortedTables = $this->topologicalSort($diff->getCreateTables());

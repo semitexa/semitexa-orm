@@ -69,6 +69,10 @@ class OrmDiffCommand extends BaseCommand
             }
 
             // Display diff
+            foreach ($diff->getRestoreTables() as $tableName) {
+                $io->section("~ RESTORE TABLE `{$tableName}` (back in code: clear its deprecation mark)");
+            }
+
             foreach ($diff->getCreateTables() as $table) {
                 $io->section("+ CREATE TABLE `{$table->name}`");
                 foreach ($table->getColumns() as $col) {
@@ -125,7 +129,7 @@ class OrmDiffCommand extends BaseCommand
             }
 
             foreach ($diff->getDropTables() as $dbTable) {
-                $phase = $dbTable->tableComment === 'SEMITEXA_DEPRECATED' ? 'phase 2 — DROP' : 'phase 1 — deprecate';
+                $phase = $dbTable->tableComment === \Semitexa\Orm\Application\Service\Sync\SyncEngine::DEPRECATED_COMMENT ? 'phase 2 — DROP' : 'phase 1 — deprecate';
                 $io->section("- DROP TABLE `{$dbTable->name}` ({$phase})");
             }
 
