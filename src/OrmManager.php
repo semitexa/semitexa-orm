@@ -774,7 +774,7 @@ class OrmManager
         $factory = $this->connectBreaker->wrap($factory);
 
         if ($this->shouldUseCoroutinePool()) {
-            return Application\Service\Transaction\SharedTestTransaction::refuseCoroutinePool($this->connectionName) ?? new ConnectionPool($poolSize, $factory);
+            return new ConnectionPool($poolSize, $factory, $this->connectionName);
         }
 
         return new SingleConnectionPool($factory, $this->connectionName);

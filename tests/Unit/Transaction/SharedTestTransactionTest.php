@@ -198,17 +198,41 @@ final class SharedTestTransactionTest extends TestCase
     }
 
     #[Test]
-    public function it_refuses_to_start_under_coroutine_hooks(): void
+    public function it_refuses_to_start_inside_a_coroutine(): void
+    {
+        $refusal = null;
+        \Co\run(function () use (&$refusal): void {
+            try {
+                SharedTestTransaction::begin(self::CONNECTION, $this->config)->rollBack();
+            } catch (\LogicException $e) {
+                $refusal = $e->getMessage();
+            }
+        });
+
+        self::assertNotNull($refusal, 'One PDO must never be shared between coroutines; begin() must refuse.');
+        self::assertStringContainsString('inside a Swoole coroutine', $refusal);
+    }
+
+    /**
+     * A Co\run() leaves SWOOLE_HOOK_ALL set behind it (unless flags were set
+     * explicitly), so one coroutine test anywhere earlier in the run refused
+     * every test transaction after it.
+     */
+    #[Test]
+    public function hooks_left_on_outside_a_coroutine_do_not_refuse_it(): void
     {
         $flags = \Swoole\Runtime::getHookFlags();
-        \Swoole\Runtime::enableCoroutine(SWOOLE_HOOK_ALL);
+        \Swoole\Coroutine::set(['hook_flags' => SWOOLE_HOOK_ALL]);
         try {
-            SharedTestTransaction::begin(self::CONNECTION, $this->config);
-            self::fail('Under hooks OrmManager builds coroutine pools that do not join; begin() must refuse.');
-        } catch (\LogicException $e) {
-            self::assertStringContainsString('coroutine runtime', $e->getMessage());
+            $transaction = SharedTestTransaction::begin(self::CONNECTION, $this->config);
+            $this->appManager()->getAdapter()->execute("INSERT INTO probe (v) VALUES ('x')");
+            $transaction->rollBack();
+
+            self::assertSame(0, $this->rowsIn($this->appManager(), 'probe'));
+            self::assertSame(SWOOLE_HOOK_ALL, \Swoole\Runtime::getHookFlags(), 'left as they were');
         } finally {
-            \Swoole\Runtime::enableCoroutine($flags);
+            // Never an explicit 0: every later Co\run() would run unhooked.
+            \Swoole\Coroutine::set(['hook_flags' => $flags === 0 ? SWOOLE_HOOK_ALL : $flags]);
         }
     }
 

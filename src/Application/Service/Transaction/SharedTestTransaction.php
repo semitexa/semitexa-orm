@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Application\Service\Transaction;
 
-use Semitexa\Orm\Adapter\ConnectionPool;
 use Semitexa\Core\Attribute\WorkerState;
 use Semitexa\Orm\Adapter\SqliteAdapter;
 use Semitexa\Orm\Domain\Model\ConnectionConfig;
@@ -21,7 +20,7 @@ use Semitexa\Orm\OrmManager;
  * SingleConnectionPool with a PDO of its own, so a transaction opened on one of
  * them is invisible to the rest and their writes autocommit. While a test
  * transaction is open for a connection name:
- *   - every SingleConnectionPool serving that name hands out its connection and
+ *   - every connection pool serving that name hands out its connection and
  *     ignores it coming back;
  *   - every SqliteAdapter serving that name runs on it;
  *   - every TransactionManager of that name counts it as the outermost level, so
@@ -32,17 +31,20 @@ use Semitexa\Orm\OrmManager;
  * (Application::handleRequest) wipes the CLI CoroutineLocal store on entry and
  * on exit, and the transaction has to outlive every request a test makes.
  *
- * Test-only. It refuses to start under the Swoole coroutine runtime, where
- * OrmManager picks the coroutine pool (which does not join) and one PDO must
- * never be shared between coroutines.
+ * Test-only. It refuses to start inside a coroutine: one PDO must never be
+ * shared between coroutines. Hooks left on outside one do not matter — a
+ * Co\run() leaves them on behind it unless they were set explicitly, so
+ * OrmManager may have built a coroutine ConnectionPool for plain CLI code, and
+ * that pool joins too: outside a coroutine every pool hands out this
+ * connection, inside one it refuses.
  */
 final class SharedTestTransaction
 {
     /** @var array<string, self> Keyed by connection name. */
-    #[WorkerState('Test-only: open between a test\'s setUp and tearDown; begin() refuses under the coroutine runtime, so a server never holds one.')]
+    #[WorkerState('Test-only: open between a test\'s setUp and tearDown; begin() refuses inside a coroutine, so a server never holds one.')]
     private static array $open = [];
 
-    /** @var array<string, OrmManager> One manager per connection name, reused so each test does not reconnect. */
+    /** @var array<string, OrmManager> One manager per connection name, reused (a coroutine pool still opens a connection per test). */
     #[WorkerState('Test-only: the managers test transactions are opened on, keyed by connection name; never built in a server.')]
     private static array $managers = [];
 
@@ -75,12 +77,10 @@ final class SharedTestTransaction
             throw new \LogicException('A test transaction opens only inside a PHPUnit run.');
         }
 
-        if (self::coroutineRuntimeIsLive()) {
+        if (class_exists(\Swoole\Coroutine::class, false) && \Swoole\Coroutine::getCid() >= 0) {
             throw new \LogicException(
-                'A test transaction cannot run under the Swoole coroutine runtime (a coroutine, or hooks '
-                . 'enabled with Swoole\Runtime::enableCoroutine()). OrmManager then builds coroutine pools, '
-                . 'which do not join the test transaction, so writes would be committed. Disable the hooks '
-                . 'before the test, or clean up with RefreshesTables instead.',
+                'A test transaction cannot run inside a Swoole coroutine: its one connection would be shared '
+                . 'between coroutines. Open it outside Co\run(), or clean up with RefreshesTables instead.',
             );
         }
 
@@ -136,6 +136,34 @@ final class SharedTestTransaction
         return $open !== null && $open->driver === $driver ? $open : null;
     }
 
+    /** The connection a test transaction lends to every pool of this name, or null. */
+    public static function lentConnection(?string $connectionName): ?\PDO
+    {
+        return $connectionName === null ? null : self::for($connectionName, 'mysql')?->connection;
+    }
+
+    /**
+     * For a pool's pop(): outside a coroutine, the test's connection; inside
+     * one, a refusal — two coroutines on one hooked PDO is an uncatchable
+     * fatal, and a connection of their own would commit. A coroutine
+     * ConnectionPool serves plain CLI code too, since Co\run() leaves the hooks
+     * on behind it unless they were set explicitly.
+     */
+    public static function lendToCoroutinePool(?string $connectionName, bool $inCoroutine): ?\PDO
+    {
+        $lent = self::lentConnection($connectionName);
+        if ($lent !== null && $inCoroutine) {
+            throw new \LogicException(sprintf(
+                'A coroutine asked for a connection while a test transaction is open on "%s": one PDO must '
+                . 'never be shared between coroutines, and a connection of its own would commit writes the '
+                . 'rollback cannot undo. Clean up with RefreshesTables in a test that runs coroutines.',
+                (string) $connectionName,
+            ));
+        }
+
+        return $lent;
+    }
+
     /**
      * Roll the transaction back and stop sharing its connection.
      *
@@ -173,31 +201,5 @@ final class SharedTestTransaction
                 $this->connectionName,
             ));
         }
-    }
-
-    private static function coroutineRuntimeIsLive(): bool
-    {
-        return class_exists(\Swoole\Coroutine::class, false)
-            && (
-                \Swoole\Coroutine::getCid() >= 0
-                || (class_exists(\Swoole\Runtime::class, false) && \Swoole\Runtime::getHookFlags() !== 0)
-            );
-    }
-
-    /**
-     * Called where OrmManager is about to build a coroutine pool: hooks
-     * enabled after the test transaction opened. That pool would not join it,
-     * and its writes would be committed while the rollback reports success.
-     */
-    public static function refuseCoroutinePool(string $connectionName): ?ConnectionPool
-    {
-        if (isset(self::$open[$connectionName])) {
-            throw new \LogicException(sprintf(
-                'Swoole coroutine hooks were enabled inside a test transaction on connection "%s": its coroutine pool would commit writes the rollback cannot undo.',
-                $connectionName,
-            ));
-        }
-
-        return null;
     }
 }

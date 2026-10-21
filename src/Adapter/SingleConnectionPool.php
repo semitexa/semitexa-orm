@@ -55,7 +55,8 @@ final class SingleConnectionPool implements TenantSwitchingConnectionPoolInterfa
         // A test holds a transaction on this connection name: every pool
         // serving it hands out that one connection, or a write made through
         // another OrmManager would autocommit (see SharedTestTransaction).
-        $shared = $this->sharedTestConnection();
+        // Never to a coroutine: two of them on one hooked PDO is a fatal.
+        $shared = SharedTestTransaction::lendToCoroutinePool($this->connectionName, $this->currentCid() >= 0);
         if ($shared !== null) {
             return $shared;
         }

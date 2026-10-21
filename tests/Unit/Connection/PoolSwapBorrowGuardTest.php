@@ -39,6 +39,10 @@ final class PoolSwapBorrowGuardTest extends TestCase
     {
         if (class_exists(Runtime::class)) {
             Runtime::enableCoroutine($this->savedHookFlags);
+            // Restoring a saved 0 is an explicit 0, after which no later Co\run()
+            // hooks: tell Co\run() to hook again (a NATS test hung the full
+            // suite at 45% otherwise).
+            \Swoole\Coroutine::set(['hook_flags' => $this->savedHookFlags ?: SWOOLE_HOOK_ALL]);
         }
     }
 
