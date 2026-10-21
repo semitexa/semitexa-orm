@@ -78,7 +78,7 @@ class TransactionManager
     {
         $connection = CoroutineLocal::get($this->key(self::KEY_ACTIVE_CONNECTION));
 
-        return $connection instanceof \PDO ? $connection : null;
+        return $connection instanceof \PDO ? $connection : $this->testTransaction()?->connection;
     }
 
     private function setActiveConnection(?\PDO $pdo): void
@@ -86,15 +86,29 @@ class TransactionManager
         CoroutineLocal::set($this->key(self::KEY_ACTIVE_CONNECTION), $pdo);
     }
 
-    /** Nesting depth for the current coroutine: 0 = no transaction, 1 = outer BEGIN, 2+ = savepoints. */
+    /**
+     * Nesting depth for the current coroutine: 0 = no transaction, 1 = outer BEGIN, 2+ = savepoints.
+     * An open test transaction is level 1 and is not stored here: an in-process
+     * request wipes CoroutineLocal, and the test's transaction outlives it.
+     */
     private function depth(): int
     {
-        return Row::asInt(CoroutineLocal::get($this->key(self::KEY_DEPTH), 0));
+        return Row::asInt(CoroutineLocal::get($this->key(self::KEY_DEPTH), 0))
+            + ($this->testTransaction() !== null ? 1 : 0);
     }
 
     private function setDepth(int $depth): void
     {
-        CoroutineLocal::set($this->key(self::KEY_DEPTH), $depth);
+        CoroutineLocal::set($this->key(self::KEY_DEPTH), max(0, $depth - ($this->testTransaction() !== null ? 1 : 0)));
+    }
+
+    /**
+     * The transaction a test holds on this connection name, which every
+     * transaction here nests inside and none commits (see SharedTestTransaction).
+     */
+    private function testTransaction(): ?SharedTestTransaction
+    {
+        return SharedTestTransaction::for($this->connectionName, $this->adapter instanceof SqliteAdapter ? 'sqlite' : 'mysql');
     }
 
     /** @return object[] Buffered events for the current coroutine, dispatched after successful outer commit. */
@@ -144,7 +158,7 @@ class TransactionManager
     {
         $adapter = CoroutineLocal::get($this->key(self::KEY_ACTIVE_ADAPTER));
 
-        return $adapter instanceof DatabaseAdapterInterface ? $adapter : null;
+        return $adapter instanceof DatabaseAdapterInterface ? $adapter : $this->testTransaction()?->adapter;
     }
 
     private function setCurrentAdapter(?DatabaseAdapterInterface $adapter): void

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Adapter;
 
 use Semitexa\Orm\Application\Service\Persistence\ReplicatedWriteGuard;
+use Semitexa\Orm\Application\Service\Transaction\SharedTestTransaction;
 /**
  * SQLite database adapter.
  *
@@ -173,6 +174,13 @@ class SqliteAdapter implements DatabaseAdapterInterface
 
     private function getConnection(): \PDO
     {
+        // A test holds a transaction on this connection name: run on its
+        // connection, never cache it (see SharedTestTransaction).
+        $shared = SharedTestTransaction::for($this->connectionName, 'sqlite')?->connection;
+        if ($shared !== null) {
+            return $shared;
+        }
+
         if ($this->connection === null) {
             $this->connection = $this->createConnection();
         }

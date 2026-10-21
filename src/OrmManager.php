@@ -774,10 +774,10 @@ class OrmManager
         $factory = $this->connectBreaker->wrap($factory);
 
         if ($this->shouldUseCoroutinePool()) {
-            return new ConnectionPool($poolSize, $factory);
+            return Application\Service\Transaction\SharedTestTransaction::refuseCoroutinePool($this->connectionName) ?? new ConnectionPool($poolSize, $factory);
         }
 
-        return new SingleConnectionPool($factory);
+        return new SingleConnectionPool($factory, $this->connectionName);
     }
 
     /**

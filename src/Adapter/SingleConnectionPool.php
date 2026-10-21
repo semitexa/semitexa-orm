@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Adapter;
 
+use Semitexa\Orm\Application\Service\Transaction\SharedTestTransaction;
+
 /**
  * Single PDO connection — used when Swoole is not available (e.g. CLI).
  * pop() returns the same connection; push() stores it for reuse.
@@ -38,13 +40,26 @@ final class SingleConnectionPool implements TenantSwitchingConnectionPoolInterfa
      */
     private int $borrows = 0;
 
-    /** @param \Closure(): \PDO $factory */
+    /**
+     * @param \Closure(): \PDO $factory
+     * @param string $connectionName the connection this pool serves, so a test
+     *                               transaction opened on it can be joined
+     */
     public function __construct(
         private readonly \Closure $factory,
+        private readonly string $connectionName = 'default',
     ) {}
 
     public function pop(?float $timeout = null): \PDO
     {
+        // A test holds a transaction on this connection name: every pool
+        // serving it hands out that one connection, or a write made through
+        // another OrmManager would autocommit (see SharedTestTransaction).
+        $shared = $this->sharedTestConnection();
+        if ($shared !== null) {
+            return $shared;
+        }
+
         // One connection, never a queue: nothing here ever waits, so the
         // timeout is accepted for contract shape only.
         $cid = $this->currentCid();
@@ -79,6 +94,12 @@ final class SingleConnectionPool implements TenantSwitchingConnectionPoolInterfa
 
     public function push(\PDO $connection): void
     {
+        // Lent by the test transaction, not borrowed from here: the cleanup
+        // below would roll that transaction back.
+        if ($connection === $this->sharedTestConnection()) {
+            return;
+        }
+
         // Re-cache only the owned connection and release ownership so the next
         // coroutine can claim it. Extra crash-avoidance connections are dropped
         // (GC-closed) rather than overwriting the cached one.
@@ -150,6 +171,10 @@ final class SingleConnectionPool implements TenantSwitchingConnectionPoolInterfa
      */
     public function discard(\PDO $connection): void
     {
+        if ($connection === $this->sharedTestConnection()) {
+            return;
+        }
+
         // Crash-avoidance mints were never counted; a foreign coroutine does
         // not own the count (same rule as push()).
         if ($this->connection !== $connection) {
@@ -239,6 +264,11 @@ final class SingleConnectionPool implements TenantSwitchingConnectionPoolInterfa
         ++$this->borrows;
 
         return $connection;
+    }
+
+    private function sharedTestConnection(): ?\PDO
+    {
+        return SharedTestTransaction::for($this->connectionName, 'mysql')?->connection;
     }
 
     private function currentCid(): int
