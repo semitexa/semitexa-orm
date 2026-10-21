@@ -7,6 +7,7 @@ namespace Semitexa\Orm\Application\Service\Queue;
 use Semitexa\Core\Queue\DeadLetter;
 use Semitexa\Core\Queue\DelayedQueueTransportInterface;
 use Semitexa\Core\Queue\QueueInspectorInterface;
+use Semitexa\Core\Queue\StoppableQueueTransportInterface;
 use Semitexa\Core\Support\Row;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Application\Service\Uuid7;
@@ -22,8 +23,10 @@ use Semitexa\Orm\OrmManager;
  * The adapter is resolved lazily per call so constructing the transport (e.g.
  * during registry initialization) never touches the database.
  */
-final class DatabaseQueueTransport implements DelayedQueueTransportInterface, QueueInspectorInterface
+final class DatabaseQueueTransport implements DelayedQueueTransportInterface, QueueInspectorInterface, StoppableQueueTransportInterface
 {
+    private bool $running = true;
+
     private const DEFAULT_MAX_ATTEMPTS = 5;
     private const LEASE_SECONDS = 300;
     private const IDLE_SLEEP_SECONDS = 1.0;
@@ -72,11 +75,21 @@ final class DatabaseQueueTransport implements DelayedQueueTransportInterface, Qu
 
     public function consume(string $queueName, callable $callback): void
     {
-        while (true) { // @phpstan-ignore while.alwaysTrue (worker loop by design, like InMemoryTransport)
+        while ($this->running) {
             if (!$this->consumeOne($queueName, $callback)) {
                 $this->idleSleep();
             }
         }
+    }
+
+    /**
+     * consume() returns after the message in hand (SIGTERM, QueueStopSignals).
+     * A stopped transport stays stopped: a signal that came before consume()
+     * began must not be forgotten.
+     */
+    public function stop(): void
+    {
+        $this->running = false;
     }
 
     /**

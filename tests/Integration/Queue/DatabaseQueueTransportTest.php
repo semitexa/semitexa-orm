@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Tests\Integration\Queue;
 
+use PHPUnit\Framework\Attributes\RequiresPhpExtension;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
+use Semitexa\Core\Queue\QueueStopSignals;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Application\Service\Queue\DatabaseQueueTransport;
 use Semitexa\Orm\OrmManager;
@@ -246,6 +248,34 @@ final class DatabaseQueueTransportTest extends TestCase
         self::assertTrue($this->transport->retryDeadLetter($this->queue, $letter->id));
         self::assertSame(1, $this->transport->depth($this->queue));
         self::assertTrue($this->transport->consumeOne($this->queue, static fn (string $p) => null), 'claimable again');
+    }
+
+    /** `docker stop`: the job in hand finishes and is acked, the next stays queued. */
+    #[Test]
+    #[RequiresPhpExtension('pcntl')]
+    #[RequiresPhpExtension('posix')]
+    public function sigterm_ends_consume_after_the_message_in_hand(): void
+    {
+        $this->transport->publish($this->queue, 'first');
+        $this->transport->publish($this->queue, 'second');
+        self::assertTrue(QueueStopSignals::install($this->transport));
+
+        $done = [];
+        try {
+            $this->transport->consume($this->queue, static function (string $payload) use (&$done): void {
+                posix_kill(posix_getpid(), SIGTERM);
+                usleep(10_000);
+                $done[] = $payload;
+            });
+        } finally {
+            pcntl_signal(SIGTERM, SIG_DFL);
+            pcntl_signal(SIGINT, SIG_DFL);
+            pcntl_async_signals(false);
+        }
+
+        self::assertCount(1, $done);
+        self::assertSame(1, $this->transport->depth($this->queue), 'the other message waits for the next worker');
+        self::assertSame(1, $this->countRows(), 'the finished one was acked');
     }
 
     private function countRows(): int
