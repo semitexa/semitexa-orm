@@ -146,6 +146,12 @@ class TransactionManager
      * mail sent, a message published — which must not happen for a write that
      * never happened, nor twice when runWithRetry() replays the unit. Inside a
      * test transaction it never runs, like the events a commit would flush.
+     *
+     * A throw from $work after a commit is logged and the rest still run: the
+     * commit stands. Run now (no transaction open), its throw reaches the
+     * caller. A child coroutine (go() inside run()) has a context of its own
+     * and no open transaction: what it registers runs at once, even if the
+     * parent then rolls back — register in the coroutine that holds it.
      */
     public function afterCommit(callable $work): void
     {

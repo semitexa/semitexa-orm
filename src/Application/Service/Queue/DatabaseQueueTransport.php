@@ -30,6 +30,12 @@ final class DatabaseQueueTransport implements DelayedQueueTransportInterface, Qu
     private const DEFAULT_MAX_ATTEMPTS = 5;
     private const LEASE_SECONDS = 300;
     private const IDLE_SLEEP_SECONDS = 1.0;
+    /** Rows a claim tries before it gives up for this pass: others may take the first. */
+    private const CLAIM_CANDIDATES = 5;
+    /** A queue that always has work still has its dead workers' rows failed this often. */
+    private const EXHAUSTED_SWEEP_SECONDS = 60;
+
+    private int $exhaustedSweptAt = 0;
 
     private ?DatabaseAdapterInterface $adapter = null;
 
@@ -55,7 +61,12 @@ final class DatabaseQueueTransport implements DelayedQueueTransportInterface, Qu
 
     private function insert(string $queueName, string $payload, int $availableAt): void
     {
-        $this->adapter()->execute(
+        // Through the caller's transaction when there is one: on its own
+        // connection the message outlived the caller's rollback and could be
+        // consumed before its commit, and on SQLite the second connection
+        // waited out busy_timeout on the caller's write lock (10 s, the worker
+        // blocked) and then failed the caller's write.
+        $this->orm()->getQueryAdapter()->execute(
             'INSERT INTO queue_messages
                 (id, queue_name, payload, status, attempt_count, max_attempts, queued_at)
              VALUES
@@ -104,38 +115,42 @@ final class DatabaseQueueTransport implements DelayedQueueTransportInterface, Qu
         $queue = $this->normalizeQueue($queueName);
         $now = date('Y-m-d H:i:s');
 
-        $this->adapter()->execute(
-            "UPDATE queue_messages
-             SET status = 'processing',
-                 lease_owner = :owner,
-                 lease_expires_at = :lease_until,
-                 attempt_count = attempt_count + 1
-             WHERE id = (
-                 SELECT id FROM (
-                     SELECT id FROM queue_messages
-                     WHERE queue_name = :queue_name
-                       AND ((status = 'queued' AND queued_at <= :now_due) OR (status = 'processing' AND lease_expires_at < :now_stale))
-                       AND attempt_count < max_attempts
-                     ORDER BY queued_at ASC, id ASC
-                     LIMIT 1
-                 ) AS sub
-             )",
-            [
-                'owner' => $this->consumerId(),
-                'lease_until' => date('Y-m-d H:i:s', time() + self::LEASE_SECONDS),
-                'queue_name' => $queue,
-                'now_due' => $now,
-                'now_stale' => $now,
-            ],
-        );
+        // Two steps, not one UPDATE over a sub-select: that sub-select is a
+        // locking read on MySQL, and a message published inside a caller's
+        // still-open transaction (it joins it) held every consumer of the
+        // queue until that transaction ended, up to innodb_lock_wait_timeout.
+        // A plain SELECT reads committed rows without waiting; the guarded
+        // UPDATE then takes one, and only the consumer it changed goes on.
+        // The id travels as hex: bound back raw, it is text, which SQLite
+        // never finds equal to the stored blob (nothing was ever claimed).
+        // A few rounds: other consumers may take every candidate of one.
+        for ($round = 0, $taken = 0; $round < 3 && $taken !== 1; $round++) {
+            $candidates = $this->adapter()->execute(
+                "SELECT HEX(id) AS id FROM queue_messages
+                 WHERE queue_name = :queue_name
+                   AND ((status = 'queued' AND queued_at <= :now_due) OR (status = 'processing' AND lease_expires_at < :now_stale))
+                   AND attempt_count < max_attempts
+                 ORDER BY queued_at ASC, id ASC
+                 LIMIT " . self::CLAIM_CANDIDATES,
+                ['queue_name' => $queue, 'now_due' => $now, 'now_stale' => $now],
+            )->rows;
+            if ($candidates === []) {
+                break;
+            }
+            $taken = $this->claimOneOf($candidates, $now);
+        }
 
         $claimed = $this->adapter()->execute(
-            "SELECT id, payload, attempt_count, max_attempts FROM queue_messages
+            "SELECT HEX(id) AS id, payload, attempt_count, max_attempts FROM queue_messages
              WHERE lease_owner = :owner AND status = 'processing' AND queue_name = :queue_name
              LIMIT 1",
             ['owner' => $this->consumerId(), 'queue_name' => $queue],
         )->rows[0] ?? null;
 
+        if ($claimed === null || time() - $this->exhaustedSweptAt >= self::EXHAUSTED_SWEEP_SECONDS) {
+            $this->exhaustedSweptAt = time();
+            $this->failExhaustedLeases($queue, $now);
+        }
         if ($claimed === null) {
             return false;
         }
@@ -152,9 +167,83 @@ final class DatabaseQueueTransport implements DelayedQueueTransportInterface, Qu
         return true;
     }
 
+    /**
+     * The first of $candidates this consumer manages to take: the UPDATE
+     * re-checks the row, so of two consumers on one candidate one changes it.
+     *
+     * @param list<array<string, mixed>> $candidates
+     * @return int 1 when one was taken, 0 when others took them all
+     */
+    private function claimOneOf(array $candidates, string $now): int
+    {
+        foreach ($candidates as $candidate) {
+            $taken = $this->adapter()->execute(
+                "UPDATE queue_messages
+                 SET status = 'processing',
+                     lease_owner = :owner,
+                     lease_expires_at = :lease_until,
+                     attempt_count = attempt_count + 1
+                 WHERE id = UNHEX(:id)
+                   AND ((status = 'queued' AND queued_at <= :now_due) OR (status = 'processing' AND lease_expires_at < :now_stale))
+                   AND attempt_count < max_attempts",
+                [
+                    'owner' => $this->consumerId(),
+                    'lease_until' => date('Y-m-d H:i:s', time() + self::LEASE_SECONDS),
+                    'id' => Row::of($candidate)->string('id'),
+                    'now_due' => $now,
+                    'now_stale' => $now,
+                ],
+            )->rowCount;
+            if ($taken === 1) {
+                return 1;
+            }
+        }
+
+        return 0;
+    }
+
+    /**
+     * A worker that died on the last attempt (out of memory, a fatal error, a
+     * kill on recycle) left its row `processing` with no attempt left: the
+     * claim passes it by, and it was neither retried nor listed nor deleted.
+     * Once its lease runs out it is failed, a dead letter like any other.
+     * Done when the queue has nothing to claim, not on every message.
+     */
+    private function failExhaustedLeases(string $queue, string $now): void
+    {
+        // By id, as the claim: an UPDATE over a range is a locking scan on
+        // MySQL, and it waited on a message still inside a caller's transaction.
+        $stuck = $this->adapter()->execute(
+            "SELECT HEX(id) AS id FROM queue_messages
+             WHERE queue_name = :queue_name AND status = 'processing'
+               AND lease_expires_at < :now AND attempt_count >= max_attempts
+             LIMIT 100",
+            ['queue_name' => $queue, 'now' => $now],
+        )->rows;
+        foreach ($stuck as $row) {
+            $this->adapter()->execute(
+                "UPDATE queue_messages
+                 SET status = 'failed', lease_owner = NULL, lease_expires_at = NULL,
+                     last_error = 'Its lease ran out on the last attempt: the worker stopped in the middle of it.'
+                 WHERE id = UNHEX(:id) AND status = 'processing' AND lease_expires_at < :now AND attempt_count >= max_attempts",
+                ['id' => Row::of($row)->string('id'), 'now' => $now],
+            );
+        }
+    }
+
+    /**
+     * Only while this consumer still holds the lease: one that ran past it
+     * deleted the row another consumer had reclaimed and was working on. A
+     * row failed meanwhile because its lease ran out on the last attempt is
+     * this job, which did finish: it goes, rather than stay a dead letter
+     * that a retry would run a second time.
+     */
     private function ack(string $id): void
     {
-        $this->adapter()->execute('DELETE FROM queue_messages WHERE id = :id', ['id' => $id]);
+        $this->adapter()->execute(
+            "DELETE FROM queue_messages WHERE id = UNHEX(:id) AND (lease_owner = :owner OR (status = 'failed' AND lease_owner IS NULL))",
+            ['id' => $id, 'owner' => $this->consumerId()],
+        );
     }
 
     /**
@@ -165,11 +254,24 @@ final class DatabaseQueueTransport implements DelayedQueueTransportInterface, Qu
         $message = Row::of($claimed);
         $exhausted = $message->int('attempt_count') >= $message->int('max_attempts');
 
+        $attempt = max(1, $message->int('attempt_count'));
+        // Not straight back: queued_at kept, a throwing callback spent every
+        // attempt within a second. 5 s, 10 s, 20 s…, at most the lease. A
+        // failed row keeps its queued_at: a dead letter dated in the future
+        // read as one not yet due.
+        $retryAt = $exhausted ? null : time() + min(self::LEASE_SECONDS, 5 * (2 ** min(10, $attempt - 1)));
+        // Only while this consumer still holds the lease: a consumer that ran
+        // past it set back to queued a row another consumer was working on.
         $this->adapter()->execute(
             'UPDATE queue_messages
-             SET status = :status, lease_owner = NULL, lease_expires_at = NULL, last_error = :last_error
-             WHERE id = :id',
+             SET status = :status, lease_owner = NULL, lease_expires_at = NULL, last_error = :last_error, queued_at = COALESCE(:retry_at, queued_at)
+             WHERE id = UNHEX(:id) AND (lease_owner = :owner OR (:exhausted_too = 1 AND status = \'failed\' AND lease_owner IS NULL))',
             [
+                'retry_at' => $retryAt === null ? null : date('Y-m-d H:i:s', $retryAt),
+                'owner' => $this->consumerId(),
+                // A last attempt that ran past its lease was failed by the
+                // sweep meanwhile: its real error replaces "lease ran out".
+                'exhausted_too' => $exhausted ? 1 : 0,
                 'status' => $exhausted ? 'failed' : 'queued',
                 // substr, not mb_substr: byte-accurate for the VARCHAR(512)
                 // column and free of an undeclared ext-mbstring dependency.

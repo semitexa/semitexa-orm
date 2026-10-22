@@ -113,9 +113,109 @@ final class DatabaseQueueTransportTest extends TestCase
         self::assertSame(1, (int) $row['attempt_count']);
         self::assertStringContainsString('boom', (string) $row['last_error']);
         self::assertNull($row['lease_owner']);
+        // Not straight back: a throwing callback spent every attempt in a second.
+        self::assertFalse($this->transport->consumeOne($this->queue, static fn (string $p) => null), 'the retry waits its backoff');
 
+        $this->adapter->execute(
+            'UPDATE queue_messages SET queued_at = :due WHERE queue_name = :q',
+            ['due' => date('Y-m-d H:i:s', time() - 1), 'q' => $this->queue],
+        );
         $ok = $this->transport->consumeOne($this->queue, static fn (string $p) => null);
         self::assertTrue($ok);
+        self::assertSame(0, $this->countRows());
+    }
+
+    /**
+     * A worker that died on the last attempt left the row `processing` with
+     * no attempt left: never retried, never listed, never deleted.
+     */
+    #[Test]
+    public function a_message_whose_worker_died_on_the_last_attempt_becomes_a_dead_letter(): void
+    {
+        $this->transport->publish($this->queue, 'killer');
+        $this->adapter->execute(
+            "UPDATE queue_messages SET status = 'processing', attempt_count = max_attempts, lease_owner = 'dead-worker', lease_expires_at = :past WHERE queue_name = :q",
+            ['past' => date('Y-m-d H:i:s', time() - 10), 'q' => $this->queue],
+        );
+
+        self::assertFalse($this->transport->consumeOne($this->queue, static fn (string $p) => null));
+
+        $letters = $this->transport->deadLetters($this->queue);
+        self::assertCount(1, $letters);
+        self::assertStringContainsString('lease ran out on the last attempt', (string) $letters[0]->error);
+    }
+
+    /** A consumer that ran past its lease deleted the row another consumer had reclaimed. */
+    #[Test]
+    public function a_consumer_that_lost_its_lease_neither_acks_nor_requeues_the_message(): void
+    {
+        $this->transport->publish($this->queue, 'slow');
+        $this->transport->consumeOne($this->queue, function (string $p): void {
+            // Meanwhile the lease ran out and another consumer took the message.
+            $this->adapter->execute(
+                "UPDATE queue_messages SET lease_owner = 'consumer-b' WHERE queue_name = :q",
+                ['q' => $this->queue],
+            );
+        });
+
+        $row = $this->adapter->execute(
+            'SELECT status, lease_owner FROM queue_messages WHERE queue_name = :q',
+            ['q' => $this->queue],
+        )->rows[0] ?? null;
+        self::assertNotNull($row, 'consumer B is still working on it');
+        self::assertSame(['processing', 'consumer-b'], [$row['status'], $row['lease_owner']]);
+    }
+
+    /**
+     * Review: with a publish joining the caller's transaction, the claim's
+     * locking sub-select waited on that uncommitted row, and every consumer
+     * of the queue stood still until the caller's transaction ended.
+     */
+    #[Test]
+    public function a_message_still_inside_another_transaction_does_not_hold_up_the_queue(): void
+    {
+        if ((new OrmManager())->getDriver() !== 'mysql') {
+            self::markTestSkipped('row locks: MySQL');
+        }
+        $dsn = sprintf('mysql:host=%s;port=%s;dbname=%s', getenv('DB_HOST') ?: 'mysql', getenv('DB_PORT') ?: '3306', getenv('DB_DATABASE') ?: 'semitexa');
+        $other = new \PDO($dsn, (string) (getenv('DB_USERNAME') ?: getenv('DB_USER') ?: 'root'), (string) getenv('DB_PASSWORD'), [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);
+
+        $this->transport->publish($this->queue, 'committed');
+        $other->beginTransaction();
+        try {
+            $other->prepare(
+                "INSERT INTO queue_messages (id, queue_name, payload, status, attempt_count, max_attempts, queued_at)
+                 VALUES (UNHEX(REPLACE(UUID(), '-', '')), ?, 'in-flight', 'queued', 0, 5, ?)",
+            )->execute([$this->queue, date('Y-m-d H:i:s', time() - 60)]);
+
+            $received = [];
+            $started = microtime(true);
+            $this->transport->consumeOne($this->queue, function (string $p) use (&$received): void {
+                $received[] = $p;
+            });
+
+            self::assertSame(['committed'], $received);
+            self::assertLessThan(2.0, microtime(true) - $started, 'the claim did not wait on the uncommitted row');
+        } finally {
+            $other->rollBack();
+        }
+    }
+
+    /**
+     * Published on its own connection, the message outlived the caller's
+     * rollback (and on SQLite waited out the caller's write lock, then failed).
+     */
+    #[Test]
+    public function a_message_published_in_a_transaction_is_rolled_back_with_it(): void
+    {
+        try {
+            (new OrmManager())->getTransactionManager()->run(function (): void {
+                $this->transport->publish($this->queue, 'in-tx');
+                throw new \RuntimeException('the caller rolls back');
+            });
+        } catch (\RuntimeException) {
+        }
+
         self::assertSame(0, $this->countRows());
     }
 
