@@ -12,6 +12,12 @@ use Semitexa\Orm\Domain\Model\ResourceMetadata;
 
 class SmartUpsert
 {
+    /**
+     * Columns an update leaves as they are: a re-seed set created_at to the
+     * moment of the re-seed, so every seeded row looked created today.
+     */
+    private const KEPT_ON_UPDATE = ['created_at'];
+
     private ResourceModelHydrator $hydrator;
 
     public function __construct(
@@ -102,13 +108,18 @@ class SmartUpsert
             $valueSets[] = '(' . implode(', ', $placeholders) . ')';
         }
 
-        // Build ON DUPLICATE KEY UPDATE for all non-PK columns.
+        // Build ON DUPLICATE KEY UPDATE for every non-PK column but KEPT_ON_UPDATE.
         $updateClauses = [];
         foreach ($columns as $col) {
-            if ($col !== $pkColumn) {
+            if ($col !== $pkColumn && !in_array($col, self::KEPT_ON_UPDATE, true)) {
                 $quoted = SqlIdentifier::quote($col);
                 $updateClauses[] = "{$quoted} = VALUES({$quoted})";
             }
+        }
+        // Every non-key column kept: an update that names the key changes nothing.
+        if ($updateClauses === []) {
+            $quoted = SqlIdentifier::quote($pkColumn);
+            $updateClauses[] = "{$quoted} = {$quoted}";
         }
 
         $sql = sprintf(
@@ -181,7 +192,7 @@ class SmartUpsert
         $set     = [];
         $differs = [];
         foreach ($columns as $col) {
-            if ($col !== $pkColumn) {
+            if ($col !== $pkColumn && !in_array($col, self::KEPT_ON_UPDATE, true)) {
                 $quoted    = SqlIdentifier::quote($col, $q);
                 $set[]     = "{$quoted} = excluded.{$quoted}";
                 $differs[] = "{$quoted} IS NOT excluded.{$quoted}";
@@ -194,7 +205,7 @@ class SmartUpsert
             implode(', ', SqlIdentifier::quoteAll($columns, $q)),
             implode(', ', $valueSets),
             SqlIdentifier::quote($pkColumn, $q),
-            // A table of the key alone has nothing to update.
+            // Nothing to update when the key and KEPT_ON_UPDATE are all there is.
             $set === [] ? 'DO NOTHING' : 'DO UPDATE SET ' . implode(', ', $set) . ' WHERE ' . implode(' OR ', $differs),
         );
 

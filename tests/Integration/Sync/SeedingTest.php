@@ -140,17 +140,41 @@ final class SeedingTest extends TestCase
         }
     }
 
+    /** A re-seed set created_at to the moment of the re-seed: every seeded row looked created today. */
+    #[Test]
+    #[DataProvider('drivers')]
+    public function a_re_seed_keeps_the_row_s_created_at(string $driver): void
+    {
+        [$orm, $db] = $this->ownTheRolesTable($driver, 'seeding_test_stamped', 'created_at VARCHAR(32) NULL');
+        try {
+            $upsert = new SmartUpsert($db);
+            $upsert->upsert([new SeedingStampedModel(id: 's', name: 'S', created_at: '2026-01-01 00:00:00')]);
+            $again = $upsert->upsert([new SeedingStampedModel(id: 's', name: 'S', created_at: '2026-10-23 00:00:00')]);
+            $changed = $upsert->upsert([new SeedingStampedModel(id: 's', name: 'S2', created_at: '2026-10-24 00:00:00')]);
+
+            self::assertSame(['inserted' => 0, 'updated' => 0, 'unchanged' => 1], $again, 'only the stamp differs: unchanged');
+            self::assertSame(['inserted' => 0, 'updated' => 1, 'unchanged' => 0], $changed);
+            $row = $db->query("SELECT name, created_at FROM seeding_test_stamped WHERE id = 's'")->fetchAll()[0];
+            self::assertSame(['S2', '2026-01-01 00:00:00'], [$row['name'], $row['created_at']]);
+        } finally {
+            $db->execute('DROP TABLE IF EXISTS seeding_test_stamped');
+            $orm?->shutdown();
+        }
+    }
+
     /**
      * Creates seeding_test_roles on a fresh in-memory SQLite, or on MySQL —
      * there it skips rather than touch a table this test did not create.
      *
      * @return array{0: ?OrmManager, 1: DatabaseAdapterInterface}
      */
-    private function ownTheRolesTable(string $driver): array
+    private function ownTheRolesTable(string $driver, string $table = 'seeding_test_roles', ?string $third = null): array
     {
+        $sqliteThird = $third ?? '"rank" INT NOT NULL';
+        $mysqlThird = $third ?? '`rank` INT NOT NULL';
         if ($driver === 'sqlite') {
             $db = new SqliteAdapter('sqlite::memory:');
-            $db->execute('CREATE TABLE seeding_test_roles (id VARCHAR(36) PRIMARY KEY, name VARCHAR(64) NOT NULL, "rank" INT NOT NULL)');
+            $db->execute("CREATE TABLE {$table} (id VARCHAR(36) PRIMARY KEY, name VARCHAR(64) NOT NULL, {$sqliteThird})");
 
             return [null, $db];
         }
@@ -171,14 +195,28 @@ final class SeedingTest extends TestCase
         // has one by this name keeps it, and the test says why it did not run.
         // verify:accept-test-change review (orm#89): the old setup dropped any existing seeding_test_roles in the configured database; a table it does not own now skips instead
         // information_schema, not SHOW TABLES LIKE: there `_` is a wildcard.
-        if ($db->query("SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'seeding_test_roles'")->fetchAll() !== []) {
+        if ($db->query("SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{$table}'")->fetchAll() !== []) {
             $orm->shutdown();
-            self::markTestSkipped('seeding_test_roles already exists in this database; it is not this test\'s to drop.');
+            self::markTestSkipped("{$table} already exists in this database; it is not this test's to drop.");
         }
-        $db->execute('CREATE TABLE seeding_test_roles (id VARCHAR(36) PRIMARY KEY, name VARCHAR(64) NOT NULL, `rank` INT NOT NULL)');
+        $db->execute("CREATE TABLE {$table} (id VARCHAR(36) PRIMARY KEY, name VARCHAR(64) NOT NULL, {$mysqlThird})");
 
         return [$orm, $db];
     }
+}
+
+#[FromTable(name: 'seeding_test_stamped')]
+final readonly class SeedingStampedModel
+{
+    public function __construct(
+        #[PrimaryKey(strategy: 'manual')]
+        #[Column(type: MySqlType::Varchar, length: 36)]
+        public string $id,
+        #[Column(type: MySqlType::Varchar, length: 64)]
+        public string $name,
+        #[Column(type: MySqlType::Varchar, length: 32, nullable: true)]
+        public ?string $created_at = null,
+    ) {}
 }
 
 #[FromTable(name: 'seeding_test_roles')]
