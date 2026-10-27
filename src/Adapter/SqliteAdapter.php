@@ -260,8 +260,10 @@ class SqliteAdapter implements DatabaseAdapterInterface
      * Added as a PHP function there, answering as the built-in one does,
      * but as TEXT, not a BLOB: the bytes match, yet SQLite never finds a BLOB
      * equal to TEXT, so rows written while it was in use do not match
-     * UNHEX() once SQLite is 3.41 or later. Drain the database queue before
-     * upgrading SQLite past 3.40.
+     * UNHEX() once SQLite is 3.41 or later, nor rows a 3.41+ process wrote
+     * match it. A PHP function cannot answer a BLOB (pdo_sqlite returns every
+     * string as TEXT). Drain the database queue before upgrading SQLite past
+     * 3.40, and never share one database file between processes on both sides.
      */
     private static function addMissingFunctions(\PDO $pdo, string $version): void
     {

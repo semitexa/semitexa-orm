@@ -187,7 +187,9 @@ final class ResourceModelFactory
             return match ($column->primaryKeyStrategy) {
                 'uuid' => '',
                 'auto' => $column->nullable ? null : 0,
-                default => $generator->for($column, $row),
+                // A random int collides: twenty rows on a TinyInt key share
+                // one more often than not. The row number never repeats.
+                default => ltrim($column->phpType, '?') === 'int' ? $row + 1 : $generator->for($column, $row),
             };
         }
         if ($column->default !== null) {

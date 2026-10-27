@@ -109,6 +109,23 @@ final class DatabaseQueueTransportSqliteTest extends TestCase
         self::assertSame(['dlq-recent', 'live-old', 'other-queue'], $left, 'a queued message is never a dead letter, whatever its age');
     }
 
+    /** The column is UTC; parsed in PHP's zone, the time moved by the zone's offset. */
+    #[Test]
+    public function a_dead_letter_reads_its_time_as_utc_whatever_the_php_zone(): void
+    {
+        $this->orm->getAdapter()->execute("INSERT INTO queue_messages (id, queue_name, payload, status, last_error, queued_at) VALUES (UNHEX('00112233445566778899aabbccddeeff'), 'jobs', '{}', 'failed', 'boom', '2026-10-27 10:00:00')");
+        $zone = date_default_timezone_get();
+        date_default_timezone_set('Europe/Berlin');
+        try {
+            $letters = $this->transport->deadLetters('jobs');
+        } finally {
+            date_default_timezone_set($zone);
+        }
+
+        self::assertCount(1, $letters);
+        self::assertSame('2026-10-27T10:00:00+00:00', $letters[0]->failedAt?->format(\DATE_ATOM));
+    }
+
     #[Test]
     public function a_failed_run_is_requeued_with_its_error(): void
     {
@@ -124,7 +141,7 @@ final class DatabaseQueueTransportSqliteTest extends TestCase
         self::assertStringContainsString('boom', (string) ($row['last_error'] ?? ''));
     }
 
-    /** @return list<array<string, mixed>> */
+    /** @return array<int, array<string, mixed>> */
     private function rows(): array
     {
         return $this->orm->getAdapter()->execute('SELECT status, attempt_count, last_error FROM queue_messages')->rows;

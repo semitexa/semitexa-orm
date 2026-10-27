@@ -653,12 +653,12 @@ final class AggregateWriteEngine
         DatabaseAdapterInterface $adapter,
         TenantWriteScope $scope,
     ): void {
-        $parentId = $this->boundPrimaryKey($resourceModel, $metadata);
-
+        // The child gets the key as the model holds it (a UUID's text): its insert casts it, and its
+        // ReferenceOnly check against this parent refused the bytes. Only the WHERE binds the column form.
+        $parentId = $this->propertyValue($resourceModel, $this->requirePrimaryKey($metadata));
         if (!$isInsert) {
             $targetMetadata = $this->metadata($relation->targetClass);
-            $fkColumn = $targetMetadata->column($relation->foreignKey)->columnName;
-            $this->deleteRelatedRows($targetMetadata, $fkColumn, $parentId, $adapter, $scope);
+            $this->deleteRelatedRows($targetMetadata, $targetMetadata->column($relation->foreignKey)->columnName, $this->boundPrimaryKey($resourceModel, $metadata), $adapter, $scope);
         }
 
         if ($value === null) {

@@ -10,6 +10,8 @@ use Semitexa\Core\Event\EventDispatcherInterface;
 use Semitexa\Core\Support\CoroutineLocal;
 use Semitexa\Orm\Application\Service\Mapping\MapperRegistry;
 use Semitexa\Orm\Application\Service\Transaction\SharedTestTransaction;
+use Semitexa\Orm\Domain\Enum\ResourceChangeOperation;
+use Semitexa\Orm\Domain\Event\ResourceChangedEvent;
 use Semitexa\Orm\Domain\Model\ConnectionConfig;
 use Semitexa\Orm\OrmManager;
 use Semitexa\Orm\Tests\Fixture\Metadata\ValidProductResourceModel;
@@ -147,6 +149,18 @@ final class SharedTestTransactionTest extends TestCase
 
         self::assertSame([], $dispatched, 'no commit, so no post-commit signal');
         self::assertSame([], $app->getTransactionManager()->getPendingEvents(), 'and nothing left buffered for the next test');
+
+        // Control: the same write, committed, reaches the spy — so the empty
+        // list above is the rollback's doing, not a dispatcher never wired.
+        $app->getAggregateWriteEngine()->insert(
+            $this->productWithReviews(),
+            ValidProductResourceModel::class,
+            $this->registry(),
+            tenantValue: 'tenant-1',
+        );
+        self::assertCount(1, $dispatched);
+        self::assertInstanceOf(ResourceChangedEvent::class, $dispatched[0]);
+        self::assertSame(ResourceChangeOperation::Insert, $dispatched[0]->operation);
     }
 
     #[Test]

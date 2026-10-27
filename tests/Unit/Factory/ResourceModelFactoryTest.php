@@ -74,6 +74,18 @@ final readonly class FactoryTestLedgerResourceModel
     ) {}
 }
 
+#[FromTable(name: 'factory_test_codes')]
+final readonly class FactoryTestCodeResourceModel
+{
+    public function __construct(
+        #[PrimaryKey(strategy: 'manual')]
+        #[Column(type: MySqlType::TinyInt)]
+        public int $id,
+        #[Column(name: 'ratio', type: MySqlType::Decimal, precision: 5, scale: 5)]
+        public string $ratio,
+    ) {}
+}
+
 final class ResourceModelFactoryTest extends TestCase
 {
     #[Test]
@@ -102,6 +114,7 @@ final class ResourceModelFactoryTest extends TestCase
         }
 
         $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage(FactoryTestLedgerResourceModel::class . ' is tenant-scoped: say whose rows these are with forTenant().');
         ResourceModelFactory::for(FactoryTestLedgerResourceModel::class)->create(new OrmManager(config: new ConnectionConfig(driver: 'sqlite', sqliteMemory: true)));
     }
 
@@ -142,7 +155,9 @@ final class ResourceModelFactoryTest extends TestCase
         foreach ($items as $item) {
             self::assertSame('', $item->id, 'a uuid key is left for the write to fill');
             self::assertMatchesRegularExpression('/^user\d+@example\.test$/', $item->email);
+            self::assertMatchesRegularExpression('/^\d+[a-z]+$/', $item->code, 'the row first, then the word');
             self::assertLessThanOrEqual(6, strlen($item->code));
+            self::assertGreaterThanOrEqual(0, $item->qty);
             self::assertLessThanOrEqual(32_767, $item->qty);
             self::assertMatchesRegularExpression('/^\d{1,6}\.\d{2}$/', $item->price);
             self::assertInstanceOf(FactoryTestStatus::class, $item->status);
@@ -150,6 +165,20 @@ final class ResourceModelFactoryTest extends TestCase
             self::assertSame(5, $item->rank, 'the declared default');
         }
         self::assertNotNull(ResourceModelFactory::for(FactoryTestItemResourceModel::class)->filled()->makeOne()->note);
+    }
+
+    #[Test]
+    public function a_manual_int_key_is_the_row_number_and_a_decimal_without_whole_digits_stays_below_one(): void
+    {
+        // review: a manual int key was drawn at random — twenty rows on a
+        // TinyInt key shared one more often than not; and DECIMAL(5,5) got a
+        // whole digit, out of range for a column whose largest value is 0.99999.
+        $codes = ResourceModelFactory::for(FactoryTestCodeResourceModel::class)->seed(3)->count(20)->make();
+
+        self::assertSame(range(1, 20), array_map(static fn ($c): int => $c->id, $codes));
+        foreach ($codes as $code) {
+            self::assertMatchesRegularExpression('/^0\.\d{5}$/', $code->ratio);
+        }
     }
 
     #[Test]

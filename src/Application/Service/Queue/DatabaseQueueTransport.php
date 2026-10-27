@@ -185,7 +185,7 @@ final class DatabaseQueueTransport implements DelayedQueueTransportInterface, Qu
      * The first of $candidates this consumer manages to take: the UPDATE
      * re-checks the row, so of two consumers on one candidate one changes it.
      *
-     * @param list<array<string, mixed>> $candidates
+     * @param array<int, array<string, mixed>> $candidates
      * @return int 1 when one was taken, 0 when others took them all
      */
     private function claimOneOf(array $candidates, string $now): int
@@ -460,7 +460,9 @@ final class DatabaseQueueTransport implements DelayedQueueTransportInterface, Qu
             $letter->target,
             $row->int('attempt_count'),
             $row->string('last_error'),
-            $queuedAt !== '' ? new \DateTimeImmutable($queuedAt) : null,
+            // Written in UTC (see sqlNow()); read in PHP's zone, a dead letter
+            // in Berlin said it failed an hour before it did.
+            $queuedAt !== '' ? new \DateTimeImmutable($queuedAt, new \DateTimeZone('UTC')) : null,
             $letter->payload,
             true,
         );

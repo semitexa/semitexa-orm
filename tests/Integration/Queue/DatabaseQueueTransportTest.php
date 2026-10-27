@@ -118,7 +118,7 @@ final class DatabaseQueueTransportTest extends TestCase
 
         $this->adapter->execute(
             'UPDATE queue_messages SET queued_at = :due WHERE queue_name = :q',
-            ['due' => date('Y-m-d H:i:s', time() - 1), 'q' => $this->queue],
+            ['due' => gmdate('Y-m-d H:i:s', time() - 1), 'q' => $this->queue],
         );
         $ok = $this->transport->consumeOne($this->queue, static fn (string $p) => null);
         self::assertTrue($ok);
@@ -135,7 +135,7 @@ final class DatabaseQueueTransportTest extends TestCase
         $this->transport->publish($this->queue, 'killer');
         $this->adapter->execute(
             "UPDATE queue_messages SET status = 'processing', attempt_count = max_attempts, lease_owner = 'dead-worker', lease_expires_at = :past WHERE queue_name = :q",
-            ['past' => date('Y-m-d H:i:s', time() - 10), 'q' => $this->queue],
+            ['past' => gmdate('Y-m-d H:i:s', time() - 10), 'q' => $this->queue],
         );
 
         self::assertFalse($this->transport->consumeOne($this->queue, static fn (string $p) => null));
@@ -186,7 +186,7 @@ final class DatabaseQueueTransportTest extends TestCase
             $other->prepare(
                 "INSERT INTO queue_messages (id, queue_name, payload, status, attempt_count, max_attempts, queued_at)
                  VALUES (UNHEX(REPLACE(UUID(), '-', '')), ?, 'in-flight', 'queued', 0, 5, ?)",
-            )->execute([$this->queue, date('Y-m-d H:i:s', time() - 60)]);
+            )->execute([$this->queue, gmdate('Y-m-d H:i:s', time() - 60)]);
 
             $received = [];
             $started = microtime(true);
@@ -265,7 +265,7 @@ final class DatabaseQueueTransportTest extends TestCase
 
         $this->adapter->execute(
             'UPDATE queue_messages SET queued_at = :due WHERE queue_name = :q',
-            ['due' => date('Y-m-d H:i:s', time() - 1), 'q' => $this->queue],
+            ['due' => gmdate('Y-m-d H:i:s', time() - 1), 'q' => $this->queue],
         );
 
         self::assertTrue($this->transport->consumeOne($this->queue, $collector));
@@ -358,6 +358,10 @@ final class DatabaseQueueTransportTest extends TestCase
     {
         $this->transport->publish($this->queue, 'first');
         $this->transport->publish($this->queue, 'second');
+        // Process-wide state: put back what the runner had, not the defaults.
+        $previousTerm = pcntl_signal_get_handler(SIGTERM);
+        $previousInt = pcntl_signal_get_handler(SIGINT);
+        $previousAsync = pcntl_async_signals();
         self::assertTrue(QueueStopSignals::install($this->transport));
 
         $done = [];
@@ -368,9 +372,9 @@ final class DatabaseQueueTransportTest extends TestCase
                 $done[] = $payload;
             });
         } finally {
-            pcntl_signal(SIGTERM, SIG_DFL);
-            pcntl_signal(SIGINT, SIG_DFL);
-            pcntl_async_signals(false);
+            pcntl_signal(SIGTERM, $previousTerm);
+            pcntl_signal(SIGINT, $previousInt);
+            pcntl_async_signals($previousAsync);
         }
 
         self::assertCount(1, $done);

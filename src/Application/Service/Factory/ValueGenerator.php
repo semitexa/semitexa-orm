@@ -113,8 +113,9 @@ final class ValueGenerator
     private function decimal(ColumnMetadata $column): string
     {
         $scale = max(0, $column->scale ?? 2);
-        $digits = max(1, ($column->precision ?? 10) - $scale);
-        $whole = $this->random->getInt(0, (int) min(PHP_INT_MAX, 10 ** min(15, $digits) - 1));
+        // DECIMAL(5,5) has no whole digits: its largest value is 0.99999.
+        $digits = max(0, ($column->precision ?? 10) - $scale);
+        $whole = $digits === 0 ? 0 : $this->random->getInt(0, (int) min(PHP_INT_MAX, 10 ** min(15, $digits) - 1));
 
         return $scale === 0 ? (string) $whole : $whole . '.' . str_pad((string) $this->random->getInt(0, 10 ** min(9, $scale) - 1), $scale, '0', STR_PAD_LEFT);
     }
