@@ -308,7 +308,7 @@ final class AggregateWriteEngine
         return ReplicationCapture::readRow(
             $metadata,
             $metadata->column($primaryKey)->columnName,
-            $this->propertyValue($resourceModel, $primaryKey),
+            $this->boundPrimaryKey($resourceModel, $metadata),
             $adapter,
             lock: true,
         );
@@ -335,13 +335,14 @@ final class AggregateWriteEngine
 
         $primaryKey = $this->requirePrimaryKey($metadata);
         $pkColumn = $metadata->column($primaryKey)->columnName;
-        $pkValue = $this->propertyValue($resourceModel, $primaryKey);
-        $after = $rowRemoved ? null : ReplicationCapture::readRow($metadata, $pkColumn, $pkValue, $adapter, lock: false);
+        $after = $rowRemoved ? null : ReplicationCapture::readRow($metadata, $pkColumn, $this->boundPrimaryKey($resourceModel, $metadata), $adapter, lock: false);
 
         if ($before === null && $after === null) {
             return; // nothing was there and nothing is — no change to replicate
         }
 
+        // The key as the model holds it (a UUID's text), which names the row on every node.
+        $pkValue = $this->propertyValue($resourceModel, $primaryKey);
         $capture->capture(ReplicationCapture::change($metadata, $pkColumn, $pkValue, $operation, $before, $after), $adapter);
     }
 
@@ -365,7 +366,7 @@ final class AggregateWriteEngine
 
         $primaryKey = $this->requirePrimaryKey($metadata);
         $params = [
-            '__pk' => $this->propertyValue($resourceModel, $primaryKey),
+            '__pk' => $this->boundPrimaryKey($resourceModel, $metadata),
             '__expected_version' => $expectedVersion,
         ];
 
@@ -513,7 +514,7 @@ final class AggregateWriteEngine
         $pkColumn = $metadata->column($primaryKey)->columnName;
         $params = [
             '__deleted_at' => (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s'),
-            '__pk' => $this->propertyValue($resourceModel, $primaryKey),
+            '__pk' => $this->boundPrimaryKey($resourceModel, $metadata),
         ];
         $assignments = [sprintf('%s = :__deleted_at', SqlIdentifier::quote($softDelete->columnName))];
         $guards = [];
@@ -560,7 +561,7 @@ final class AggregateWriteEngine
     {
         $primaryKey = $this->requirePrimaryKey($metadata);
         $pkColumn = $metadata->column($primaryKey)->columnName;
-        $pkValue = $this->propertyValue($resourceModel, $primaryKey);
+        $pkValue = $this->boundPrimaryKey($resourceModel, $metadata);
         $params = ['__pk' => $pkValue];
         $guards = [];
 
@@ -652,7 +653,7 @@ final class AggregateWriteEngine
         DatabaseAdapterInterface $adapter,
         TenantWriteScope $scope,
     ): void {
-        $parentId = $this->propertyValue($resourceModel, $this->requirePrimaryKey($metadata));
+        $parentId = $this->boundPrimaryKey($resourceModel, $metadata);
 
         if (!$isInsert) {
             $targetMetadata = $this->metadata($relation->targetClass);
@@ -705,7 +706,7 @@ final class AggregateWriteEngine
     ): void {
         $targetMetadata = $this->metadata($relation->targetClass);
         $fkColumn = $targetMetadata->column($relation->foreignKey)->columnName;
-        $parentId = $this->propertyValue($resourceModel, $this->requirePrimaryKey($metadata));
+        $parentId = $this->boundPrimaryKey($resourceModel, $metadata);
 
         $this->deleteRelatedRows($targetMetadata, $fkColumn, $parentId, $adapter, $scope);
     }
@@ -731,7 +732,7 @@ final class AggregateWriteEngine
             ));
         }
 
-        $parentId = $this->propertyValue($resourceModel, $this->requirePrimaryKey($metadata));
+        $parentId = $this->boundPrimaryKey($resourceModel, $metadata);
         (new DeleteQuery($pivotTable, $adapter))->execute($relation->foreignKey, $parentId);
 
         if ($value === null || (!$isInsert && $value === [])) {
@@ -819,7 +820,7 @@ final class AggregateWriteEngine
             $adapter->supports(ServerCapability::LockingReads) ? ' FOR UPDATE' : '',
         );
         $result = $adapter->execute($sql, [
-            '__pk' => $this->propertyValue($resourceModel, $primaryKey),
+            '__pk' => $this->boundPrimaryKey($resourceModel, $metadata),
             '__tenant_scope' => $scope->tenantValue,
         ]);
 
@@ -938,6 +939,17 @@ final class AggregateWriteEngine
         }
 
         return $value;
+    }
+
+    /**
+     * The primary key as a WHERE binds it: through the column's cast, as an
+     * insert and an update write it. The property's own value is a UUID's
+     * text, and a BINARY(16) key compared with it matched nothing: a delete
+     * failed on its version check, and a cascade deleted no children.
+     */
+    private function boundPrimaryKey(object $resourceModel, ResourceModelMetadata $metadata): mixed
+    {
+        return $this->hydrator->dehydrateColumn($resourceModel, $metadata->column($this->requirePrimaryKey($metadata))->columnName);
     }
 
     private function propertyValue(object $object, string $propertyName): mixed

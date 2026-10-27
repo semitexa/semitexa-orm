@@ -210,6 +210,22 @@ final class ResourceModelHydrator
     }
 
     /**
+     * One column as dehydrate() writes it: what a WHERE on it must bind. A
+     * UUID primary key is 16 bytes in a BINARY(16) column, and a DELETE that
+     * bound the property's text matched nothing.
+     */
+    public function dehydrateColumn(object $resourceModel, string $columnName): mixed
+    {
+        foreach ($this->dehydrationPlan($resourceModel::class) as $entry) {
+            if ($entry['columnName'] === $columnName) {
+                return ($this->typeCaster ?? new TypeCaster())->castToDb($entry['property']->getValue($resourceModel), $entry['columnDef']);
+            }
+        }
+
+        throw new \LogicException(sprintf('%s has no column %s.', $resourceModel::class, $columnName));
+    }
+
+    /**
      * Resolve (and memoize) the per-class dehydration plan — the write-path twin
      * of {@see plan()}. `dehydrate()` runs once per row of every save, yet it
      * built a `new \ReflectionProperty` and a `ColumnDefinition` per column on
