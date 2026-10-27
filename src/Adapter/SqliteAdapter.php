@@ -248,7 +248,35 @@ class SqliteAdapter implements DatabaseAdapterInterface
             }
         }
 
+        $version = $pdo->query('SELECT sqlite_version()');
+        self::addMissingFunctions($pdo, $version === false ? '' : (string) $version->fetchColumn());
+
         return $pdo;
+    }
+
+    /**
+     * UNHEX() came with SQLite 3.41, and this adapter takes 3.38: on 3.38–3.40
+     * the database queue transport failed every claim with "no such function".
+     * Added as a PHP function there, answering as the built-in one does.
+     */
+    private static function addMissingFunctions(\PDO $pdo, string $version): void
+    {
+        if ($version === '' || version_compare($version, '3.41.0', '>=') || !$pdo instanceof \Pdo\Sqlite) {
+            return;
+        }
+        $pdo->createFunction(
+            'UNHEX',
+            static function (mixed $hex): ?string {
+                if ($hex === null) {
+                    return null;
+                }
+                $hex = (string) $hex;
+
+                return strlen($hex) % 2 === 0 && preg_match('/\A[0-9a-fA-F]*\z/', $hex) === 1 ? (string) hex2bin($hex) : null;
+            },
+            1,
+            \Pdo\Sqlite::DETERMINISTIC,
+        );
     }
 
     private function detectVersion(): void
