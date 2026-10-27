@@ -93,6 +93,11 @@ them fit cleanly into existing global structure.
 | `src/Tenant/ColumnInjectingScope.php` (interface) | 1 | `src/Domain/Contract/ColumnInjectingScopeInterface.php` (renamed; matches the canonical `*Interface.php` discipline) |
 | `src/Tenant/{ConnectionSwitchStrategy, SameStorageStrategy, SeparateSchemaStrategy, TenantScopeFactory}.php` | 4 | `src/Application/Service/Tenant/` |
 
+The strategy classes, `TenantScopeFactory`, `SchemaSwitchInterface` and
+`ColumnInjectingScopeInterface` were removed on 2026-10-27: `#[TenantScoped]`
+has one strategy (the shared table), and a database per tenant is the
+connection pool's job.
+
 The old top-level `src/Schema/`, `src/Sync/`, `src/Uuid/`,
 `src/Transaction/`, `src/Hydration/`, `src/Mapping/`,
 `src/Connection/`, `src/Persistence/`, and `src/Tenant/` directories

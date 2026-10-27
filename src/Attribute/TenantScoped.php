@@ -8,8 +8,8 @@ use Attribute;
 
 /**
  * A model whose rows belong to a tenant: every read is filtered on its tenant
- * column (`$column`, the `tenant_id` column by default) and every write fills
- * it, in the shared table.
+ * column (`$column`, a property or column the model declares) and every write
+ * fills it, in the shared table.
  *
  * That is the only way the ORM scopes a model. 'separate_db', 'separate_schema'
  * and 'connection_switch' were accepted and ignored: such a model read and

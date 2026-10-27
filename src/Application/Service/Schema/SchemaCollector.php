@@ -165,13 +165,13 @@ class SchemaCollector
             ));
         }
 
-        // TenantScoped(same_storage): ensure tenant_id column exists for migrations
+        // Only without a declared tenant column: a second, NOT NULL tenant_id failed every insert.
         $tenantAttrs = $ref->getAttributes(TenantScoped::class);
         if ($tenantAttrs !== []) {
             /** @var TenantScoped $tenantAttr */
             $tenantAttr = $tenantAttrs[0]->newInstance();
             $tenantColumn = 'tenant_id';
-            if ($tenantAttr->strategy === 'same_storage' && $table->getColumn($tenantColumn) === null) {
+            if ($tenantAttr->column === null && $table->getColumn($tenantColumn) === null) {
                 $table->addColumn(new ColumnDefinition(
                     name: $tenantColumn,
                     type: $this->resolveDefaultType(),
