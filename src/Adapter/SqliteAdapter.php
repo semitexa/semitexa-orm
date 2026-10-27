@@ -257,7 +257,11 @@ class SqliteAdapter implements DatabaseAdapterInterface
     /**
      * UNHEX() came with SQLite 3.41, and this adapter takes 3.38: on 3.38–3.40
      * the database queue transport failed every claim with "no such function".
-     * Added as a PHP function there, answering as the built-in one does.
+     * Added as a PHP function there, answering as the built-in one does,
+     * but as TEXT, not a BLOB: the bytes match, yet SQLite never finds a BLOB
+     * equal to TEXT, so rows written while it was in use do not match
+     * UNHEX() once SQLite is 3.41 or later. Drain the database queue before
+     * upgrading SQLite past 3.40.
      */
     private static function addMissingFunctions(\PDO $pdo, string $version): void
     {
