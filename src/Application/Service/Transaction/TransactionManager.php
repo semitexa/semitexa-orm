@@ -163,6 +163,21 @@ class TransactionManager
         $this->bufferEvent(new AfterCommit($work(...)));
     }
 
+    /**
+     * Run $work if the transaction open now rolls back (or the savepoint it is
+     * asked for in), and drop it on commit; nothing when none is open. For an
+     * effect outside the database a rollback cannot undo by itself: a file
+     * stored for a row that was never written stayed, unreferenced, for good.
+     * A throw from $work is logged; the rollback's own error still reaches the
+     * caller.
+     */
+    public function afterRollback(callable $work): void
+    {
+        if ($this->isActive()) {
+            $this->bufferEvent(new AfterRollback($work(...)));
+        }
+    }
+
     public function isActive(): bool
     {
         return $this->depth() > 0;
@@ -354,6 +369,7 @@ class TransactionManager
             $result = $callback($connAdapter);
             $pdo->commit();
         } catch (\Throwable $e) {
+            $rolledBack = $this->pendingEvents();
             $this->setPendingEvents([]);
             $connectionLost = $e instanceof ConnectionLostException
                 || ($e instanceof \PDOException && DriverErrorClassifier::classify($e) instanceof ConnectionLostException);
@@ -371,6 +387,7 @@ class TransactionManager
                 // inTransaction() as "clean" and recycle the broken PDO.
                 $connectionLost = true;
             }
+            self::runRolledBack($rolledBack, $this->connectionName);
             throw $e;
         } finally {
             // A dead connection must not go back to the channel: the pool only
@@ -466,6 +483,7 @@ class TransactionManager
             $result = $callback($connAdapter);
             $pdo->commit();
         } catch (\Throwable $e) {
+            $rolledBack = $this->pendingEvents();
             $this->setPendingEvents([]);
             // See runOuter(): the status check is guarded too, so a severed
             // connection cannot mask the original failure.
@@ -476,6 +494,7 @@ class TransactionManager
             } catch (\Throwable) {
                 // Nothing actionable here.
             }
+            self::runRolledBack($rolledBack, $this->connectionName);
             throw $e;
         } finally {
             $this->setActiveConnection(null);
@@ -583,6 +602,7 @@ class TransactionManager
             // savepoint in place, so RELEASE keeps a long outer transaction
             // from accumulating them.
             // What this savepoint asked for is undone with it.
+            $rolledBack = array_slice($this->pendingEvents(), $buffered);
             $this->setPendingEvents(array_slice($this->pendingEvents(), 0, $buffered));
             try {
                 $pdo->exec("ROLLBACK TO SAVEPOINT {$savepointName}");
@@ -592,6 +612,7 @@ class TransactionManager
                 // (the original exception says why) or the connection died —
                 // the pool's push() hygiene handles the connection.
             }
+            self::runRolledBack($rolledBack, $this->connectionName);
             throw $e;
         } finally {
             $this->setDepth($this->depth() - 1);
@@ -604,7 +625,8 @@ class TransactionManager
         $this->setPendingEvents([]);
 
         foreach ($events as $event) {
-            if (!$event instanceof AfterCommit && $this->eventDispatcher === null) {
+            // Committed: what was to run on a rollback never runs.
+            if ($event instanceof AfterRollback || (!$event instanceof AfterCommit && $this->eventDispatcher === null)) {
                 continue;
             }
             try {
@@ -622,6 +644,24 @@ class TransactionManager
                 StaticLoggerBridge::error('orm', 'A post-commit event listener or afterCommit() work failed; the transaction is committed and its follow-up is lost.', [
                     'event' => $event::class,
                     'connection' => $this->connectionName,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+    }
+
+    /** @param array<object> $events what was buffered in what rolled back: its afterRollback() work runs, the rest is dropped */
+    private static function runRolledBack(array $events, string $connectionName): void
+    {
+        foreach ($events as $event) {
+            if (!$event instanceof AfterRollback) {
+                continue;
+            }
+            try {
+                ($event->work)();
+            } catch (\Throwable $e) {
+                StaticLoggerBridge::error('orm', 'afterRollback() work failed; what it was to undo stays.', [
+                    'connection' => $connectionName,
                     'error' => $e->getMessage(),
                 ]);
             }
