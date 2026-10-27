@@ -56,6 +56,38 @@ final class DatabaseQueueTransportSqliteTest extends TestCase
         self::assertSame([], $this->rows(), 'acknowledged: the row is gone');
     }
 
+    /** Nothing removed dead letters, and the table only grew. */
+    #[Test]
+    public function dead_letters_older_than_the_retention_go_and_live_messages_stay(): void
+    {
+        $db = $this->orm->getAdapter();
+        $old = date('Y-m-d H:i:s', time() - 15 * 86400);
+        $recent = date('Y-m-d H:i:s', time() - 86400);
+        foreach ([
+            ['jobs.failed', 'queued', $old, 'dlq-old'],
+            ['jobs.failed', 'queued', $recent, 'dlq-recent'],
+            ['jobs', 'failed', $old, 'failed-old'],
+            ['jobs', 'queued', $old, 'live-old'],
+            ['other.failed', 'queued', $old, 'other-queue'],
+        ] as [$queue, $status, $at, $payload]) {
+            // As the transport writes ids: a blob, which a raw bound string is not on SQLite.
+            $db->execute('INSERT INTO queue_messages (id, queue_name, payload, status, queued_at) VALUES (UNHEX(:id), :q, :p, :s, :at)', ['id' => bin2hex(random_bytes(16)), 'q' => $queue, 'p' => $payload, 's' => $status, 'at' => $at]);
+        }
+        $previous = getenv('QUEUE_DEAD_LETTER_RETENTION_DAYS');
+        putenv('QUEUE_DEAD_LETTER_RETENTION_DAYS=14');
+        try {
+            self::assertSame(2, $this->transport->pruneDeadLetters('jobs', time()));
+            putenv('QUEUE_DEAD_LETTER_RETENTION_DAYS=0');
+            self::assertSame(0, $this->transport->pruneDeadLetters('other', time()), '0 keeps them');
+        } finally {
+            putenv($previous === false ? 'QUEUE_DEAD_LETTER_RETENTION_DAYS' : 'QUEUE_DEAD_LETTER_RETENTION_DAYS=' . $previous);
+        }
+
+        $left = array_column($this->orm->getAdapter()->execute('SELECT payload FROM queue_messages')->rows, 'payload');
+        sort($left);
+        self::assertSame(['dlq-recent', 'live-old', 'other-queue'], $left, 'a queued message is never a dead letter, whatever its age');
+    }
+
     #[Test]
     public function a_failed_run_is_requeued_with_its_error(): void
     {

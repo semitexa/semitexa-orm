@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Application\Service\Queue;
 
+use Semitexa\Core\Environment;
 use Semitexa\Core\Queue\DeadLetter;
 use Semitexa\Core\Queue\DelayedQueueTransportInterface;
 use Semitexa\Core\Queue\QueueInspectorInterface;
@@ -36,6 +37,9 @@ final class DatabaseQueueTransport implements DelayedQueueTransportInterface, Qu
     private const EXHAUSTED_SWEEP_SECONDS = 60;
 
     private int $exhaustedSweptAt = 0;
+    /** @var array<string, int> per queue */
+    private array $deadLettersPrunedAt = [];
+    private const DEAD_LETTER_PRUNE_SECONDS = 3600;
 
     private ?DatabaseAdapterInterface $adapter = null;
 
@@ -151,6 +155,13 @@ final class DatabaseQueueTransport implements DelayedQueueTransportInterface, Qu
             $this->exhaustedSweptAt = time();
             $this->failExhaustedLeases($queue, $now);
         }
+        // On a timer, not only when idle: a queue that is never idle was never
+        // pruned. Batches until one comes back short, at most twenty an hour.
+        if (time() - ($this->deadLettersPrunedAt[$queue] ?? 0) >= self::DEAD_LETTER_PRUNE_SECONDS) {
+            $this->deadLettersPrunedAt[$queue] = time();
+            for ($batch = 0; $batch < 20 && $this->pruneDeadLetters($queue, time()) === 500; $batch++) {
+            }
+        }
         if ($claimed === null) {
             return false;
         }
@@ -229,6 +240,39 @@ final class DatabaseQueueTransport implements DelayedQueueTransportInterface, Qu
                 ['id' => Row::of($row)->string('id'), 'now' => $now],
             );
         }
+    }
+
+    /**
+     * Dead letters of $queue (its `.failed` copies and its own failed rows)
+     * older than QUEUE_DEAD_LETTER_RETENTION_DAYS (14, as NATS keeps them; 0
+     * keeps them for good): nothing removed them, and the table only grew.
+     * Dated by queued_at, the time of the last try. A batch of at most 500.
+     *
+     * @return int how many were removed
+     */
+    public function pruneDeadLetters(string $queueName, int $now): int
+    {
+        $days = (int) Environment::getEnvValue('QUEUE_DEAD_LETTER_RETENTION_DAYS', '14');
+        if ($days <= 0) {
+            return 0;
+        }
+        $queue = $this->normalizeQueue($queueName);
+        $ids = $this->adapter()->execute(
+            "SELECT HEX(id) AS id FROM queue_messages
+             WHERE (queue_name = :failed_queue OR (queue_name = :queue_name AND status = 'failed')) AND queued_at < :cutoff
+             LIMIT 500",
+            ['failed_queue' => $queue . '.failed', 'queue_name' => $queue, 'cutoff' => date('Y-m-d H:i:s', $now - $days * 86400)],
+        )->rows;
+        $removed = 0;
+        foreach ($ids as $row) {
+            // The test again: a dead letter retried meanwhile is queued, not failed.
+            $removed += $this->adapter()->execute(
+                "DELETE FROM queue_messages WHERE id = UNHEX(:id) AND (queue_name = :failed_queue OR (queue_name = :queue_name AND status = 'failed'))",
+                ['id' => Row::of($row)->string('id'), 'failed_queue' => $queue . '.failed', 'queue_name' => $queue],
+            )->rowCount;
+        }
+
+        return $removed;
     }
 
     /**
