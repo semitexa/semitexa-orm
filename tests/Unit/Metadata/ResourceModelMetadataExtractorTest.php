@@ -40,7 +40,8 @@ final class ResourceModelMetadataExtractorTest extends TestCase
         $this->assertSame(RelationWritePolicy::CascadeOwned, $reviewsRelation->writePolicy);
 
         $this->assertNotNull($metadata->tenantPolicy);
-        $this->assertSame('column', $metadata->tenantPolicy?->strategy);
+        // 'column' is another name for the one strategy there is.
+        $this->assertSame('same_storage', $metadata->tenantPolicy?->strategy);
         $this->assertSame('tenantId', $metadata->tenantPolicy?->column);
 
         $this->assertNotNull($metadata->softDelete);

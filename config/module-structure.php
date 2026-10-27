@@ -51,7 +51,7 @@ return new LocalModuleStructureExtension(
     pathRules: [
         // Adapter/ — public ORM adapter subsystem. Flat directory with mixed
         // shape: interfaces (ConnectionPoolInterface, DatabaseAdapterInterface,
-        // SchemaSwitchInterface, TenantSwitchingConnectionPoolInterface),
+        // TenantSwitchingConnectionPoolInterface),
         // concrete adapters (MysqlAdapter, SqliteAdapter, LoggingAdapter),
         // connection-pool implementations (ConnectionPool, SingleConnectionPool,
         // NullConnectionPool), driver-type vocabulary (DatabaseType, MySqlType,
