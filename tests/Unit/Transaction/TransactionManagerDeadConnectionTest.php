@@ -45,6 +45,39 @@ final class TransactionManagerDeadConnectionTest extends TestCase
         $result = $manager->run(static fn () => 'clean-after-death');
         self::assertSame('clean-after-death', $result);
     }
+
+    /**
+     * A commit that threw may have gone through: media deleted the stored
+     * original of an asset whose row was kept. A failure before the commit
+     * still undoes, once the connection is back in the pool.
+     */
+    #[Test]
+    public function work_for_a_rollback_is_not_run_when_the_commit_itself_failed(): void
+    {
+        $pool = new DeadCommitPool();
+        $manager = new TransactionManager($pool, new DeadConnFakeAdapter());
+        $ran = [];
+
+        try {
+            $manager->run(static function () use ($manager, &$ran): void {
+                $manager->afterRollback(static function () use (&$ran): void { $ran[] = 'commit failed'; });
+            });
+            self::fail('the commit failure must propagate');
+        } catch (\PDOException) {
+        }
+        self::assertSame([], $ran);
+
+        $pushedBeforeWork = null;
+        try {
+            $manager->run(static function () use ($manager, $pool, &$pushedBeforeWork): void {
+                $manager->afterRollback(static function () use ($pool, &$pushedBeforeWork): void { $pushedBeforeWork = $pool->pushCount; });
+                throw new \RuntimeException('the work failed');
+            });
+        } catch (\RuntimeException) {
+        }
+        self::assertSame(2, $pushedBeforeWork, 'run once the connection was handed back');
+        self::assertFalse($manager->isActive());
+    }
 }
 
 /** First pop: a PDO dead at COMMIT time (commit AND rollback throw). Later pops: healthy sqlite. */

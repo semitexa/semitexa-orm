@@ -341,6 +341,8 @@ class TransactionManager
         $this->setActiveConnection($pdo);
         $this->setDepth(1);
         $connectionLost = false;
+        $committing = false;
+        $undo = [];
 
         try {
             // beginTransaction() is INSIDE the try: on a stale/dead connection
@@ -367,9 +369,10 @@ class TransactionManager
             }
 
             $result = $callback($connAdapter);
+            $committing = true;
             $pdo->commit();
         } catch (\Throwable $e) {
-            $rolledBack = $this->pendingEvents();
+            $undo = $this->pendingEvents();
             $this->setPendingEvents([]);
             $connectionLost = $e instanceof ConnectionLostException
                 || ($e instanceof \PDOException && DriverErrorClassifier::classify($e) instanceof ConnectionLostException);
@@ -387,7 +390,6 @@ class TransactionManager
                 // inTransaction() as "clean" and recycle the broken PDO.
                 $connectionLost = true;
             }
-            self::runRolledBack($rolledBack, $this->connectionName);
             throw $e;
         } finally {
             // A dead connection must not go back to the channel: the pool only
@@ -402,6 +404,9 @@ class TransactionManager
             $this->setActiveConnection(null);
             $this->setCurrentAdapter(null);
             $this->setDepth(0);
+            // After the connection is back: the work (a storage delete) held
+            // it through a call to another service.
+            self::runRolledBack($undo, $this->connectionName, $committing);
         }
 
         // Flush OUTSIDE the try/catch: once commit() has returned, the
@@ -460,6 +465,8 @@ class TransactionManager
         // would skip the finally and leak the lock — permanently, since nothing
         // else ever pushes the token back.
         $pdo = null;
+        $committing = false;
+        $undo = [];
 
         try {
             $pdo = $this->adapter->getPdo();
@@ -481,9 +488,10 @@ class TransactionManager
             }
 
             $result = $callback($connAdapter);
+            $committing = true;
             $pdo->commit();
         } catch (\Throwable $e) {
-            $rolledBack = $this->pendingEvents();
+            $undo = $this->pendingEvents();
             $this->setPendingEvents([]);
             // See runOuter(): the status check is guarded too, so a severed
             // connection cannot mask the original failure.
@@ -494,7 +502,6 @@ class TransactionManager
             } catch (\Throwable) {
                 // Nothing actionable here.
             }
-            self::runRolledBack($rolledBack, $this->connectionName);
             throw $e;
         } finally {
             $this->setActiveConnection(null);
@@ -505,6 +512,7 @@ class TransactionManager
             // while this transaction's adapter and depth are still published
             // hands it a half-torn-down transaction to reason about.
             $mutex?->push(true);
+            self::runRolledBack($undo, $this->connectionName, $committing);
         }
 
         // See runOuter(): post-commit flush must never report a committed
@@ -650,9 +658,27 @@ class TransactionManager
         }
     }
 
-    /** @param array<object> $events what was buffered in what rolled back: its afterRollback() work runs, the rest is dropped */
-    private static function runRolledBack(array $events, string $connectionName): void
+    /**
+     * What was buffered in what rolled back: its afterRollback() work runs, the
+     * rest is dropped. Not when the COMMIT threw ($committing): it may have gone
+     * through, and media then deleted the original of an asset whose row was
+     * kept. Left in place it is at worst a file nothing points at.
+     * @param array<object> $events
+     */
+    private static function runRolledBack(array $events, string $connectionName, bool $committing = false): void
     {
+        if ($committing) {
+            $skipped = count(array_filter($events, static fn (object $event): bool => $event instanceof AfterRollback));
+            if ($skipped > 0) {
+                StaticLoggerBridge::warning('orm', 'The commit failed and may have gone through: afterRollback() work was not run, and what it was to undo is kept.', [
+                    'connection' => $connectionName,
+                    'skipped' => $skipped,
+                ]);
+            }
+
+            return;
+        }
+
         foreach ($events as $event) {
             if (!$event instanceof AfterRollback) {
                 continue;
