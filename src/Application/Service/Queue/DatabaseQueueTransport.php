@@ -37,6 +37,8 @@ final class DatabaseQueueTransport implements DelayedQueueTransportInterface, Qu
     private const EXHAUSTED_SWEEP_SECONDS = 60;
 
     private int $exhaustedSweptAt = 0;
+    private ?string $driver = null;
+
     /** @var array<string, int> per queue */
     private array $deadLettersPrunedAt = [];
     private const DEAD_LETTER_PRUNE_SECONDS = 3600;
@@ -49,7 +51,7 @@ final class DatabaseQueueTransport implements DelayedQueueTransportInterface, Qu
 
     public function publish(string $queueName, string $payload): void
     {
-        $this->insert($queueName, $payload, time());
+        $this->insert($queueName, $payload, 0);
     }
 
     /**
@@ -60,10 +62,10 @@ final class DatabaseQueueTransport implements DelayedQueueTransportInterface, Qu
     {
         // queued_at keeps whole seconds and the claim compares whole seconds,
         // so the second is rounded up: a retry may run a little late, never early.
-        $this->insert($queueName, $payload, $delaySeconds > 0 ? time() + $delaySeconds + 1 : time());
+        $this->insert($queueName, $payload, $delaySeconds > 0 ? $delaySeconds + 1 : 0);
     }
 
-    private function insert(string $queueName, string $payload, int $availableAt): void
+    private function insert(string $queueName, string $payload, int $delaySeconds): void
     {
         // Through the caller's transaction when there is one: on its own
         // connection the message outlived the caller's rollback and could be
@@ -74,7 +76,7 @@ final class DatabaseQueueTransport implements DelayedQueueTransportInterface, Qu
             'INSERT INTO queue_messages
                 (id, queue_name, payload, status, attempt_count, max_attempts, queued_at)
              VALUES
-                (UNHEX(REPLACE(:id, :dash, :empty)), :queue_name, :payload, :status, 0, :max_attempts, :queued_at)',
+                (UNHEX(REPLACE(:id, :dash, :empty)), :queue_name, :payload, :status, 0, :max_attempts, ' . $this->sqlNow($delaySeconds) . ')',
             [
                 'id' => Uuid7::generate(),
                 'dash' => '-',
@@ -83,7 +85,6 @@ final class DatabaseQueueTransport implements DelayedQueueTransportInterface, Qu
                 'payload' => $payload,
                 'status' => 'queued',
                 'max_attempts' => self::DEFAULT_MAX_ATTEMPTS,
-                'queued_at' => date('Y-m-d H:i:s', $availableAt),
             ],
         );
     }
@@ -117,7 +118,9 @@ final class DatabaseQueueTransport implements DelayedQueueTransportInterface, Qu
     public function consumeOne(string $queueName, callable $callback): bool
     {
         $queue = $this->normalizeQueue($queueName);
-        $now = date('Y-m-d H:i:s');
+        // The database's clock, not this worker's: a worker whose clock ran
+        // ahead took over leases others still held, and ran the job twice.
+        $now = $this->sqlNow();
 
         // Two steps, not one UPDATE over a sub-select: that sub-select is a
         // locking read on MySQL, and a message published inside a caller's
@@ -132,11 +135,11 @@ final class DatabaseQueueTransport implements DelayedQueueTransportInterface, Qu
             $candidates = $this->adapter()->execute(
                 "SELECT HEX(id) AS id FROM queue_messages
                  WHERE queue_name = :queue_name
-                   AND ((status = 'queued' AND queued_at <= :now_due) OR (status = 'processing' AND lease_expires_at < :now_stale))
+                   AND ((status = 'queued' AND queued_at <= {$now}) OR (status = 'processing' AND lease_expires_at < {$now}))
                    AND attempt_count < max_attempts
                  ORDER BY queued_at ASC, id ASC
                  LIMIT " . self::CLAIM_CANDIDATES,
-                ['queue_name' => $queue, 'now_due' => $now, 'now_stale' => $now],
+                ['queue_name' => $queue],
             )->rows;
             if ($candidates === []) {
                 break;
@@ -159,7 +162,7 @@ final class DatabaseQueueTransport implements DelayedQueueTransportInterface, Qu
         // pruned. Batches until one comes back short, at most twenty an hour.
         if (time() - ($this->deadLettersPrunedAt[$queue] ?? 0) >= self::DEAD_LETTER_PRUNE_SECONDS) {
             $this->deadLettersPrunedAt[$queue] = time();
-            for ($batch = 0; $batch < 20 && $this->pruneDeadLetters($queue, time()) === 500; $batch++) {
+            for ($batch = 0; $batch < 20 && $this->pruneDeadLetters($queue) === 500; $batch++) {
             }
         }
         if ($claimed === null) {
@@ -192,17 +195,14 @@ final class DatabaseQueueTransport implements DelayedQueueTransportInterface, Qu
                 "UPDATE queue_messages
                  SET status = 'processing',
                      lease_owner = :owner,
-                     lease_expires_at = :lease_until,
+                     lease_expires_at = " . $this->sqlNow(self::LEASE_SECONDS) . ",
                      attempt_count = attempt_count + 1
                  WHERE id = UNHEX(:id)
-                   AND ((status = 'queued' AND queued_at <= :now_due) OR (status = 'processing' AND lease_expires_at < :now_stale))
+                   AND ((status = 'queued' AND queued_at <= {$now}) OR (status = 'processing' AND lease_expires_at < {$now}))
                    AND attempt_count < max_attempts",
                 [
                     'owner' => $this->consumerId(),
-                    'lease_until' => date('Y-m-d H:i:s', time() + self::LEASE_SECONDS),
                     'id' => Row::of($candidate)->string('id'),
-                    'now_due' => $now,
-                    'now_stale' => $now,
                 ],
             )->rowCount;
             if ($taken === 1) {
@@ -227,17 +227,17 @@ final class DatabaseQueueTransport implements DelayedQueueTransportInterface, Qu
         $stuck = $this->adapter()->execute(
             "SELECT HEX(id) AS id FROM queue_messages
              WHERE queue_name = :queue_name AND status = 'processing'
-               AND lease_expires_at < :now AND attempt_count >= max_attempts
+               AND lease_expires_at < {$now} AND attempt_count >= max_attempts
              LIMIT 100",
-            ['queue_name' => $queue, 'now' => $now],
+            ['queue_name' => $queue],
         )->rows;
         foreach ($stuck as $row) {
             $this->adapter()->execute(
                 "UPDATE queue_messages
                  SET status = 'failed', lease_owner = NULL, lease_expires_at = NULL,
                      last_error = 'Its lease ran out on the last attempt: the worker stopped in the middle of it.'
-                 WHERE id = UNHEX(:id) AND status = 'processing' AND lease_expires_at < :now AND attempt_count >= max_attempts",
-                ['id' => Row::of($row)->string('id'), 'now' => $now],
+                 WHERE id = UNHEX(:id) AND status = 'processing' AND lease_expires_at < {$now} AND attempt_count >= max_attempts",
+                ['id' => Row::of($row)->string('id')],
             );
         }
     }
@@ -250,7 +250,7 @@ final class DatabaseQueueTransport implements DelayedQueueTransportInterface, Qu
      *
      * @return int how many were removed
      */
-    public function pruneDeadLetters(string $queueName, int $now): int
+    public function pruneDeadLetters(string $queueName): int
     {
         $days = (int) Environment::getEnvValue('QUEUE_DEAD_LETTER_RETENTION_DAYS', '14');
         if ($days <= 0) {
@@ -259,9 +259,9 @@ final class DatabaseQueueTransport implements DelayedQueueTransportInterface, Qu
         $queue = $this->normalizeQueue($queueName);
         $ids = $this->adapter()->execute(
             "SELECT HEX(id) AS id FROM queue_messages
-             WHERE (queue_name = :failed_queue OR (queue_name = :queue_name AND status = 'failed')) AND queued_at < :cutoff
+             WHERE (queue_name = :failed_queue OR (queue_name = :queue_name AND status = 'failed')) AND queued_at < " . $this->sqlNow(-$days * 86400) . "
              LIMIT 500",
-            ['failed_queue' => $queue . '.failed', 'queue_name' => $queue, 'cutoff' => date('Y-m-d H:i:s', $now - $days * 86400)],
+            ['failed_queue' => $queue . '.failed', 'queue_name' => $queue],
         )->rows;
         $removed = 0;
         foreach ($ids as $row) {
@@ -303,15 +303,14 @@ final class DatabaseQueueTransport implements DelayedQueueTransportInterface, Qu
         // attempt within a second. 5 s, 10 s, 20 s…, at most the lease. A
         // failed row keeps its queued_at: a dead letter dated in the future
         // read as one not yet due.
-        $retryAt = $exhausted ? null : time() + min(self::LEASE_SECONDS, 5 * (2 ** min(10, $attempt - 1)));
+        $retryIn = $exhausted ? null : min(self::LEASE_SECONDS, 5 * (2 ** min(10, $attempt - 1)));
         // Only while this consumer still holds the lease: a consumer that ran
         // past it set back to queued a row another consumer was working on.
         $this->adapter()->execute(
             'UPDATE queue_messages
-             SET status = :status, lease_owner = NULL, lease_expires_at = NULL, last_error = :last_error, queued_at = COALESCE(:retry_at, queued_at)
+             SET status = :status, lease_owner = NULL, lease_expires_at = NULL, last_error = :last_error, queued_at = ' . ($retryIn === null ? 'queued_at' : $this->sqlNow($retryIn)) . '
              WHERE id = UNHEX(:id) AND (lease_owner = :owner OR (:exhausted_too = 1 AND status = \'failed\' AND lease_owner IS NULL))',
             [
-                'retry_at' => $retryAt === null ? null : date('Y-m-d H:i:s', $retryAt),
                 'owner' => $this->consumerId(),
                 // A last attempt that ran past its lease was failed by the
                 // sweep meanwhile: its real error replaces "lease ran out".
@@ -339,13 +338,14 @@ final class DatabaseQueueTransport implements DelayedQueueTransportInterface, Qu
     {
         $row = $this->adapter()->execute(
             // A delayed retry is not waiting yet: its queued_at is in the future.
-            "SELECT MIN(queued_at) AS oldest FROM queue_messages WHERE queue_name = :queue_name AND status = 'queued' AND queued_at <= :now",
-            ['queue_name' => $this->normalizeQueue($queue), 'now' => date('Y-m-d H:i:s')],
+            "SELECT MIN(queued_at) AS oldest, " . $this->sqlNow() . " AS now FROM queue_messages WHERE queue_name = :queue_name AND status = 'queued' AND queued_at <= " . $this->sqlNow(),
+            ['queue_name' => $this->normalizeQueue($queue)],
         )->rows[0] ?? null;
         $oldestAt = $row === null ? '' : Row::of($row)->string('oldest');
-        $oldest = $oldestAt === '' ? false : strtotime($oldestAt);
+        $oldest = $oldestAt === '' ? false : strtotime($oldestAt . ' UTC');
+        $now = strtotime(($row === null ? '' : Row::of($row)->string('now')) . ' UTC');
 
-        return $oldest === false ? null : max(0, time() - $oldest);
+        return $oldest === false || $now === false ? null : max(0, $now - $oldest);
     }
 
     /**
@@ -383,9 +383,9 @@ final class DatabaseQueueTransport implements DelayedQueueTransportInterface, Qu
         if ($row->string('queue_name') !== $queue . '.failed') {
             // Given up on by the transport: queue it again where it is.
             return $this->adapter()->execute(
-                "UPDATE queue_messages SET status = 'queued', attempt_count = 0, last_error = NULL, lease_owner = NULL, lease_expires_at = NULL, queued_at = :now
+                "UPDATE queue_messages SET status = 'queued', attempt_count = 0, last_error = NULL, lease_owner = NULL, lease_expires_at = NULL, queued_at = " . $this->sqlNow() . "
                  WHERE id = UNHEX(:id) AND queue_name = :queue_name AND status = 'failed'",
-                ['id' => $row->string('id'), 'queue_name' => $queue, 'now' => date('Y-m-d H:i:s')],
+                ['id' => $row->string('id'), 'queue_name' => $queue],
             )->rowCount === 1;
         }
 
@@ -401,7 +401,7 @@ final class DatabaseQueueTransport implements DelayedQueueTransportInterface, Qu
             }
             $db->execute(
                 'INSERT INTO queue_messages (id, queue_name, payload, status, attempt_count, max_attempts, queued_at)
-                 VALUES (UNHEX(REPLACE(:new_id, :dash, :empty)), :queue_name, :payload, :status, 0, :max_attempts, :queued_at)',
+                 VALUES (UNHEX(REPLACE(:new_id, :dash, :empty)), :queue_name, :payload, :status, 0, :max_attempts, ' . $this->sqlNow() . ')',
                 [
                     'new_id' => Uuid7::generate(),
                     'dash' => '-',
@@ -410,7 +410,6 @@ final class DatabaseQueueTransport implements DelayedQueueTransportInterface, Qu
                     'payload' => $retry,
                     'status' => 'queued',
                     'max_attempts' => self::DEFAULT_MAX_ATTEMPTS,
-                    'queued_at' => date('Y-m-d H:i:s'),
                 ],
             );
 
@@ -498,6 +497,20 @@ final class DatabaseQueueTransport implements DelayedQueueTransportInterface, Qu
     private function normalizeQueue(string $queue): string
     {
         return strtolower($queue ?: 'default');
+    }
+
+    /**
+     * "Now" (plus $seconds), as SQL the database evaluates, in whole seconds as
+     * queued_at keeps them. UTC both ways: MySQL sessions are pinned to
+     * +00:00 (MySqlSessionTimeZone) and SQLite's 'now' is UTC.
+     */
+    private function sqlNow(int $seconds = 0): string
+    {
+        if (($this->driver ??= $this->orm()->getDriver()) === 'sqlite') {
+            return $seconds === 0 ? "datetime('now')" : sprintf("datetime('now', '%+d seconds')", $seconds);
+        }
+
+        return $seconds === 0 ? 'NOW()' : sprintf('(NOW() + INTERVAL %d SECOND)', $seconds);
     }
 
     private function adapter(): DatabaseAdapterInterface

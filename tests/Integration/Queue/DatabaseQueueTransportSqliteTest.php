@@ -56,6 +56,27 @@ final class DatabaseQueueTransportSqliteTest extends TestCase
         self::assertSame([], $this->rows(), 'acknowledged: the row is gone');
     }
 
+    /**
+     * The database's clock judges what is due, not the worker's: a worker
+     * whose clock ran ahead took a message before its time, and leases others
+     * still held. A zone fourteen hours ahead stands in for that clock.
+     */
+    #[Test]
+    public function a_worker_whose_clock_runs_ahead_does_not_take_a_message_before_it_is_due(): void
+    {
+        $this->orm->getAdapter()->execute("INSERT INTO queue_messages (id, queue_name, payload, status, queued_at) VALUES (UNHEX('00112233445566778899aabbccddeeff'), 'jobs', 'later', 'queued', datetime('now', '+60 seconds'))");
+        $zone = date_default_timezone_get();
+        date_default_timezone_set('Pacific/Kiritimati');
+        try {
+            $taken = $this->transport->consumeOne('jobs', static function (): void {
+            });
+        } finally {
+            date_default_timezone_set($zone);
+        }
+
+        self::assertFalse($taken, 'due in a minute by the database clock');
+    }
+
     /** Nothing removed dead letters, and the table only grew. */
     #[Test]
     public function dead_letters_older_than_the_retention_go_and_live_messages_stay(): void
@@ -76,9 +97,9 @@ final class DatabaseQueueTransportSqliteTest extends TestCase
         $previous = getenv('QUEUE_DEAD_LETTER_RETENTION_DAYS');
         putenv('QUEUE_DEAD_LETTER_RETENTION_DAYS=14');
         try {
-            self::assertSame(2, $this->transport->pruneDeadLetters('jobs', time()));
+            self::assertSame(2, $this->transport->pruneDeadLetters('jobs'));
             putenv('QUEUE_DEAD_LETTER_RETENTION_DAYS=0');
-            self::assertSame(0, $this->transport->pruneDeadLetters('other', time()), '0 keeps them');
+            self::assertSame(0, $this->transport->pruneDeadLetters('other'), '0 keeps them');
         } finally {
             putenv($previous === false ? 'QUEUE_DEAD_LETTER_RETENTION_DAYS' : 'QUEUE_DEAD_LETTER_RETENTION_DAYS=' . $previous);
         }
