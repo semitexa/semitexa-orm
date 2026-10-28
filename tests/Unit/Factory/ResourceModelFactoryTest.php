@@ -86,6 +86,16 @@ final readonly class FactoryTestCodeResourceModel
     ) {}
 }
 
+#[FromTable(name: 'factory_test_flags')]
+final readonly class FactoryTestFlagResourceModel
+{
+    public function __construct(
+        #[PrimaryKey(strategy: 'manual')]
+        #[Column(type: MySqlType::Boolean)]
+        public int $id,
+    ) {}
+}
+
 final class ResourceModelFactoryTest extends TestCase
 {
     #[Test]
@@ -191,6 +201,15 @@ final class ResourceModelFactoryTest extends TestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage(FactoryTestCodeResourceModel::class . '::$id holds keys up to 127; row 128 does not fit.');
         ResourceModelFactory::for(FactoryTestCodeResourceModel::class)->seed(3)->count(128)->make();
+    }
+
+    /** review: a Boolean column is a TINYINT(1), and fell through to no bound at all. */
+    #[Test]
+    public function a_manual_int_key_on_a_boolean_column_is_bounded_as_a_tinyint(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage(FactoryTestFlagResourceModel::class . '::$id holds keys up to 127; row 128 does not fit.');
+        ResourceModelFactory::for(FactoryTestFlagResourceModel::class)->seed(3)->count(128)->make();
     }
 
     #[Test]

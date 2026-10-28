@@ -210,7 +210,8 @@ final class ResourceModelFactory
     private function rowKey(ColumnMetadata $column, int $row): int
     {
         $max = match ($column->type instanceof \UnitEnum ? $column->type->name : '') {
-            'TinyInt' => 127,
+            // Boolean is a TINYINT(1) column: it holds what a TinyInt does.
+            'TinyInt', 'Boolean' => 127,
             'SmallInt' => 32_767,
             'Int' => 2_147_483_647,
             default => PHP_INT_MAX,
