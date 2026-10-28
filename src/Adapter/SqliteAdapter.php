@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Adapter;
 
 use Semitexa\Orm\Application\Service\Persistence\ReplicatedWriteGuard;
+use Semitexa\Orm\Application\Service\Transaction\SharedTestTransaction;
 /**
  * SQLite database adapter.
  *
@@ -173,6 +174,13 @@ class SqliteAdapter implements DatabaseAdapterInterface
 
     private function getConnection(): \PDO
     {
+        // A test holds a transaction on this connection name: run on its
+        // connection, never cache it (see SharedTestTransaction).
+        $shared = SharedTestTransaction::for($this->connectionName, 'sqlite')?->connection;
+        if ($shared !== null) {
+            return $shared;
+        }
+
         if ($this->connection === null) {
             $this->connection = $this->createConnection();
         }
@@ -240,7 +248,41 @@ class SqliteAdapter implements DatabaseAdapterInterface
             }
         }
 
+        $version = $pdo->query('SELECT sqlite_version()');
+        self::addMissingFunctions($pdo, $version === false ? '' : (string) $version->fetchColumn());
+
         return $pdo;
+    }
+
+    /**
+     * UNHEX() came with SQLite 3.41, and this adapter takes 3.38: on 3.38–3.40
+     * the database queue transport failed every claim with "no such function".
+     * Added as a PHP function there, answering as the built-in one does,
+     * but as TEXT, not a BLOB: the bytes match, yet SQLite never finds a BLOB
+     * equal to TEXT, so rows written while it was in use do not match
+     * UNHEX() once SQLite is 3.41 or later, nor rows a 3.41+ process wrote
+     * match it. A PHP function cannot answer a BLOB (pdo_sqlite returns every
+     * string as TEXT). Drain the database queue before upgrading SQLite past
+     * 3.40, and never share one database file between processes on both sides.
+     */
+    private static function addMissingFunctions(\PDO $pdo, string $version): void
+    {
+        if ($version === '' || version_compare($version, '3.41.0', '>=') || !$pdo instanceof \Pdo\Sqlite) {
+            return;
+        }
+        $pdo->createFunction(
+            'UNHEX',
+            static function (mixed $hex): ?string {
+                if ($hex === null) {
+                    return null;
+                }
+                $hex = (string) $hex;
+
+                return strlen($hex) % 2 === 0 && preg_match('/\A[0-9a-fA-F]*\z/', $hex) === 1 ? (string) hex2bin($hex) : null;
+            },
+            1,
+            \Pdo\Sqlite::DETERMINISTIC,
+        );
     }
 
     private function detectVersion(): void

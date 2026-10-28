@@ -33,6 +33,20 @@ class SchemaDiff
     /** @var array{table: string, constraintName: string}[] FK constraints to drop */
     private array $dropForeignKeys = [];
 
+    /** @var list<string> tables marked deprecated in the DB that are back in code */
+    private array $restoreTables = [];
+
+    public function addRestoreTable(string $tableName): void
+    {
+        $this->restoreTables[] = $tableName;
+    }
+
+    /** @return list<string> */
+    public function getRestoreTables(): array
+    {
+        return $this->restoreTables;
+    }
+
     public function addCreateTable(TableDefinition $table): void
     {
         $this->createTables[] = $table;
@@ -138,6 +152,7 @@ class SchemaDiff
     public function isEmpty(): bool
     {
         return $this->createTables === []
+            && $this->restoreTables === []
             && $this->dropTables === []
             && $this->addColumns === []
             && $this->alterColumns === []

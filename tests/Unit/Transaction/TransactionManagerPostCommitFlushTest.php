@@ -95,6 +95,79 @@ final class TransactionManagerPostCommitFlushTest extends TestCase
         self::assertSame([], $dispatcher->dispatched, 'a rolled-back transaction must not signal any change');
         self::assertSame([], $manager->getPendingEvents());
     }
+
+    /** A mail sent inside a transaction went out even when the transaction rolled back. */
+    #[Test]
+    public function after_commit_work_waits_for_the_commit_and_a_rollback_drops_it(): void
+    {
+        $pool = new SequenceRecordingPool();
+        $manager = new TransactionManager($pool, new PostCommitFakeAdapter());
+
+        $manager->afterCommit(static function () use ($pool): void { $pool->sequence[] = 'now'; });
+        $manager->run(function () use ($manager, $pool) {
+            $manager->afterCommit(static function () use ($pool): void { $pool->sequence[] = 'after commit'; });
+
+            return null;
+        });
+        try {
+            $manager->run(function () use ($manager, $pool) {
+                $manager->afterCommit(static function () use ($pool): void { $pool->sequence[] = 'rolled back'; });
+                throw new \RuntimeException('domain failure');
+            });
+        } catch (\RuntimeException) {
+        }
+
+        self::assertSame(
+            ['now', 'pop', 'push', 'after commit', 'pop', 'push'],
+            $pool->sequence->getArrayCopy(),
+            'outside a transaction it runs at once; inside, after the connection is back, and never after a rollback — with no event dispatcher at all',
+        );
+    }
+
+    #[Test]
+    public function a_rolled_back_savepoint_drops_what_it_asked_for_and_keeps_the_rest(): void
+    {
+        $dispatcher = new ThrowingRecordingDispatcher(throwOn: null);
+        $manager = new TransactionManager(new SequenceRecordingPool(), new PostCommitFakeAdapter(), $dispatcher);
+        $ran = [];
+
+        $manager->run(function () use ($manager, &$ran) {
+            $manager->afterCommit(static function () use (&$ran): void { $ran[] = 'outer'; });
+            try {
+                $manager->run(function () use ($manager, &$ran) {
+                    $manager->afterCommit(static function () use (&$ran): void { $ran[] = 'savepoint'; });
+                    $manager->bufferEvent((object) ['id' => 'savepoint event']);
+                    throw new \RuntimeException('inner failure');
+                });
+            } catch (\RuntimeException) {
+            }
+            $manager->run(function () use ($manager) {
+                $manager->bufferEvent((object) ['id' => 'released']);
+            });
+
+            return null;
+        });
+
+        self::assertSame(['outer'], $ran);
+        self::assertSame(['released'], $dispatcher->dispatched, 'a write the savepoint undid signals nothing');
+    }
+
+    #[Test]
+    public function throwing_after_commit_work_does_not_fail_the_committed_transaction(): void
+    {
+        $manager = new TransactionManager(new SequenceRecordingPool(), new PostCommitFakeAdapter());
+        $ran = false;
+
+        $result = $manager->run(function () use ($manager, &$ran) {
+            $manager->afterCommit(static function (): void { throw new \RuntimeException('smtp down'); });
+            $manager->afterCommit(static function () use (&$ran): void { $ran = true; });
+
+            return 'committed';
+        });
+
+        self::assertSame('committed', $result);
+        self::assertTrue($ran, 'one failing piece of work does not starve the next');
+    }
 }
 
 /** Hands out real sqlite PDOs and records pop/push ordering in a shared sequence. */

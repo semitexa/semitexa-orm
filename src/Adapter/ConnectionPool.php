@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Adapter;
 
 use Semitexa\Core\Log\StaticLoggerBridge;
+use Semitexa\Orm\Application\Service\Transaction\SharedTestTransaction;
 use Semitexa\Orm\Exception\PoolExhaustedException;
 use Swoole\Atomic;
 use Swoole\Coroutine\Channel;
@@ -189,6 +190,8 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface, Ephemera
     public function __construct(
         private readonly int $size,
         /** @var \Closure(): \PDO */ private readonly \Closure $factory,
+        /** Joins a test transaction opened on this name (see SharedTestTransaction); null joins none. */
+        private readonly ?string $connectionName = null,
     ) {
         self::registerShutdownHookOnce();
         $this->pool        = new Channel($size);
@@ -268,6 +271,13 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface, Ephemera
         // null means "no preference" and takes the bounded default; -1 stays
         // available for a caller that really does mean wait forever.
         $timeout ??= self::DEFAULT_POP_TIMEOUT_SECONDS;
+
+        // A test transaction on this name lends its connection, or a write
+        // here would autocommit (see SharedTestTransaction).
+        $shared = SharedTestTransaction::lendToCoroutinePool($this->connectionName, self::inCoroutine());
+        if ($shared !== null) {
+            return $shared;
+        }
 
         // Outside a coroutine the Swoole Channel cannot be operated ("API must be
         // called in the coroutine") — a fatal that bypasses try/catch. Hand out a
@@ -349,6 +359,12 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface, Ephemera
 
     public function push(\PDO $connection): void
     {
+        // Lent by the test transaction, not borrowed from here: the
+        // open-transaction cleanup below would roll that transaction back.
+        if ($connection === SharedTestTransaction::lentConnection($this->connectionName)) {
+            return;
+        }
+
         $this->adoptForCurrentProcess();
         $this->unrecordBorrow($connection);
 
@@ -507,6 +523,10 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface, Ephemera
      */
     public function discard(\PDO $connection): void
     {
+        if ($connection === SharedTestTransaction::lentConnection($this->connectionName)) {
+            return;
+        }
+
         $this->stats['discards']++;
         $this->unrecordBorrow($connection);
         $this->releaseSlotOf($connection);

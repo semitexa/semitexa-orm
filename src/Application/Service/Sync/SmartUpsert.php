@@ -6,11 +6,18 @@ namespace Semitexa\Orm\Application\Service\Sync;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Adapter\SqlIdentifier;
+use Semitexa\Orm\Adapter\SqliteAdapter;
 use Semitexa\Orm\Application\Service\Hydration\ResourceModelHydrator;
 use Semitexa\Orm\Domain\Model\ResourceMetadata;
 
 class SmartUpsert
 {
+    /**
+     * Columns an update leaves as they are: a re-seed set created_at to the
+     * moment of the re-seed, so every seeded row looked created today.
+     */
+    private const KEPT_ON_UPDATE = ['created_at'];
+
     private ResourceModelHydrator $hydrator;
 
     public function __construct(
@@ -23,7 +30,8 @@ class SmartUpsert
     }
 
     /**
-     * Upsert a batch of Resource instances by PK using INSERT … ON DUPLICATE KEY UPDATE.
+     * Upsert a batch of Resource instances by PK using INSERT … ON DUPLICATE KEY UPDATE
+     * (SQLite: INSERT … ON CONFLICT DO UPDATE).
      *
      * A single atomic query per batch — eliminates the SELECT → INSERT race condition
      * where two concurrent processes both see "no row" and both attempt INSERT,
@@ -64,6 +72,10 @@ class SmartUpsert
             return ['inserted' => 0, 'updated' => 0, 'unchanged' => 0];
         }
 
+        if ($this->adapter instanceof SqliteAdapter) {
+            return $this->batchUpsertSqlite($tableName, $pkColumn, $rows);
+        }
+
         return $this->batchUpsert($tableName, $pkColumn, $rows);
     }
 
@@ -96,13 +108,18 @@ class SmartUpsert
             $valueSets[] = '(' . implode(', ', $placeholders) . ')';
         }
 
-        // Build ON DUPLICATE KEY UPDATE for all non-PK columns.
+        // Build ON DUPLICATE KEY UPDATE for every non-PK column but KEPT_ON_UPDATE.
         $updateClauses = [];
         foreach ($columns as $col) {
-            if ($col !== $pkColumn) {
+            if ($col !== $pkColumn && !in_array($col, self::KEPT_ON_UPDATE, true)) {
                 $quoted = SqlIdentifier::quote($col);
                 $updateClauses[] = "{$quoted} = VALUES({$quoted})";
             }
+        }
+        // Every non-key column kept: an update that names the key changes nothing.
+        if ($updateClauses === []) {
+            $quoted = SqlIdentifier::quote($pkColumn);
+            $updateClauses[] = "{$quoted} = {$quoted}";
         }
 
         $sql = sprintf(
@@ -141,8 +158,75 @@ class SmartUpsert
         return ['inserted' => $inserted, 'updated' => $updated, 'unchanged' => $unchanged];
     }
 
+    /**
+     * SQLite has no ON DUPLICATE KEY UPDATE: orm:seed failed there on the syntax.
+     *
+     * ON CONFLICT(pk) DO UPDATE counts every touched row as one change, an
+     * identical one too, so the update carries a WHERE that skips a row whose
+     * values are all the same: then the changes are exactly inserted + updated.
+     * A batch that repeats a key inserts it once and updates it with each
+     * repeat that differs, as on MySQL. Unlike MySQL, a new key that collides
+     * on ANOTHER unique column throws instead of updating that row, and one
+     * batch holds at most 32766 placeholders (rows × columns), not 65535.
+     *
+     * @param array<int, array<string, mixed>> $rows
+     * @return array{inserted: int, updated: int, unchanged: int}
+     */
+    private function batchUpsertSqlite(string $table, string $pkColumn, array $rows): array
+    {
+        $q         = SqlIdentifier::DOUBLE_QUOTE;
+        $columns   = array_keys($rows[0]);
+        $valueSets = [];
+        $params    = [];
+
+        foreach ($rows as $i => $row) {
+            $placeholders = [];
+            foreach ($columns as $col) {
+                $key            = "r{$i}_{$col}";
+                $placeholders[] = ":{$key}";
+                $params[$key]   = $row[$col] ?? null;
+            }
+            $valueSets[] = '(' . implode(', ', $placeholders) . ')';
+        }
+
+        $set     = [];
+        $differs = [];
+        foreach ($columns as $col) {
+            if ($col !== $pkColumn && !in_array($col, self::KEPT_ON_UPDATE, true)) {
+                $quoted    = SqlIdentifier::quote($col, $q);
+                $set[]     = "{$quoted} = excluded.{$quoted}";
+                $differs[] = "{$quoted} IS NOT excluded.{$quoted}";
+            }
+        }
+
+        $sql = sprintf(
+            'INSERT INTO %s (%s) VALUES %s ON CONFLICT(%s) %s',
+            SqlIdentifier::quote($table, $q),
+            implode(', ', SqlIdentifier::quoteAll($columns, $q)),
+            implode(', ', $valueSets),
+            SqlIdentifier::quote($pkColumn, $q),
+            // Nothing to update when the key and KEPT_ON_UPDATE are all there is.
+            $set === [] ? 'DO NOTHING' : 'DO UPDATE SET ' . implode(', ', $set) . ' WHERE ' . implode(' OR ', $differs),
+        );
+
+        $distinctKeys = array_values(array_unique(
+            array_map(static fn (array $row): mixed => $row[$pkColumn], $rows),
+            SORT_STRING,
+        ));
+        $existing = $this->countExisting($table, $pkColumn, $distinctKeys, $q);
+
+        $result = $this->adapter->execute($sql, $params);
+
+        $total     = count($rows);
+        $inserted  = max(0, count($distinctKeys) - $existing);
+        $updated   = max(0, $result->rowCount - $inserted);
+        $unchanged = max(0, $total - $inserted - $updated);
+
+        return ['inserted' => $inserted, 'updated' => $updated, 'unchanged' => $unchanged];
+    }
+
     /** @param list<mixed> $keys */
-    private function countExisting(string $table, string $pkColumn, array $keys): int
+    private function countExisting(string $table, string $pkColumn, array $keys, string $quoteChar = SqlIdentifier::BACKTICK): int
     {
         $placeholders = [];
         $params = [];
@@ -152,8 +236,8 @@ class SmartUpsert
         }
         $row = $this->adapter->execute(sprintf(
             'SELECT COUNT(*) AS n FROM %s WHERE %s IN (%s)',
-            SqlIdentifier::quote($table),
-            SqlIdentifier::quote($pkColumn),
+            SqlIdentifier::quote($table, $quoteChar),
+            SqlIdentifier::quote($pkColumn, $quoteChar),
             implode(', ', $placeholders),
         ), $params)->fetchOne();
 

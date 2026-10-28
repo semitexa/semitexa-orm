@@ -504,7 +504,12 @@ final class ConnectionPoolTest extends TestCase
     protected function tearDown(): void
     {
         if (class_exists(\Swoole\Runtime::class)) {
+            // Hooks off outside a coroutine, and every Co\run() hooking again, as it
+            // does after any Co\run(). A bare enableCoroutine(0) left later Co\run() calls with
+            // no hooks at all: the next test talking to a socket inside one blocked
+            // the whole process (a NATS test hung the full suite at 45%).
             \Swoole\Runtime::enableCoroutine(0);
+            \Swoole\Coroutine::set(['hook_flags' => SWOOLE_HOOK_ALL]);
         }
     }
 }

@@ -28,8 +28,8 @@ use Semitexa\Orm\Adapter\ServerCapability;
  * This decorator is deliberately NOT returned by OrmManager::getAdapter():
  * consumers (semitexa-update, SyncEngine, TransactionManager itself) branch on
  * `instanceof MysqlAdapter/SqliteAdapter` for dialect decisions, and wrapping
- * the adapter there would silently disable those branches. It is wired only
- * into the repository read path, which never dialect-branches on the adapter.
+ * the adapter there would silently disable those branches. Repositories and
+ * stores' raw SQL get it (OrmManager::getQueryAdapter()); none dialect-branch.
  */
 final class TransactionAwareAdapter implements DatabaseAdapterInterface
 {

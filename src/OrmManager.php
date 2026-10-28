@@ -248,7 +248,7 @@ class OrmManager
      * NOT used for getAdapter() consumers — they dialect-branch on the
      * concrete adapter class (see TransactionAwareAdapter docblock).
      */
-    private function getTransactionAwareAdapter(): TransactionAwareAdapter
+    public function getQueryAdapter(): TransactionAwareAdapter
     {
         return $this->transactionAwareAdapter ??= new TransactionAwareAdapter(
             fn (): DatabaseAdapterInterface => $this->getAdapter(),
@@ -342,7 +342,7 @@ class OrmManager
     {
         if ($this->resourceModelRelationLoader === null) {
             $this->resourceModelRelationLoader = new ResourceModelRelationLoader(
-                $this->getTransactionAwareAdapter(),
+                $this->getQueryAdapter(),
                 $this->getResourceModelHydrator(),
                 $this->getResourceModelMetadataRegistry(),
             );
@@ -433,7 +433,7 @@ class OrmManager
     {
         return new ResourceModelQuery(
             $resourceModelClass,
-            $this->getTransactionAwareAdapter(),
+            $this->getQueryAdapter(),
             $this->getResourceModelHydrator(),
             $this->getResourceModelRelationLoader(),
             $this->getResourceModelMetadataRegistry(),
@@ -450,7 +450,7 @@ class OrmManager
         return new DomainRepository(
             resourceModelClass: $resourceModelClass,
             domainModelClass: $domainModelClass,
-            adapter: $this->getTransactionAwareAdapter(),
+            adapter: $this->getQueryAdapter(),
             mapperRegistry: $this->getMapperRegistry(),
             hydrator: $this->getResourceModelHydrator(),
             relationLoader: $this->getResourceModelRelationLoader(),
@@ -774,10 +774,10 @@ class OrmManager
         $factory = $this->connectBreaker->wrap($factory);
 
         if ($this->shouldUseCoroutinePool()) {
-            return new ConnectionPool($poolSize, $factory);
+            return new ConnectionPool($poolSize, $factory, $this->connectionName);
         }
 
-        return new SingleConnectionPool($factory);
+        return new SingleConnectionPool($factory, $this->connectionName);
     }
 
     /**

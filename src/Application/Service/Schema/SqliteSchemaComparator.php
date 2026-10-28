@@ -204,9 +204,8 @@ class SqliteSchemaComparator extends AbstractSchemaComparator
 
         // Compare SQL type (using canonical name for the type)
         $expectedType = $code->type->canonicalName($code->length, $code->precision, $code->scale);
-        $dbTypeNormalized = $this->normalizeDbType($db->columnType);
 
-        if ($this->normalizeType($expectedType) !== $dbTypeNormalized) {
+        if (self::family($expectedType) !== self::family($db->columnType)) {
             $changes[] = "type: {$db->columnType} → {$expectedType}";
         }
 
@@ -232,38 +231,25 @@ class SqliteSchemaComparator extends AbstractSchemaComparator
     }
 
     /**
-     * Normalize SQLite DB type for comparison.
-     *
-     * SQLite may report types in various forms. We normalize to
-     * the canonical form used by SqliteType.
+     * The storage family a declared type falls into, for both sides of the
+     * comparison: SQLite keeps a column's declared type as written and stores
+     * by affinity, so DECIMAL(12,2) and decimal(12,2) are one type, and so are
+     * JSON and TEXT. Two normalizers used to read the code and the database
+     * side: one kept a two-number parameter, the other did not know json,
+     * datetime, date, time or the long texts — and every orm:sync on SQLite
+     * found those columns changed after it had just created them.
      */
-    private function normalizeDbType(string $type): string
+    private static function family(string $type): string
     {
-        $type = strtolower(trim($type));
-
-        // Strip parameters for comparison
-        $base = preg_replace('/\([^)]*\)/', '', $type) ?? $type;
+        $base = trim((string) preg_replace('/\([^)]*\)/', '', strtolower(trim($type))));
 
         return match ($base) {
-            'integer', 'int', 'tinyint', 'smallint', 'bigint' => $base === 'integer' ? 'integer' : 'integer',
-            'text', 'varchar', 'char' => 'text',
-            'real', 'double', 'float', 'decimal' => 'real',
-            'blob', 'binary' => 'blob',
-            default => $type,
-        };
-    }
-
-    private function normalizeType(string $type): string
-    {
-        $type = strtolower(trim($type));
-        $type = preg_replace('/\(\d+\)/', '', $type) ?? $type;
-
-        return match ($type) {
-            'int', 'tinyint', 'smallint', 'bigint', 'integer' => 'integer',
-            'varchar', 'char', 'text', 'mediumtext', 'longtext', 'json', 'datetime', 'date', 'time' => 'text',
-            'float', 'double', 'decimal', 'real', 'numeric' => 'real',
-            'binary', 'blob', 'varbinary' => 'blob',
-            default => $type,
+            'integer', 'int', 'tinyint', 'smallint', 'mediumint', 'bigint', 'int2', 'int8', 'boolean', 'bool' => 'integer',
+            'text', 'clob', 'varchar', 'char', 'nvarchar', 'nchar', 'mediumtext', 'longtext', 'json',
+            'datetime', 'timestamp', 'date', 'time', 'year' => 'text',
+            'real', 'double', 'double precision', 'float', 'decimal', 'numeric', 'number' => 'real',
+            'blob', 'binary', 'varbinary' => 'blob',
+            default => $base,
         };
     }
 
