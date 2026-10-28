@@ -657,8 +657,7 @@ final class AggregateWriteEngine
         // ReferenceOnly check against this parent refused the bytes. Only the WHERE binds the column form.
         $parentId = $this->propertyValue($resourceModel, $this->requirePrimaryKey($metadata));
         if (!$isInsert) {
-            $targetMetadata = $this->metadata($relation->targetClass);
-            $this->deleteRelatedRows($targetMetadata, $targetMetadata->column($relation->foreignKey)->columnName, $this->boundPrimaryKey($resourceModel, $metadata), $adapter, $scope);
+            $this->deleteCascadeOwnedRelation($resourceModel, $metadata, $relation, $adapter, $scope);
         }
 
         if ($value === null) {
@@ -706,7 +705,8 @@ final class AggregateWriteEngine
     ): void {
         $targetMetadata = $this->metadata($relation->targetClass);
         $fkColumn = $targetMetadata->column($relation->foreignKey)->columnName;
-        $parentId = $this->boundPrimaryKey($resourceModel, $metadata);
+        // As the CHILD's column stores it: a text foreign key asked for a binary key's bytes matched no row.
+        $parentId = $this->hydrator->castColumnValue($targetMetadata->className, $fkColumn, $this->propertyValue($resourceModel, $this->requirePrimaryKey($metadata)));
 
         $this->deleteRelatedRows($targetMetadata, $fkColumn, $parentId, $adapter, $scope);
     }

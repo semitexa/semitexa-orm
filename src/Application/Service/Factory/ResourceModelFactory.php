@@ -189,7 +189,7 @@ final class ResourceModelFactory
                 'auto' => $column->nullable ? null : 0,
                 // A random int collides: twenty rows on a TinyInt key share
                 // one more often than not. The row number never repeats.
-                default => ltrim($column->phpType, '?') === 'int' ? $row + 1 : $generator->for($column, $row),
+                default => ltrim($column->phpType, '?') === 'int' ? $this->rowKey($column, $row) : $generator->for($column, $row),
             };
         }
         if ($column->default !== null) {
@@ -200,6 +200,26 @@ final class ResourceModelFactory
         }
 
         return $generator->for($column, $row);
+    }
+
+    /**
+     * The row's number as its key, refused past what the column holds: strict
+     * MySQL refuses row 128 on a TinyInt key, and clamping would give every
+     * later row the same key.
+     */
+    private function rowKey(ColumnMetadata $column, int $row): int
+    {
+        $max = match ($column->type instanceof \UnitEnum ? $column->type->name : '') {
+            'TinyInt' => 127,
+            'SmallInt' => 32_767,
+            'Int' => 2_147_483_647,
+            default => PHP_INT_MAX,
+        };
+        if ($row >= $max) {
+            throw new \InvalidArgumentException("{$this->resourceModelClass}::\${$column->propertyName} holds keys up to {$max}; row " . ($row + 1) . ' does not fit. Give the key in state() or make fewer rows.');
+        }
+
+        return $row + 1;
     }
 
     /** @param array<string, mixed> $values */

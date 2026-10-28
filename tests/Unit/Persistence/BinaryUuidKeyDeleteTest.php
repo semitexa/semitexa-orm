@@ -63,6 +63,62 @@ final class BinaryUuidKeyDeleteTest extends TestCase
         $rows = $orm->getAdapter()->query('SELECT order_id, sku FROM bu_lines')->rows;
         self::assertSame([['order_id' => Uuid7::toBytes($id), 'sku' => 'sku-1']], $rows, 'the column holds the key as bytes');
     }
+
+    /** review: the delete asked a text foreign key for the parent's 16 bytes and found none of its rows. */
+    #[Test]
+    public function owned_children_with_a_text_foreign_key_are_replaced_and_deleted(): void
+    {
+        $orm = new OrmManager(config: new ConnectionConfig(driver: 'sqlite', sqliteMemory: true));
+        $orm->getAdapter()->execute('CREATE TABLE bu_notes (id BLOB PRIMARY KEY, name TEXT)');
+        $orm->getAdapter()->execute('CREATE TABLE bu_note_lines (id BLOB PRIMARY KEY, note_id TEXT, sku TEXT)');
+        $id = Uuid7::generate();
+        $engine = $orm->getAggregateWriteEngine();
+        $skus = static fn (): array => array_column($orm->getAdapter()->query('SELECT note_id, sku FROM bu_note_lines ORDER BY sku')->rows, 'sku', 'sku');
+
+        $engine->write(ResourceChangeOperation::Insert, new BuNoteFixture($id, 'n', [new BuNoteLineFixture('', '', 'a'), new BuNoteLineFixture('', '', 'b')]));
+        self::assertSame([['note_id' => $id, 'sku' => 'a'], ['note_id' => $id, 'sku' => 'b']], $orm->getAdapter()->query('SELECT note_id, sku FROM bu_note_lines ORDER BY sku')->rows, 'the column holds the key as text');
+
+        $engine->write(ResourceChangeOperation::Update, new BuNoteFixture($id, 'n', [new BuNoteLineFixture('', '', 'c')]));
+        self::assertSame(['c' => 'c'], $skus(), 'the old children are replaced');
+
+        $engine->write(ResourceChangeOperation::Delete, new BuNoteFixture($id, 'n'));
+        self::assertSame([], $skus(), 'and go with their parent');
+    }
+}
+
+#[FromTable(name: 'bu_notes')]
+final readonly class BuNoteFixture
+{
+    use \Semitexa\Orm\Metadata\HasColumnReferences;
+    use \Semitexa\Orm\Metadata\HasRelationReferences;
+
+    /** @param list<BuNoteLineFixture>|RelationState $lines */
+    public function __construct(
+        #[PrimaryKey(strategy: 'uuid')]
+        #[Column(type: MySqlType::Binary, length: 16)]
+        public string $id,
+        #[Column(type: MySqlType::Varchar, length: 64)]
+        public string $name,
+        #[HasMany(target: BuNoteLineFixture::class, foreignKey: 'noteId', writePolicy: RelationWritePolicy::CascadeOwned)]
+        public array|RelationState $lines = [],
+    ) {}
+}
+
+#[FromTable(name: 'bu_note_lines')]
+final readonly class BuNoteLineFixture
+{
+    use \Semitexa\Orm\Metadata\HasColumnReferences;
+    use \Semitexa\Orm\Metadata\HasRelationReferences;
+
+    public function __construct(
+        #[PrimaryKey(strategy: 'uuid')]
+        #[Column(type: MySqlType::Binary, length: 16)]
+        public string $id,
+        #[Column(name: 'note_id', type: MySqlType::Varchar, length: 36)]
+        public string $noteId,
+        #[Column(type: MySqlType::Varchar, length: 64)]
+        public string $sku,
+    ) {}
 }
 
 #[FromTable(name: 'bu_orders')]

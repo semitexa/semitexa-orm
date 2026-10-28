@@ -226,6 +226,23 @@ final class ResourceModelHydrator
     }
 
     /**
+     * $value as $class's column $columnName stores it: the same cast a write
+     * of that column makes, for a value the model does not hold yet.
+     *
+     * @param class-string $class
+     */
+    public function castColumnValue(string $class, string $columnName, mixed $value): mixed
+    {
+        foreach ($this->dehydrationPlan($class) as $entry) {
+            if ($entry['columnName'] === $columnName) {
+                return ($this->typeCaster ?? new TypeCaster())->castToDb($value, $entry['columnDef']);
+            }
+        }
+
+        throw new \LogicException(sprintf('%s has no column %s.', $class, $columnName));
+    }
+
+    /**
      * Resolve (and memoize) the per-class dehydration plan — the write-path twin
      * of {@see plan()}. `dehydrate()` runs once per row of every save, yet it
      * built a `new \ReflectionProperty` and a `ColumnDefinition` per column on

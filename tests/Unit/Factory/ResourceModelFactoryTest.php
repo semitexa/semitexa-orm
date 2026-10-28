@@ -181,6 +181,18 @@ final class ResourceModelFactoryTest extends TestCase
         }
     }
 
+    /** review: row 128 got key 128, which strict MySQL refuses on a TinyInt key. */
+    #[Test]
+    public function a_manual_int_key_past_its_column_is_refused(): void
+    {
+        $codes = ResourceModelFactory::for(FactoryTestCodeResourceModel::class)->seed(3)->count(127)->make();
+        self::assertSame(range(1, 127), array_map(static fn ($c): int => $c->id, $codes));
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage(FactoryTestCodeResourceModel::class . '::$id holds keys up to 127; row 128 does not fit.');
+        ResourceModelFactory::for(FactoryTestCodeResourceModel::class)->seed(3)->count(128)->make();
+    }
+
     #[Test]
     public function state_beats_sequence_beats_generated_and_a_seed_repeats(): void
     {

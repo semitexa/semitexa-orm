@@ -159,6 +159,7 @@ final class SharedTestTransactionTest extends TestCase
             tenantValue: 'tenant-1',
         );
         self::assertCount(1, $dispatched);
+        /** @var list<object> $dispatched the spy filled it; phpstan still holds the empty list asserted above */
         self::assertInstanceOf(ResourceChangedEvent::class, $dispatched[0]);
         self::assertSame(ResourceChangeOperation::Insert, $dispatched[0]->operation);
     }
