@@ -638,7 +638,7 @@ class TransactionManager
                 continue;
             }
             try {
-                $event instanceof AfterCommit ? ($event->work)() : $this->eventDispatcher->dispatch($event);
+                $event instanceof AfterCommit ? ($event->work)() : $this->eventDispatcher?->dispatch($event);
             } catch (\Throwable $e) {
                 // Swallowed per event, but never silently: the transaction is
                 // already committed and these are best-effort invalidation

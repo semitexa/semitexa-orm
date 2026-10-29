@@ -30,6 +30,7 @@ final class ResourceModelFactory
 {
     /** @var list<array<string, mixed>|\Closure(int): array<string, mixed>> */
     private array $states = [];
+    /** @var (\Closure(int): array<string, mixed>)|null */
     private ?\Closure $sequence = null;
     private int $count = 1;
     private ?int $seed = null;
