@@ -230,7 +230,7 @@ class SmartUpsert
     {
         $placeholders = [];
         $params = [];
-        foreach (array_values($keys) as $i => $key) {
+        foreach ($keys as $i => $key) {
             $placeholders[] = ":pk{$i}";
             $params["pk{$i}"] = $key;
         }
@@ -241,7 +241,9 @@ class SmartUpsert
             implode(', ', $placeholders),
         ), $params)->fetchOne();
 
-        return (int) ($row['n'] ?? 0);
+        $n = $row['n'] ?? 0;
+
+        return is_numeric($n) ? (int) $n : 0;
     }
 
 }

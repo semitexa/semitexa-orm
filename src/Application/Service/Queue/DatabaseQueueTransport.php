@@ -364,7 +364,7 @@ final class DatabaseQueueTransport implements DelayedQueueTransportInterface, Qu
             ['failed_queue' => $queue . '.failed', 'queue_name' => $queue],
         )->rows;
 
-        return array_map(fn (array $row): DeadLetter => $this->deadLetterOf($queue, Row::of($row)), $rows);
+        return array_values(array_map(fn (array $row): DeadLetter => $this->deadLetterOf($queue, Row::of($row)), $rows));
     }
 
     /**

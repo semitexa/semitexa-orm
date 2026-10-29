@@ -273,7 +273,7 @@ class SqliteAdapter implements DatabaseAdapterInterface
         $pdo->createFunction(
             'UNHEX',
             static function (mixed $hex): ?string {
-                if ($hex === null) {
+                if (!is_scalar($hex)) {
                     return null;
                 }
                 $hex = (string) $hex;
