@@ -20,6 +20,8 @@ namespace Semitexa\Orm\Metadata;
  *
  * Nothing in the workspace constructed one directly: all uses went through
  * ::for(), or through HasColumnReferences::column().
+ *
+ * @api
  */
 final readonly class ColumnRef
 {

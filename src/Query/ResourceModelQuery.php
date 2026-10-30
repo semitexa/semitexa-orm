@@ -92,6 +92,7 @@ final class ResourceModelQuery
     // WHERE predicates
     // ------------------------------------------------------------------
 
+    /** @api */
     public function where(ColumnRef $column, Operator $operator, mixed $value): self
     {
         $this->assertColumnBelongsToCurrentResourceModel($column);
@@ -108,6 +109,7 @@ final class ResourceModelQuery
         return $this;
     }
 
+    /** @api */
     public function orWhere(ColumnRef $column, Operator $operator, mixed $value): self
     {
         $this->assertColumnBelongsToCurrentResourceModel($column);
@@ -124,21 +126,25 @@ final class ResourceModelQuery
         return $this;
     }
 
+    /** @api */
     public function whereNull(ColumnRef $column): self
     {
         return $this->addNull($column, negated: false, connector: 'AND');
     }
 
+    /** @api */
     public function whereNotNull(ColumnRef $column): self
     {
         return $this->addNull($column, negated: true, connector: 'AND');
     }
 
+    /** @api */
     public function orWhereNull(ColumnRef $column): self
     {
         return $this->addNull($column, negated: false, connector: 'OR');
     }
 
+    /** @api */
     public function orWhereNotNull(ColumnRef $column): self
     {
         return $this->addNull($column, negated: true, connector: 'OR');
@@ -146,6 +152,8 @@ final class ResourceModelQuery
 
     /**
      * @param list<mixed> $values
+     *
+     * @api
      */
     public function whereIn(ColumnRef $column, array $values): self
     {
@@ -154,12 +162,15 @@ final class ResourceModelQuery
 
     /**
      * @param list<mixed> $values
+     *
+     * @api
      */
     public function whereNotIn(ColumnRef $column, array $values): self
     {
         return $this->addIn($column, $values, negated: true, connector: 'AND');
     }
 
+    /** @api */
     public function whereBetween(ColumnRef $column, mixed $from, mixed $to): self
     {
         $this->assertColumnBelongsToCurrentResourceModel($column);
@@ -178,6 +189,7 @@ final class ResourceModelQuery
         return $this;
     }
 
+    /** @api */
     public function whereLike(ColumnRef $column, string $pattern): self
     {
         return $this->where($column, Operator::Like, $pattern);
@@ -198,6 +210,8 @@ final class ResourceModelQuery
      * wildcards in user input themselves.
      *
      * @param list<ColumnRef> $columns at least one; an empty list is refused
+     *
+     * @api
      */
     public function whereAnyLike(array $columns, string $pattern): self
     {
@@ -225,6 +239,7 @@ final class ResourceModelQuery
         return $this;
     }
 
+    /** @api */
     public function whereNotLike(ColumnRef $column, string $pattern): self
     {
         return $this->where($column, Operator::NotLike, $pattern);
@@ -295,6 +310,7 @@ final class ResourceModelQuery
     // Relation eager-loading
     // ------------------------------------------------------------------
 
+    /** @api */
     public function withRelation(RelationRef $relation): self
     {
         $this->assertRelationBelongsToCurrentResourceModel($relation);
@@ -303,6 +319,7 @@ final class ResourceModelQuery
         return $this;
     }
 
+    /** @api */
     public function orderBy(ColumnRef $column, Direction $direction): self
     {
         $this->assertColumnBelongsToCurrentResourceModel($column);
@@ -314,6 +331,7 @@ final class ResourceModelQuery
         return $this;
     }
 
+    /** @api */
     public function limit(int $limit): self
     {
         if ($limit < 0) {
@@ -323,6 +341,7 @@ final class ResourceModelQuery
         return $this;
     }
 
+    /** @api */
     public function offset(int $offset): self
     {
         if ($offset < 0) {
@@ -335,6 +354,8 @@ final class ResourceModelQuery
     /**
      * Retracts an earlier system bypass: the two authorities are exclusive,
      * as they are on {@see \Semitexa\Orm\Repository\DomainRepository}.
+     *
+     * @api
      */
     public function forTenant(mixed $tenantValue): self
     {
@@ -344,6 +365,7 @@ final class ResourceModelQuery
         return $this;
     }
 
+    /** @api */
     public function includeSoftDeleted(): self
     {
         $this->includeSoftDeleted = true;
@@ -352,6 +374,7 @@ final class ResourceModelQuery
         return $this;
     }
 
+    /** @api */
     public function onlySoftDeleted(): self
     {
         $this->includeSoftDeleted = false;
@@ -363,6 +386,8 @@ final class ResourceModelQuery
     /**
      * Retracts an earlier forTenant(): a bypass reads across every tenant, so
      * leaving a tenant value behind would only describe the read inaccurately.
+     *
+     * @api
      */
     public function withoutTenantScope(SystemScopeToken $token): self
     {
@@ -378,6 +403,8 @@ final class ResourceModelQuery
 
     /**
      * @return list<object>
+     *
+     * @api
      */
     public function fetchAll(): array
     {
@@ -406,6 +433,8 @@ final class ResourceModelQuery
      * Unlike the previous implementation this does not mutate the builder —
      * a shallow clone with LIMIT 1 is used so the caller can re-run the
      * query afterwards without surprise.
+     *
+     * @api
      */
     public function fetchOne(): ?object
     {
@@ -419,6 +448,8 @@ final class ResourceModelQuery
 
     /**
      * @return list<object>
+     *
+     * @api
      */
     public function fetchAllAs(string $domainModelClass, ?MapperRegistry $mapperRegistry = null): array
     {
@@ -430,6 +461,7 @@ final class ResourceModelQuery
         );
     }
 
+    /** @api */
     public function fetchOneAs(string $domainModelClass, ?MapperRegistry $mapperRegistry = null): ?object
     {
         $item = $this->fetchOne();
@@ -446,6 +478,8 @@ final class ResourceModelQuery
      *
      * Uses the current WHERE / tenant / soft-delete state so the result
      * reflects what fetchAll() would return if LIMIT were removed.
+     *
+     * @api
      */
     public function count(): int
     {
@@ -461,6 +495,8 @@ final class ResourceModelQuery
     /**
      * SUM over one column of the matching rows (0 when nothing matches).
      * Same WHERE / tenant / soft-delete state as fetchAll().
+     *
+     * @api
      */
     public function sum(ColumnRef $column): int|float
     {
@@ -476,6 +512,8 @@ final class ResourceModelQuery
 
     /**
      * AVG over one column of the matching rows; null when nothing matches.
+     *
+     * @api
      */
     public function avg(ColumnRef $column): ?float
     {
@@ -488,6 +526,8 @@ final class ResourceModelQuery
      * MIN of one column of the matching rows; null when nothing matches.
      * Returned as the driver's raw value (string/int) — cast at the call
      * site, the column's PHP type is the caller's context.
+     *
+     * @api
      */
     public function min(ColumnRef $column): mixed
     {
@@ -496,6 +536,8 @@ final class ResourceModelQuery
 
     /**
      * MAX of one column of the matching rows; null when nothing matches.
+     *
+     * @api
      */
     public function max(ColumnRef $column): mixed
     {
@@ -511,6 +553,8 @@ final class ResourceModelQuery
      * filter nulls in WHERE when that distinction matters.
      *
      * @return array<int|string, int>
+     *
+     * @api
      */
     public function countBy(ColumnRef $group): array
     {
@@ -542,6 +586,8 @@ final class ResourceModelQuery
      * dashboard trend used to need one COUNT per day.
      *
      * @return array<string, int>
+     *
+     * @api
      */
     public function countByDay(ColumnRef $moment): array
     {
@@ -588,6 +634,8 @@ final class ResourceModelQuery
 
     /**
      * Whether at least one row matches — implemented as a cheap `LIMIT 1` probe.
+     *
+     * @api
      */
     public function exists(): bool
     {
@@ -607,6 +655,8 @@ final class ResourceModelQuery
      * domain models via {@see PaginatedResult::map()} if needed.
      *
      * @return PaginatedResult<object>
+     *
+     * @api
      */
     public function paginate(int $page, int $perPage): PaginatedResult
     {
@@ -643,6 +693,8 @@ final class ResourceModelQuery
      * Paginate and map to a domain model.
      *
      * @return PaginatedResult<object>
+     *
+     * @api
      */
     public function paginateAs(int $page, int $perPage, string $domainModelClass, ?MapperRegistry $mapperRegistry = null): PaginatedResult
     {

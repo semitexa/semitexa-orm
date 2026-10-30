@@ -11,6 +11,8 @@ namespace Semitexa\Orm\Metadata;
  * foreignKey, relatedKey and pivotTable are interpolated into SQL by
  * ResourceModelRelationLoader, so the name has to come from the attributes.
  * Both factories validate the property against its metadata before building.
+ *
+ * @api
  */
 final readonly class RelationRef
 {

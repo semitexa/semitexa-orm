@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Metadata;
 
+/** @api */
 trait HasRelationReferences
 {
     public static function relation(string $propertyName): RelationRef

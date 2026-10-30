@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Query;
 
+/** @api */
 enum Operator: string
 {
     case Equals = '=';
