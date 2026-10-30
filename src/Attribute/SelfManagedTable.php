@@ -37,6 +37,8 @@ use Attribute;
  * This is a package-level statement of ownership. The `ORM_IGNORE_TABLES`
  * environment variable remains the operator-level escape hatch for tables that
  * belong to something outside Semitexa entirely; the two are merged.
+ *
+ * @api
  */
 #[Attribute(Attribute::TARGET_CLASS | Attribute::IS_REPEATABLE)]
 final class SelfManagedTable

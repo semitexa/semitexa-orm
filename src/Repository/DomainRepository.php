@@ -74,6 +74,7 @@ final class DomainRepository
         );
     }
 
+    /** @api */
     public function forTenant(mixed $tenantValue): self
     {
         $clone = clone $this;
@@ -83,6 +84,7 @@ final class DomainRepository
         return $clone;
     }
 
+    /** @api */
     public function withoutTenantScope(SystemScopeToken $token): self
     {
         $clone = clone $this;
@@ -92,6 +94,7 @@ final class DomainRepository
         return $clone;
     }
 
+    /** @api */
     public function query(): ResourceModelQuery
     {
         $query = new ResourceModelQuery(
@@ -112,6 +115,7 @@ final class DomainRepository
         return $query;
     }
 
+    /** @api */
     public function findById(int|string $id): ?object
     {
         return $this->query()
@@ -121,6 +125,8 @@ final class DomainRepository
 
     /**
      * @throws \RuntimeException when the id is not found
+     *
+     * @api
      */
     public function findByIdOrFail(int|string $id): object
     {
@@ -164,6 +170,8 @@ final class DomainRepository
      * — use with care on large tables.
      *
      * @return list<object>
+     *
+     * @api
      */
     public function findAll(?int $limit = self::LIMIT_UNSPECIFIED): array
     {
@@ -180,6 +188,8 @@ final class DomainRepository
      * @param array<string, mixed> $criteria property name → value (null → IS NULL)
      * @param list<RelationRef> $relations
      * @return list<object>
+     *
+     * @api
      */
     public function findBy(array $criteria, array $relations = [], ?int $limit = self::LIMIT_UNSPECIFIED): array
     {
@@ -239,6 +249,8 @@ final class DomainRepository
     /**
      * @param array<string, mixed> $criteria
      * @param list<RelationRef> $relations
+     *
+     * @api
      */
     public function findOneBy(array $criteria, array $relations = []): ?object
     {
@@ -248,6 +260,8 @@ final class DomainRepository
 
     /**
      * @param array<string, mixed> $criteria
+     *
+     * @api
      */
     public function count(array $criteria = []): int
     {
@@ -256,6 +270,8 @@ final class DomainRepository
 
     /**
      * @param array<string, mixed> $criteria
+     *
+     * @api
      */
     public function exists(array $criteria = []): bool
     {
@@ -268,6 +284,8 @@ final class DomainRepository
      * @param array<string, mixed> $criteria
      * @param list<RelationRef> $relations
      * @return PaginatedResult<object>
+     *
+     * @api
      */
     public function paginate(int $page, int $perPage, array $criteria = [], array $relations = []): PaginatedResult
     {
@@ -276,6 +294,7 @@ final class DomainRepository
         return $query->paginateAs($page, $perPage, $this->domainModelClass, $this->mapperRegistry);
     }
 
+    /** @api */
     public function insert(object $domainModel): object
     {
         return $this->writeEngine->insert(
@@ -287,6 +306,7 @@ final class DomainRepository
         );
     }
 
+    /** @api */
     public function update(object $domainModel): object
     {
         return $this->writeEngine->update(
@@ -298,6 +318,7 @@ final class DomainRepository
         );
     }
 
+    /** @api */
     public function delete(object $domainModel): void
     {
         $this->writeEngine->delete(

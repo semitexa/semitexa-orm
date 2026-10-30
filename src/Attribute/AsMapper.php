@@ -6,6 +6,7 @@ namespace Semitexa\Orm\Attribute;
 
 use Attribute;
 
+/** @api */
 #[Attribute(Attribute::TARGET_CLASS)]
 final readonly class AsMapper
 {

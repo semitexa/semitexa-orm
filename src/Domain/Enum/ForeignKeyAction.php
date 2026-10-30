@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Domain\Enum;
 
+/** @api */
 enum ForeignKeyAction: string
 {
     case Restrict  = 'RESTRICT';

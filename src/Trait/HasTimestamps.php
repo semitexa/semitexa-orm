@@ -7,11 +7,14 @@ namespace Semitexa\Orm\Trait;
 use Semitexa\Orm\Adapter\MySqlType;
 use Semitexa\Orm\Attribute\Column;
 
+/** @api */
 trait HasTimestamps
 {
+    /** @api */
     #[Column(type: MySqlType::Datetime)]
     public ?\DateTimeImmutable $created_at = null;
 
+    /** @api */
     #[Column(type: MySqlType::Datetime)]
     public ?\DateTimeImmutable $updated_at = null;
 

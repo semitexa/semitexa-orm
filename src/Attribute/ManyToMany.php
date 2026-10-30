@@ -7,6 +7,7 @@ namespace Semitexa\Orm\Attribute;
 use Attribute;
 use Semitexa\Orm\Domain\Enum\RelationWritePolicy;
 
+/** @api */
 #[Attribute(Attribute::TARGET_PROPERTY)]
 readonly class ManyToMany
 {

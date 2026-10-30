@@ -9,8 +9,10 @@ use Semitexa\Orm\Attribute\Column;
 use Semitexa\Orm\Attribute\PrimaryKey;
 use Semitexa\Orm\Application\Service\Uuid7;
 
+/** @api */
 trait HasUuidV7
 {
+    /** @api */
     #[PrimaryKey(strategy: 'uuid')]
     #[Column(type: MySqlType::Binary, length: 16)]
     public string $id = '';

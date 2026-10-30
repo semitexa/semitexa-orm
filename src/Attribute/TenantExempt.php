@@ -19,6 +19,8 @@ use Attribute;
  *
  * The reason is mandatory: an exemption someone cannot justify in one
  * sentence is a leak waiting for real data.
+ *
+ * @api
  */
 #[Attribute(Attribute::TARGET_CLASS)]
 readonly class TenantExempt

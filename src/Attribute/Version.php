@@ -14,6 +14,8 @@ use Attribute;
  * one in the same statement; a concurrent writer that got there first makes
  * the guard miss and the write throws StaleAggregateException instead of
  * silently overwriting the newer state (lost update).
+ *
+ * @api
  */
 #[Attribute(Attribute::TARGET_PROPERTY)]
 final readonly class Version

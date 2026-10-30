@@ -9,6 +9,8 @@ use Attribute;
 /**
  * Marks a property as usable in filter conditions via filterByX().
  * A DB index is automatically created for this column.
+ *
+ * @api
  */
 #[Attribute(Attribute::TARGET_PROPERTY)]
 readonly class Filterable
