@@ -72,7 +72,7 @@ final class ApiSurfaceTest extends TestCase
      * names that class as their declaring one: a member marked in the trait is
      * the trait's promise, not one more for each user, under its own name or an
      * alias. A method the class declares itself over the trait's is the class's.
-     * A mark may sit after any run of spaces.
+     * A mark may sit up to four spaces in; further in, it is an example in the prose.
      */
     #[Test]
     public function a_trait_member_is_counted_once_on_the_trait(): void
@@ -91,6 +91,8 @@ final class ApiSurfaceTest extends TestCase
             file_put_contents($dir . '/Stamps.php', "<?php\nnamespace {$ns};\n\n/** @api */\ntrait Stamps\n{\n    /** @api */\n    public string \$id = '';\n\n    /** @api */\n    public function touch(): void {}\n}\n");
             file_put_contents($dir . '/Model.php', "<?php\nnamespace {$ns};\n\n/** @api */\nfinal class Model\n{\n    use Stamps { touch as refresh; }\n}\n");
             file_put_contents($dir . '/Override.php', "<?php\nnamespace {$ns};\n\n/**\n *  @api\n */\nfinal class Override\n{\n    use Stamps;\n\n    /** @api */\n    public function touch(): void {}\n}\n");
+
+            file_put_contents($dir . '/Prose.php', "<?php\nnamespace {$ns};\n\n/**\n * Mark it so:\n *\n *     @api\n */\nfinal class Prose\n{\n}\n");
 
             self::assertSame([
                 "{$ns}\\Model",
@@ -176,6 +178,6 @@ final class ApiSurfaceTest extends TestCase
 
     private static function isApi(string|false $doc): bool
     {
-        return $doc !== false && preg_match('/^[ \t]*(?:\*[ \t]*|\/\*\*[ \t]*)@api\b/m', $doc) === 1;
+        return $doc !== false && preg_match('/^[ \t]*(?:\*[ \t]{0,4}|\/\*\*[ \t]{0,4})@api\b/m', $doc) === 1;
     }
 }
