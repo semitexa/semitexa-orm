@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Adapter;
 
+/** @api */
 enum MySqlType: string implements DatabaseType
 {
     case Varchar    = 'varchar';

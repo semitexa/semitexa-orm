@@ -16,6 +16,8 @@ use Attribute;
  * wrote the shared table as if it said 'same_storage'. They are refused now.
  * A database per tenant is a connection setting, not a model's: the
  * connection pool switches on TenantResolved (TenantResolvedConnectionListener).
+ *
+ * @api
  */
 #[Attribute(Attribute::TARGET_CLASS)]
 final readonly class TenantScoped

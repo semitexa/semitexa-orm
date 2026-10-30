@@ -10,6 +10,8 @@ namespace Semitexa\Orm\Adapter;
  * Allows ColumnDefinition and schema-related code to work with
  * database-specific type enums (MySqlType, SqliteType, etc.)
  * in a driver-agnostic way.
+ *
+ * @api
  */
 interface DatabaseType
 {

@@ -14,6 +14,8 @@ namespace Semitexa\Orm\Adapter;
  * type system.
  *
  * @see https://www.sqlite.org/datatype3.html
+ *
+ * @api
  */
 enum SqliteType: string implements DatabaseType
 {

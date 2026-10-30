@@ -11,6 +11,8 @@ use Attribute;
  *
  * This is a semantic alias over the normal worker-scoped service lifecycle,
  * intended for persistence-facing classes.
+ *
+ * @api
  */
 #[Attribute(Attribute::TARGET_CLASS)]
 final class AsRepository

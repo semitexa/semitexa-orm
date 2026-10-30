@@ -52,6 +52,8 @@ namespace Semitexa\Orm\Domain\Contract;
  * Binding a uuid into a hand-written `WHERE` is a different thing and stays
  * correct: a raw query never passes through hydration. It belongs in the
  * repository, not here.
+ *
+ * @api
  */
 interface ResourceModelMapperInterface
 {

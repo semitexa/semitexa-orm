@@ -8,6 +8,8 @@ namespace Semitexa\Orm\Repository;
  * Immutable result of a paginated query.
  *
  * @template TItem of object
+ *
+ * @api
  */
 readonly class PaginatedResult
 {

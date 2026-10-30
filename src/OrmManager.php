@@ -444,6 +444,8 @@ class OrmManager
     /**
      * @param class-string $resourceModelClass
      * @param class-string $domainModelClass
+     *
+     * @api
      */
     public function repository(string $resourceModelClass, string $domainModelClass): DomainRepository
     {
@@ -568,9 +570,7 @@ class OrmManager
         )));
     }
 
-    /**
-     * @return list<string>
-     */
+    /** @return list<string> */
     private function discoverSelfManagedTables(): array
     {
         $tables = [];
