@@ -64,7 +64,28 @@ final class ApiSurfaceTest extends TestCase
             'Semitexa\Orm\Trait\HasTimestamps::$updated_at',
             'Semitexa\Orm\Trait\HasUuidV7',
             'Semitexa\Orm\Trait\HasUuidV7::$id',
-        ], self::marked());
+        ], self::marked(dirname(__DIR__, 3) . '/src', 'Semitexa\\Orm\\'));
+    }
+
+    /**
+     * A trait's members are copied into every class that uses it, and reflection
+     * names that class as their declaring one: a member marked in the trait is
+     * the trait's promise, not one more for each user.
+     */
+    #[Test]
+    public function a_trait_member_is_counted_once_on_the_trait(): void
+    {
+        $dir = sys_get_temp_dir() . '/orm-api-surface-' . bin2hex(random_bytes(4));
+        mkdir($dir);
+        $ns = 'Probe' . bin2hex(random_bytes(4));
+        try {
+            file_put_contents($dir . '/Stamps.php', "<?php\nnamespace {$ns};\n\n/** @api */\ntrait Stamps\n{\n    /** @api */\n    public string \$id = '';\n\n    /** @api */\n    public function touch(): void {}\n}\n");
+            file_put_contents($dir . '/Model.php', "<?php\nnamespace {$ns};\n\n/** @api */\nfinal class Model\n{\n    use Stamps;\n}\n");
+
+            self::assertSame(["{$ns}\\Model", "{$ns}\\Stamps", "{$ns}\\Stamps::\$id", "{$ns}\\Stamps::touch()"], self::marked($dir, $ns . '\\'));
+        } finally {
+            exec('rm -rf ' . escapeshellarg($dir));
+        }
     }
 
     /**
@@ -75,9 +96,8 @@ final class ApiSurfaceTest extends TestCase
      *
      * @return list<string>
      */
-    private static function marked(): array
+    private static function marked(string $src, string $prefix): array
     {
-        $src = dirname(__DIR__, 3) . '/src';
         $found = [];
         $files = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($src, \FilesystemIterator::SKIP_DOTS));
         foreach ($files as $file) {
@@ -89,7 +109,11 @@ final class ApiSurfaceTest extends TestCase
             if (!str_contains($source, '@api')) {
                 continue;
             }
-            $class = 'Semitexa\\Orm\\' . str_replace('/', '\\', substr($file->getPathname(), strlen($src) + 1, -4));
+            $class = $prefix . str_replace('/', '\\', substr($file->getPathname(), strlen($src) + 1, -4));
+            // A probe outside the autoloader is loaded by hand.
+            if (!class_exists($class) && !interface_exists($class) && !trait_exists($class)) {
+                require_once $file->getPathname();
+            }
             if (!class_exists($class) && !interface_exists($class) && !trait_exists($class)) {
                 throw new \RuntimeException($file->getPathname() . ' mentions @api but declares no ' . $class);
             }
@@ -103,8 +127,9 @@ final class ApiSurfaceTest extends TestCase
                 ...array_map(static fn (\ReflectionProperty $p): array => [$p, '$' . $p->getName()], $reflection->getProperties()),
             ];
             foreach ($members as [$member, $name]) {
-                // A trait's members are copied into its users; here only the declaring class-like counts.
-                if ($member->getDeclaringClass()->getName() === $class && self::isApi($member->getDocComment())) {
+                // Inherited members count on their parent; a trait's copies, which reflection
+                // reports as declared here, count on the trait.
+                if ($member->getDeclaringClass()->getName() === $class && !self::fromTrait($reflection, $name) && self::isApi($member->getDocComment())) {
                     $found[] = $class . '::' . $name;
                 }
             }
@@ -112,6 +137,27 @@ final class ApiSurfaceTest extends TestCase
         sort($found);
 
         return $found;
+    }
+
+    /**
+     * Whether a trait used here (or by one of its traits) declares the member `name()`, `NAME` or `$name`.
+     *
+     * @param \ReflectionClass<object> $class
+     */
+    private static function fromTrait(\ReflectionClass $class, string $name): bool
+    {
+        foreach ($class->getTraits() as $trait) {
+            $declared = match (true) {
+                str_ends_with($name, '()') => $trait->hasMethod(substr($name, 0, -2)),
+                str_starts_with($name, '$') => $trait->hasProperty(substr($name, 1)),
+                default => $trait->hasConstant($name),
+            };
+            if ($declared || self::fromTrait($trait, $name)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static function isApi(string|false $doc): bool
