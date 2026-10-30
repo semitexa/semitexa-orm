@@ -8,6 +8,7 @@ final readonly class SystemScopeToken
 {
     private function __construct() {}
 
+    /** @api */
     public static function issue(): self
     {
         return new self();
