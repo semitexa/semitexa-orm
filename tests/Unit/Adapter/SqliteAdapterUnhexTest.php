@@ -6,6 +6,7 @@ namespace Semitexa\Orm\Tests\Unit\Adapter;
 
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
+use Semitexa\Orm\Adapter\QueryResult;
 use Semitexa\Orm\Adapter\SqliteAdapter;
 
 /**
@@ -36,5 +37,29 @@ final class SqliteAdapterUnhexTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('Semitexa ORM requires SQLite 3.41.0+ (built-in UNHEX), got 3.40.1.');
         $check->invoke(null, '3.40.1');
+    }
+
+    /** review: the refused version was kept, so the second call returned it and refused nothing. */
+    #[Test]
+    public function a_refused_version_is_refused_again_not_remembered(): void
+    {
+        $adapter = new class ('sqlite::memory:') extends SqliteAdapter {
+            public function query(string $sql): QueryResult
+            {
+                return new QueryResult([['sqlite_version()' => '3.40.1']]);
+            }
+        };
+
+        $messages = [];
+        foreach ([1, 2] as $attempt) {
+            try {
+                $adapter->getServerVersion();
+                $messages[] = 'no refusal';
+            } catch (\RuntimeException $e) {
+                $messages[] = $e->getMessage();
+            }
+        }
+
+        self::assertSame(array_fill(0, 2, 'Semitexa ORM requires SQLite 3.41.0+ (built-in UNHEX), got 3.40.1.'), $messages);
     }
 }

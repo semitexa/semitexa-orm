@@ -257,13 +257,13 @@ class SqliteAdapter implements DatabaseAdapterInterface
         $raw = $result->rows[0]['sqlite_version()'] ?? null;
         $rawString = is_scalar($raw) ? (string) $raw : '';
 
-        if (preg_match('/^(\d+\.\d+\.\d+)/', $rawString, $matches)) {
-            $this->serverVersion = $matches[1];
-        } else {
+        if (preg_match('/^(\d+\.\d+\.\d+)/', $rawString, $matches) !== 1) {
             throw new \RuntimeException("Unable to parse SQLite server version from: {$rawString}");
         }
-
-        self::assertSupportedVersion($this->serverVersion);
+        // Checked before it is kept: kept first, a refused version was the
+        // answer to every later call, which then refused nothing.
+        self::assertSupportedVersion($matches[1]);
+        $this->serverVersion = $matches[1];
     }
 
     /**
