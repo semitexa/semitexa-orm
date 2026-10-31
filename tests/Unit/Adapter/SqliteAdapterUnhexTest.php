@@ -42,6 +42,16 @@ final class SqliteAdapterUnhexTest extends TestCase
         // As on 3.40: the function is added (replacing the built-in on this connection).
         (new \ReflectionMethod(SqliteAdapter::class, 'addMissingFunctions'))->invoke(null, $pdo, '3.40.1');
 
+        $versionStatement = $pdo->query('SELECT sqlite_version()');
+        self::assertInstanceOf(\PDOStatement::class, $versionStatement);
+        if (!$canAdd && version_compare((string) $versionStatement->fetchColumn(), '3.41.0', '<')) {
+            // Neither a way to add the function nor a built-in one: UNHEX is absent, as the adapter says.
+            $this->expectException(\PDOException::class);
+            $pdo->query("SELECT UNHEX('41')");
+
+            return;
+        }
+
         $statement = $pdo->query("SELECT UNHEX('00ff41') AS bytes, UNHEX('0g') AS bad, UNHEX('abc') AS odd, UNHEX(NULL) AS none, UNHEX('') AS empty, typeof(UNHEX('00ff41')) AS storage");
         self::assertInstanceOf(\PDOStatement::class, $statement);
         $row = $statement->fetch(\PDO::FETCH_ASSOC);
