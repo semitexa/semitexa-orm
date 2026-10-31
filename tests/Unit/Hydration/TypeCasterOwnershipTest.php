@@ -307,10 +307,6 @@ final class TypeCasterOwnershipTest extends TestCase
     #[Test]
     public function two_coroutines_do_not_share_a_column(): void
     {
-        if (!extension_loaded('swoole')) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
-
         $caster = new class () extends TypeCaster {
             public function castToPropertyType(mixed $value, string $phpType, bool $nullable): mixed
             {

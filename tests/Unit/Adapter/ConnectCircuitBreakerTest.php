@@ -196,10 +196,6 @@ final class ConnectCircuitBreakerTest extends TestCase
     #[Test]
     public function coroutine_pool_fails_fast_without_touching_open_connections(): void
     {
-        if (! class_exists(\Swoole\Coroutine::class)) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
-
         $this->dbUp = true;
         $pool = new ConnectionPool(3, $this->breaker()->wrap($this->factory()));
         $errors = [];

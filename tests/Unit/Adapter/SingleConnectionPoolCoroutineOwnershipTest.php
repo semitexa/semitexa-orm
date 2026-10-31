@@ -31,10 +31,6 @@ final class SingleConnectionPoolCoroutineOwnershipTest extends TestCase
 {
     protected function setUp(): void
     {
-        if (!class_exists(Coroutine::class)) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
-
         OwnershipTrackingPdo::reset();
     }
 

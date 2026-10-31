@@ -22,10 +22,6 @@ final class TransactionManagerDiscardDeadConnectionTest extends TestCase
     #[Test]
     public function run_with_retry_does_not_replay_on_the_same_dead_connection(): void
     {
-        if (! class_exists(\Swoole\Coroutine::class)) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
-
         $minted = 0;
         $pool = new ConnectionPool(2, static function () use (&$minted): \PDO {
             $minted++;

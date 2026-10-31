@@ -27,12 +27,6 @@ use Swoole\Coroutine\WaitGroup;
  */
 final class TransactionManagerSqliteSerializationTest extends TestCase
 {
-    protected function setUp(): void
-    {
-        if (!class_exists(Coroutine::class)) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
-    }
 
     #[Test]
     public function concurrent_outer_transactions_serialize_on_the_shared_connection(): void

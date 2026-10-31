@@ -27,10 +27,6 @@ final class TransactionManagerCoroutineIsolationTest extends TestCase
     #[Test]
     public function concurrent_coroutines_get_isolated_transaction_state(): void
     {
-        if (!extension_loaded('swoole')) {
-            self::markTestSkipped('Coroutine isolation requires the Swoole runtime.');
-        }
-
         $pool = new PerPopConnectionPool();
         $manager = new TransactionManager($pool, new NonSqliteAdapter());
 

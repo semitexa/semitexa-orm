@@ -34,10 +34,6 @@ final class PoolSelfHealTest extends TestCase
 
     protected function setUp(): void
     {
-        if (!class_exists(Runtime::class) || !class_exists(Coroutine::class)) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
-
         $this->savedHookFlags = Runtime::getHookFlags();
         self::assertSame(-1, Coroutine::getCid(), 'Precondition: test body must run outside a coroutine.');
     }

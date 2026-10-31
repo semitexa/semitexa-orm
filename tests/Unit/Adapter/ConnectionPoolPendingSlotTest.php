@@ -22,10 +22,6 @@ final class ConnectionPoolPendingSlotTest extends TestCase
     #[Test]
     public function a_slot_claimed_for_a_connection_that_never_opened_is_released(): void
     {
-        if (!class_exists(\Swoole\Coroutine::class)) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
-
         Coroutine\run(function () {
             $entered = new \ArrayObject();
 

@@ -14,10 +14,6 @@ final class ConnectionPoolTest extends TestCase
     #[Test]
     public function it_creates_and_closes_pool(): void
     {
-        if (!class_exists(\Swoole\Coroutine::class)) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
-
         Coroutine\run(function () {
             $created = 0;
             $pool = new ConnectionPool(2, static function () use (&$created): \PDO {
@@ -50,9 +46,6 @@ final class ConnectionPoolTest extends TestCase
     #[Test]
     public function pop_and_push_work_outside_a_coroutine(): void
     {
-        if (!class_exists(\Swoole\Coroutine::class)) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
         // The case the Swoole server never hits but CLI / phpunit do: hooks may be
         // globally enabled (by a prior test) yet no coroutine is active. Channel
         // ops fatal here ("API must be called in the coroutine"), bypassing
@@ -83,10 +76,6 @@ final class ConnectionPoolTest extends TestCase
     #[Test]
     public function it_skips_channel_ops_during_shutdown(): void
     {
-        if (!class_exists(\Swoole\Coroutine::class)) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
-
         Coroutine\run(function () {
             $pool = new ConnectionPool(1, static function (): \PDO {
                 return new \PDO('sqlite::memory:');
@@ -113,10 +102,6 @@ final class ConnectionPoolTest extends TestCase
     #[Test]
     public function it_resets_state_even_on_cleanup_error(): void
     {
-        if (!class_exists(\Swoole\Coroutine::class)) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
-
         Coroutine\run(function () {
             $pool = new ConnectionPool(1, static function (): \PDO {
                 return new \PDO('sqlite::memory:');
@@ -142,10 +127,6 @@ final class ConnectionPoolTest extends TestCase
     #[Test]
     public function pop_releases_the_claimed_slot_when_the_factory_throws(): void
     {
-        if (!class_exists(\Swoole\Coroutine::class)) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
-
         Coroutine\run(function () {
             $fail = true;
             $pool = new ConnectionPool(1, static function () use (&$fail): \PDO {
@@ -194,10 +175,6 @@ final class ConnectionPoolTest extends TestCase
     #[Test]
     public function ensure_alive_releases_the_slot_when_the_reconnect_fails(): void
     {
-        if (!class_exists(\Swoole\Coroutine::class)) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
-
         Coroutine\run(function () {
             // 'stale' → a connection whose SELECT 1 throws (simulating a socket
             // dropped by MySQL wait_timeout); 'fail' → the reconnect itself
@@ -266,10 +243,6 @@ final class ConnectionPoolTest extends TestCase
     #[Test]
     public function fill_releases_the_claimed_slot_when_the_factory_throws(): void
     {
-        if (!class_exists(\Swoole\Coroutine::class)) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
-
         Coroutine\run(function () {
             $calls = 0;
             $pool = new ConnectionPool(3, static function () use (&$calls): \PDO {
@@ -302,10 +275,6 @@ final class ConnectionPoolTest extends TestCase
     #[Test]
     public function a_parked_waiter_creates_a_connection_once_a_slot_frees(): void
     {
-        if (!class_exists(\Swoole\Coroutine::class)) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
-
         Coroutine\run(function () {
             $created = 0;
             $pool = new ConnectionPool(1, static function () use (&$created): \PDO {
@@ -353,10 +322,6 @@ final class ConnectionPoolTest extends TestCase
     #[Test]
     public function push_outside_a_coroutine_releases_the_slot_a_pooled_connection_holds(): void
     {
-        if (!class_exists(\Swoole\Coroutine::class)) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
-
         $pool = null;
         $borrowed = null;
 
@@ -396,10 +361,6 @@ final class ConnectionPoolTest extends TestCase
     #[Test]
     public function push_outside_a_coroutine_keeps_the_count_for_a_connection_that_never_claimed_a_slot(): void
     {
-        if (!class_exists(\Swoole\Coroutine::class)) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
-
         $pool = null;
 
         Coroutine\run(function () use (&$pool) {
@@ -428,10 +389,6 @@ final class ConnectionPoolTest extends TestCase
     #[Test]
     public function a_pool_inherited_across_a_fork_starts_its_own_accounting(): void
     {
-        if (!class_exists(\Swoole\Coroutine::class)) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
-
         Coroutine\run(function () {
             $pool = new ConnectionPool(2, static fn (): \PDO => new \PDO('sqlite::memory:'));
             // Held at the same time on purpose: popping and pushing in turn
@@ -482,10 +439,6 @@ final class ConnectionPoolTest extends TestCase
     #[Test]
     public function an_exhausted_pool_raises_instead_of_parking(): void
     {
-        if (!class_exists(\Swoole\Coroutine::class)) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
-
         Coroutine\run(function () {
             $pool = new ConnectionPool(1, static fn (): \PDO => new \PDO('sqlite::memory:'));
             $pool->pop(); // the only slot, never returned
