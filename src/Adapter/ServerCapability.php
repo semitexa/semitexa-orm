@@ -39,7 +39,7 @@ enum ServerCapability: string
      * Whether this capability is supported by SQLite.
      *
      * SQLite support varies by version. This reflects capabilities
-     * available in SQLite 3.38.0+ (widely available as of 2024).
+     * available in SQLite 3.41.0+, the minimum the SQLite adapter takes.
      */
     public function isSupportedBySqlite(): bool
     {
