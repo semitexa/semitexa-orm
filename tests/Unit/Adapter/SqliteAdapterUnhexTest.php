@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Tests\Unit\Adapter;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Semitexa\Orm\Adapter\SqliteAdapter;
@@ -14,11 +15,26 @@ use Semitexa\Orm\Adapter\SqliteAdapter;
  */
 final class SqliteAdapterUnhexTest extends TestCase
 {
-    #[Test]
-    public function an_older_sqlite_gets_an_unhex_that_answers_as_the_built_in_one(): void
+    /**
+     * Pdo\Sqlite where PDO::connect() gives it; a plain PDO from `new PDO`, and
+     * from PDO::connect() on builds that do not (the stack smoke's setup-php
+     * PHP 8.4.27, 30.10), where the function was silently not added.
+     *
+     * @return iterable<string, array{bool}>
+     */
+    public static function connections(): iterable
     {
-        $pdo = \PDO::connect('sqlite::memory:');
-        self::assertInstanceOf(\Pdo\Sqlite::class, $pdo);
+        yield 'PDO::connect' => [true];
+        yield 'a plain PDO' => [false];
+    }
+
+    #[Test]
+    #[DataProvider('connections')]
+    public function an_older_sqlite_gets_an_unhex_that_answers_as_the_built_in_one(bool $viaConnect): void
+    {
+        // verify:accept-test-change the Pdo\Sqlite assertion was the assumption a plain-PDO build broke; both kinds now run
+        /** @var \PDO $pdo the driver subclass or not, which is the point */
+        $pdo = $viaConnect ? \PDO::connect('sqlite::memory:') : new \PDO('sqlite::memory:');
         // As on 3.40: the function is added (replacing the built-in on this connection).
         (new \ReflectionMethod(SqliteAdapter::class, 'addMissingFunctions'))->invoke(null, $pdo, '3.40.1');
 
