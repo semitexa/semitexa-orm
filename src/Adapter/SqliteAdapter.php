@@ -283,9 +283,15 @@ class SqliteAdapter implements DatabaseAdapterInterface
 
             return;
         }
-        // A build whose PDO::connect() gives a plain PDO (setup-php's 8.4.27 did)
-        // skipped the function; the driver's own method on PDO still adds it.
-        $pdo->sqliteCreateFunction('UNHEX', $unhex, 1, \PDO::SQLITE_DETERMINISTIC);
+        // A plain PDO has the driver's method on most builds. Not on every one:
+        // setup-php's 8.4.27 gives a plain PDO from PDO::connect() and has
+        // neither, and calling it threw where the old early return was silent
+        // (stack smoke, 31.10). There nothing can add the function, and SQLite
+        // 3.38-3.40 stays without UNHEX, as before.
+        // @phpstan-ignore function.alreadyNarrowedType (the stubs say always; the setup-php build said no)
+        if (method_exists($pdo, 'sqliteCreateFunction')) {
+            $pdo->sqliteCreateFunction('UNHEX', $unhex, 1, \PDO::SQLITE_DETERMINISTIC);
+        }
     }
 
     private function detectVersion(): void

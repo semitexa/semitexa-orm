@@ -35,6 +35,10 @@ final class SqliteAdapterUnhexTest extends TestCase
         // verify:accept-test-change the Pdo\Sqlite assertion was the assumption a plain-PDO build broke; both kinds now run
         /** @var \PDO $pdo the driver subclass or not, which is the point */
         $pdo = $viaConnect ? \PDO::connect('sqlite::memory:') : new \PDO('sqlite::memory:');
+        // A build with neither driver method (setup-php's 8.4.27) cannot add it:
+        // there the call must not throw, and the built-in answers.
+        // @phpstan-ignore function.alreadyNarrowedType (the stubs say always; the setup-php build said no)
+        $canAdd = $pdo instanceof \Pdo\Sqlite || method_exists($pdo, 'sqliteCreateFunction');
         // As on 3.40: the function is added (replacing the built-in on this connection).
         (new \ReflectionMethod(SqliteAdapter::class, 'addMissingFunctions'))->invoke(null, $pdo, '3.40.1');
 
@@ -49,7 +53,7 @@ final class SqliteAdapterUnhexTest extends TestCase
         self::assertNull($row['none']);
         self::assertSame('', $row['empty']);
         // The built-in answers a blob; a PHP function cannot (see addMissingFunctions()).
-        self::assertSame('text', $row['storage']);
+        self::assertSame($canAdd ? 'text' : 'blob', $row['storage']);
     }
 
     #[Test]
