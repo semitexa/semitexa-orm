@@ -248,50 +248,7 @@ class SqliteAdapter implements DatabaseAdapterInterface
             }
         }
 
-        $version = $pdo->query('SELECT sqlite_version()');
-        self::addMissingFunctions($pdo, $version === false ? '' : (string) $version->fetchColumn());
-
         return $pdo;
-    }
-
-    /**
-     * UNHEX() came with SQLite 3.41, and this adapter takes 3.38: on 3.38–3.40
-     * the database queue transport failed every claim with "no such function".
-     * Added as a PHP function there, answering as the built-in one does,
-     * but as TEXT, not a BLOB: the bytes match, yet SQLite never finds a BLOB
-     * equal to TEXT, so rows written while it was in use do not match
-     * UNHEX() once SQLite is 3.41 or later, nor rows a 3.41+ process wrote
-     * match it. A PHP function cannot answer a BLOB (pdo_sqlite returns every
-     * string as TEXT). Drain the database queue before upgrading SQLite past
-     * 3.40, and never share one database file between processes on both sides.
-     */
-    private static function addMissingFunctions(\PDO $pdo, string $version): void
-    {
-        if ($version === '' || version_compare($version, '3.41.0', '>=')) {
-            return;
-        }
-        $unhex = static function (mixed $hex): ?string {
-            if (!is_scalar($hex)) {
-                return null;
-            }
-            $hex = (string) $hex;
-
-            return strlen($hex) % 2 === 0 && preg_match('/\A[0-9a-fA-F]*\z/', $hex) === 1 ? (string) hex2bin($hex) : null;
-        };
-        if ($pdo instanceof \Pdo\Sqlite) {
-            $pdo->createFunction('UNHEX', $unhex, 1, \Pdo\Sqlite::DETERMINISTIC);
-
-            return;
-        }
-        // A plain PDO has the driver's method on most builds. Not on every one:
-        // setup-php's 8.4.27 gives a plain PDO from PDO::connect() and has
-        // neither, and calling it threw where the old early return was silent
-        // (stack smoke, 31.10). There nothing can add the function, and SQLite
-        // 3.38-3.40 stays without UNHEX, as before.
-        // @phpstan-ignore function.alreadyNarrowedType (the stubs say always; the setup-php build said no)
-        if (method_exists($pdo, 'sqliteCreateFunction')) {
-            $pdo->sqliteCreateFunction('UNHEX', $unhex, 1, \PDO::SQLITE_DETERMINISTIC);
-        }
     }
 
     private function detectVersion(): void
@@ -306,8 +263,20 @@ class SqliteAdapter implements DatabaseAdapterInterface
             throw new \RuntimeException("Unable to parse SQLite server version from: {$rawString}");
         }
 
-        if (version_compare($this->serverVersion, '3.38.0', '<')) {
-            throw new \RuntimeException("Semitexa ORM requires SQLite 3.38.0+, got {$this->serverVersion}.");
+        self::assertSupportedVersion($this->serverVersion);
+    }
+
+    /**
+     * 3.41 and later: UNHEX() is built in there, and the database queue
+     * transport claims with it. The image ships 3.53. Taking 3.38 meant a PHP
+     * stand-in for UNHEX on 3.38-3.40 that answered TEXT where the built-in
+     * answers a BLOB, so rows written on one side never matched on the other;
+     * the runtime we ship never needed it.
+     */
+    private static function assertSupportedVersion(string $version): void
+    {
+        if (version_compare($version, '3.41.0', '<')) {
+            throw new \RuntimeException("Semitexa ORM requires SQLite 3.41.0+ (built-in UNHEX), got {$version}.");
         }
     }
 }
