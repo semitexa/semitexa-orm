@@ -29,10 +29,6 @@ final class CreatePoolGateTest extends TestCase
 
     protected function setUp(): void
     {
-        if (!class_exists(Runtime::class) || !class_exists(Coroutine::class)) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
-
         // PHPUnit runs as a plain CLI process (no Swoole server), so hooks default to OFF and
         // we are not inside a coroutine. Snapshot the flags so we can restore them afterwards.
         $this->savedHookFlags = Runtime::getHookFlags();

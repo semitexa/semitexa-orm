@@ -71,9 +71,6 @@ final class QueryAdapterJoinsTransactionTest extends TestCase
     {
         // The case that matters: a real pool, where getAdapter() takes a
         // second connection. Without the change both writes would survive.
-        if (!class_exists(\Swoole\Coroutine::class)) {
-            self::markTestSkipped('needs Swoole');
-        }
         $outcome = null;
         \Swoole\Runtime::enableCoroutine(SWOOLE_HOOK_ALL);
         try {

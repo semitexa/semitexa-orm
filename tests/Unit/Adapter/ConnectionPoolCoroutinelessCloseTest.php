@@ -34,9 +34,6 @@ final class ConnectionPoolCoroutinelessCloseTest extends TestCase
 {
     protected function setUp(): void
     {
-        if (!class_exists(Coroutine::class)) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
         if (Coroutine::getCid() >= 0) {
             self::markTestSkipped('This regression is specifically about the coroutineless context.');
         }

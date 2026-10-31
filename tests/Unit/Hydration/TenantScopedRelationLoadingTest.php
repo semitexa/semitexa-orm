@@ -187,9 +187,6 @@ final class TenantScopedRelationLoadingTest extends TestCase
     #[Test]
     public function overlapping_coroutines_keep_scope_through_the_next_relation(): void
     {
-        if (!extension_loaded('swoole')) {
-            self::markTestSkipped('Requires Swoole.');
-        }
         $results = [];
         $errors = [];
         \Swoole\Coroutine\run(function () use (&$results, &$errors): void {

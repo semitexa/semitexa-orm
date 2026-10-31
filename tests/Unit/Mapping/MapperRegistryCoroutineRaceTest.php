@@ -35,9 +35,6 @@ final class MapperRegistryCoroutineRaceTest extends TestCase
 {
     protected function setUp(): void
     {
-        if (!class_exists(Coroutine::class)) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
         self::assertSame(-1, Coroutine::getCid(), 'Precondition: test body must run outside a coroutine.');
     }
 

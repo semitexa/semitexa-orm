@@ -41,10 +41,6 @@ final class EphemeralConnectionStatementCacheTest extends TestCase
     #[Test]
     public function connection_pool_marks_slotless_connections_ephemeral(): void
     {
-        if (!class_exists(\Swoole\Coroutine::class)) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
-
         Coroutine\run(function () {
             $pool = new ConnectionPool(1, static fn (): \PDO => new \PDO('sqlite::memory:'));
 

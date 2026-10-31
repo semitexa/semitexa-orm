@@ -20,10 +20,6 @@ final class ConnectionPoolIdlePingTest extends TestCase
     #[Test]
     public function a_hot_connection_is_served_without_a_ping(): void
     {
-        if (!class_exists(\Swoole\Coroutine::class)) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
-
         Coroutine\run(function () {
             $pool = new ConnectionPool(1, static fn (): \PDO => new PingCountingPdo());
 
@@ -44,10 +40,6 @@ final class ConnectionPoolIdlePingTest extends TestCase
     #[Test]
     public function a_connection_idle_past_the_threshold_is_pinged(): void
     {
-        if (!class_exists(\Swoole\Coroutine::class)) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
-
         Coroutine\run(function () {
             $pool = new ConnectionPool(1, static fn (): \PDO => new PingCountingPdo());
 
@@ -72,10 +64,6 @@ final class ConnectionPoolIdlePingTest extends TestCase
     #[Test]
     public function fill_warms_only_up_to_the_requested_target(): void
     {
-        if (!class_exists(\Swoole\Coroutine::class)) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
-
         Coroutine\run(function () {
             $minted = 0;
             $pool = new ConnectionPool(3, static function () use (&$minted): \PDO {

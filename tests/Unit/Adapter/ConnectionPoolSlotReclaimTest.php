@@ -23,10 +23,6 @@ final class ConnectionPoolSlotReclaimTest extends TestCase
     #[Test]
     public function a_connection_abandoned_by_a_dying_coroutine_returns_to_the_pool(): void
     {
-        if (!class_exists(\Swoole\Coroutine::class)) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
-
         Coroutine\run(function () {
             $minted = 0;
             $pool = new ConnectionPool(1, static function () use (&$minted): \PDO {
@@ -69,10 +65,6 @@ final class ConnectionPoolSlotReclaimTest extends TestCase
     #[Test]
     public function a_connection_abandoned_mid_transaction_comes_back_clean(): void
     {
-        if (!class_exists(\Swoole\Coroutine::class)) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
-
         Coroutine\run(function () {
             $pool = new ConnectionPool(1, static fn (): \PDO => new \PDO('sqlite::memory:'));
 
@@ -104,10 +96,6 @@ final class ConnectionPoolSlotReclaimTest extends TestCase
     #[Test]
     public function the_normal_pop_push_cycle_is_not_disturbed_by_the_reclaim_defer(): void
     {
-        if (!class_exists(\Swoole\Coroutine::class)) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
-
         Coroutine\run(function () {
             $pool = new ConnectionPool(2, static fn (): \PDO => new \PDO('sqlite::memory:'));
 

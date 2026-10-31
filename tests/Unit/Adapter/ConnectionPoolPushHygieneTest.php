@@ -22,10 +22,6 @@ final class ConnectionPoolPushHygieneTest extends TestCase
     #[Test]
     public function a_pushed_connection_with_an_open_transaction_is_rolled_back(): void
     {
-        if (!class_exists(\Swoole\Coroutine::class)) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
-
         Coroutine\run(function () {
             $pool = new ConnectionPool(1, static fn (): \PDO => new \PDO('sqlite::memory:'));
 
@@ -51,10 +47,6 @@ final class ConnectionPoolPushHygieneTest extends TestCase
     #[Test]
     public function a_connection_whose_rollback_fails_is_discarded_not_requeued(): void
     {
-        if (!class_exists(\Swoole\Coroutine::class)) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
-
         Coroutine\run(function () {
             $minted = 0;
             $pool = new ConnectionPool(1, static function () use (&$minted): \PDO {

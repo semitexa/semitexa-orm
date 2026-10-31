@@ -28,10 +28,6 @@ final class PoolSwapBorrowGuardTest extends TestCase
 
     protected function setUp(): void
     {
-        if (!class_exists(Runtime::class) || !class_exists(Coroutine::class)) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
-
         $this->savedHookFlags = Runtime::getHookFlags();
     }
 
