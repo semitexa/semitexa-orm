@@ -267,22 +267,25 @@ class SqliteAdapter implements DatabaseAdapterInterface
      */
     private static function addMissingFunctions(\PDO $pdo, string $version): void
     {
-        if ($version === '' || version_compare($version, '3.41.0', '>=') || !$pdo instanceof \Pdo\Sqlite) {
+        if ($version === '' || version_compare($version, '3.41.0', '>=')) {
             return;
         }
-        $pdo->createFunction(
-            'UNHEX',
-            static function (mixed $hex): ?string {
-                if (!is_scalar($hex)) {
-                    return null;
-                }
-                $hex = (string) $hex;
+        $unhex = static function (mixed $hex): ?string {
+            if (!is_scalar($hex)) {
+                return null;
+            }
+            $hex = (string) $hex;
 
-                return strlen($hex) % 2 === 0 && preg_match('/\A[0-9a-fA-F]*\z/', $hex) === 1 ? (string) hex2bin($hex) : null;
-            },
-            1,
-            \Pdo\Sqlite::DETERMINISTIC,
-        );
+            return strlen($hex) % 2 === 0 && preg_match('/\A[0-9a-fA-F]*\z/', $hex) === 1 ? (string) hex2bin($hex) : null;
+        };
+        if ($pdo instanceof \Pdo\Sqlite) {
+            $pdo->createFunction('UNHEX', $unhex, 1, \Pdo\Sqlite::DETERMINISTIC);
+
+            return;
+        }
+        // A build whose PDO::connect() gives a plain PDO (setup-php's 8.4.27 did)
+        // skipped the function; the driver's own method on PDO still adds it.
+        $pdo->sqliteCreateFunction('UNHEX', $unhex, 1, \PDO::SQLITE_DETERMINISTIC);
     }
 
     private function detectVersion(): void
