@@ -37,15 +37,24 @@ final class QueryAdapterJoinsTransactionTest extends TestCase
     {
         $orm = self::mysqlOrm('the test is about InnoDB');
 
+        // Dropped only once set up: a setup that failed on a table already
+        // there must not take that table with it.
+        $setUp = false;
         try {
             $orm->getAdapter()->execute('CREATE TABLE IF NOT EXISTS qa_probe_tx (id INT AUTO_INCREMENT PRIMARY KEY, v VARCHAR(16)) ENGINE=InnoDB');
             $orm->getAdapter()->execute('DELETE FROM qa_probe_tx');
+            $setUp = true;
             $this->rollBackAWrite($orm, 'qa_probe_tx');
             self::assertSame([], $orm->getAdapter()->execute('SELECT v FROM qa_probe_tx')->rows, 'the joined write rolled back');
 
         } finally {
-            $orm->getAdapter()->execute('DROP TABLE IF EXISTS qa_probe_tx');
-            $orm->shutdown();
+            try {
+                if ($setUp) {
+                    $orm->getAdapter()->execute('DROP TABLE IF EXISTS qa_probe_tx');
+                }
+            } finally {
+                $orm->shutdown();
+            }
         }
     }
 
@@ -75,9 +84,11 @@ final class QueryAdapterJoinsTransactionTest extends TestCase
         try {
             \Swoole\Coroutine\run(function () use (&$outcome, &$failure): void {
                 $orm = new OrmManager();
+                $setUp = false;
                 try {
                     $orm->getQueryAdapter()->execute('CREATE TABLE IF NOT EXISTS qa_probe_pool (id INT AUTO_INCREMENT PRIMARY KEY, v VARCHAR(16)) ENGINE=InnoDB');
                     $orm->getQueryAdapter()->execute('DELETE FROM qa_probe_pool');
+                    $setUp = true;
                     try {
                         $orm->getTransactionManager()->run(static function () use ($orm): void {
                             $orm->getQueryAdapter()->execute("INSERT INTO qa_probe_pool (v) VALUES ('joined')");
@@ -90,8 +101,15 @@ final class QueryAdapterJoinsTransactionTest extends TestCase
                 } catch (\Throwable $e) {
                     $failure = $e;
                 } finally {
+                    // The first error is the one the test reports: a cleanup
+                    // that fails after it must not replace it, nor escape the
+                    // coroutine.
                     try {
-                        $orm->getQueryAdapter()->execute('DROP TABLE IF EXISTS qa_probe_pool');
+                        if ($setUp) {
+                            $orm->getQueryAdapter()->execute('DROP TABLE IF EXISTS qa_probe_pool');
+                        }
+                    } catch (\Throwable $e) {
+                        $failure ??= $e;
                     } finally {
                         $orm->shutdown();
                     }
