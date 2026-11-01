@@ -236,4 +236,80 @@ final class DeleteQueryTest extends TestCase
         }
         self::assertCount(2, $statements);
     }
+
+    #[Test]
+    public function a_delete_says_how_many_rows_it_took(): void
+    {
+        self::assertSame(2, (new DeleteQuery('widget', $this->adapter))->where('owner_id', '=', 'alice')->executeWhere());
+        self::assertSame(0, (new DeleteQuery('widget', $this->adapter))->where('owner_id', '=', 'nobody')->executeWhere());
+        self::assertSame(1, (new DeleteQuery('widget', $this->adapter))->execute('id', 3));
+    }
+
+    /** SQLite has no DELETE ... LIMIT in this build: the rows go through rowid. */
+    #[Test]
+    public function a_limited_delete_purges_in_batches_until_less_than_a_batch_is_left(): void
+    {
+        $batches = [];
+        do {
+            $deleted = (new DeleteQuery('widget', $this->adapter))->where('id', '>', 0)->limit(2)->executeWhere();
+            $batches[] = $deleted;
+        } while ($deleted === 2);
+
+        self::assertSame([2, 1], $batches);
+        self::assertSame([], $this->remainingIds());
+    }
+
+    #[Test]
+    public function a_limit_takes_at_least_one_row(): void
+    {
+        $this->expectExceptionMessage('limit() takes at least one row.');
+        (new DeleteQuery('widget', $this->adapter))->limit(0);
+    }
+
+    #[Test]
+    public function execute_keeps_the_builder_s_limit(): void
+    {
+        self::assertSame(1, (new DeleteQuery('widget', $this->adapter))->limit(1)->execute('owner_id', 'alice'));
+        self::assertCount(2, $this->remainingIds());
+    }
+
+    /** Where the server has DELETE ... LIMIT (MySQL), the statement is the plain one. */
+    #[Test]
+    public function on_a_server_with_delete_limit_the_limit_is_native(): void
+    {
+        $recording = new class implements DatabaseAdapterInterface {
+            /** @var list<string> */
+            public array $sql = [];
+
+            public function supports(\Semitexa\Orm\Adapter\ServerCapability $capability): bool
+            {
+                return $capability === \Semitexa\Orm\Adapter\ServerCapability::DeleteLimit;
+            }
+
+            public function getServerVersion(): string
+            {
+                return '8.0.40';
+            }
+
+            public function execute(string $sql, array $params = []): \Semitexa\Orm\Adapter\QueryResult
+            {
+                $this->sql[] = $sql;
+
+                return new \Semitexa\Orm\Adapter\QueryResult(rows: [], rowCount: 3, lastInsertId: '0');
+            }
+
+            public function query(string $sql): \Semitexa\Orm\Adapter\QueryResult
+            {
+                return $this->execute($sql);
+            }
+
+            public function lastInsertId(): string
+            {
+                return '0';
+            }
+        };
+
+        self::assertSame(3, (new DeleteQuery('widget', $recording))->where('owner_id', '=', 'alice')->limit(500)->executeWhere());
+        self::assertSame(['DELETE FROM `widget` WHERE `owner_id` = :p_owner_id_1 LIMIT 500'], $recording->sql);
+    }
 }

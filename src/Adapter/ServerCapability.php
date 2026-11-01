@@ -14,6 +14,7 @@ enum ServerCapability: string
     case WindowFunctions = 'window_func';
     case DescendingIndexes = 'desc_index';
     case LockingReads = 'locking_reads';
+    case DeleteLimit = 'delete_limit';
 
     /**
      * Minimum MySQL version required for each capability.
@@ -32,6 +33,7 @@ enum ServerCapability: string
             self::WindowFunctions->value    => '8.0.0',
             self::DescendingIndexes->value  => '8.0.0',
             self::LockingReads->value        => '8.0.0',
+            self::DeleteLimit->value         => '8.0.0',
         ];
     }
 
@@ -52,6 +54,7 @@ enum ServerCapability: string
             self::WindowFunctions => true,    // Supported since 3.25.0
             self::DescendingIndexes => true,  // Supported (but ignored until 3.30.0, works since)
             self::LockingReads => false,       // SQLite has no SELECT ... FOR UPDATE
+            self::DeleteLimit => false,        // DELETE ... LIMIT needs SQLITE_ENABLE_UPDATE_DELETE_LIMIT, which the image's build lacks
         };
     }
 }
