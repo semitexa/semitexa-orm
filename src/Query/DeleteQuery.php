@@ -12,7 +12,7 @@ class DeleteQuery implements WhereCapableInterface
 {
     use WhereTrait;
 
-    /** @var list<array<string, mixed>> staged WHERE conditions, in order */
+    /** @var list<WhereCondition> staged WHERE conditions, in order */
     private array $wheres = [];
 
     /** @var array<string, mixed> */
@@ -104,7 +104,7 @@ class DeleteQuery implements WhereCapableInterface
     private function rowIdName(): string
     {
         $declared = array_map(
-            static fn (array $column): string => strtolower((string) ($column['name'] ?? '')),
+            static fn (array $column): string => is_string($column['name'] ?? null) ? strtolower($column['name']) : '',
             // table_xinfo, not table_info: a generated column called rowid is hidden from the latter.
             $this->adapter->query('PRAGMA table_xinfo(' . $this->quotedTable() . ')')->rows,
         );
