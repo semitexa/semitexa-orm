@@ -290,15 +290,16 @@ class MysqlAdapter implements DatabaseAdapterInterface
         $raw = $result->fetchColumn();
 
         // Parse version string — MySQL returns e.g. "8.0.35" or "8.0.35-0ubuntu0.22.04.1"
-        if (preg_match('/^(\d+\.\d+\.\d+)/', (string) $raw, $matches)) {
-            $this->serverVersion = $matches[1];
-        } else {
+        if (preg_match('/^(\d+\.\d+\.\d+)/', (string) $raw, $matches) !== 1) {
             throw new \RuntimeException("Unable to parse MySQL server version from: {$raw}");
         }
-
-        if (version_compare($this->serverVersion, '8.0.0', '<')) {
-            throw new \RuntimeException("Semitexa ORM requires MySQL 8.0+, got {$this->serverVersion}.");
+        // Checked before it is kept, as SqliteAdapter does: kept first, a
+        // refused 5.7 was the answer to every later call, so supports() said
+        // "no LockingReads" and a forUpdate() read ran without FOR UPDATE.
+        if (version_compare($matches[1], '8.0.0', '<')) {
+            throw new \RuntimeException("Semitexa ORM requires MySQL 8.0+, got {$matches[1]}.");
         }
+        $this->serverVersion = $matches[1];
     }
 
     private function preparedStatement(\PDO $connection, string $sql): \PDOStatement

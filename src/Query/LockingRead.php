@@ -20,7 +20,13 @@ use Semitexa\Orm\Application\Service\Transaction\TransactionAwareAdapter;
  * which is how two guests were once sold the same nights; it is refused at
  * fetch time rather than run as a plain read.
  *
- * On MySQL the read is SELECT … FOR UPDATE. SQLite has no row locks and none
+ * On MySQL the read is SELECT … FOR UPDATE. Rows it finds are locked at any
+ * isolation level. A probe that finds NOTHING ("no booking for this night
+ * yet") is held only by InnoDB's gap lock, which exists under REPEATABLE READ
+ * (MySQL's default, and what the ORM leaves in place) and SERIALIZABLE; under
+ * READ COMMITTED a concurrent insert of the same key is not blocked, and only
+ * a unique key on what may not be written twice stops the second write.
+ * SQLite has no row locks and none
  * is added: its transactions serialize writers, so the second of two racing
  * check-then-writes fails to commit instead of writing twice. It applies to
  * fetchAll()/fetchOne()/fetch*As() and exists(); an aggregate or a page of a

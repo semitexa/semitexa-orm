@@ -71,6 +71,18 @@ final class ForUpdateLockTest extends TestCase
         self::assertSame('got it', $plainRead, 'a plain read inside a transaction locks nothing');
     }
 
+    #[Test]
+    public function an_exists_probe_with_for_update_locks_the_row_it_found(): void
+    {
+        $whileLocked = $this->orm->getTransactionManager()->run(function (): string {
+            self::assertTrue($this->orm->query(BookedNightResourceModel::class)->where(BookedNightResourceModel::column('id'), Operator::Equals, 'n1')->forUpdate()->exists());
+
+            return $this->otherAsksForTheRow();
+        });
+
+        self::assertSame('refused: 3572', $whileLocked, 'exists() under forUpdate() holds the row it found');
+    }
+
     /** The other session's SELECT … FOR UPDATE NOWAIT on the same row: 3572 is ER_LOCK_NOWAIT. */
     private function otherAsksForTheRow(): string
     {
