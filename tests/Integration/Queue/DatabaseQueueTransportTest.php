@@ -11,6 +11,7 @@ use Semitexa\Core\Queue\QueueStopSignals;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Application\Service\Queue\DatabaseQueueTransport;
 use Semitexa\Orm\OrmManager;
+use Semitexa\Orm\Tests\Support\RequiresDatabase;
 
 /**
  * Claim-lease semantics of the broker-less 'database' transport against a
@@ -18,18 +19,15 @@ use Semitexa\Orm\OrmManager;
  */
 final class DatabaseQueueTransportTest extends TestCase
 {
+    use RequiresDatabase;
+
     private DatabaseAdapterInterface $adapter;
     private DatabaseQueueTransport $transport;
     private string $queue;
 
     protected function setUp(): void
     {
-        try {
-            $this->adapter = new OrmManager()->getAdapter();
-            $this->adapter->execute('SELECT 1');
-        } catch (\Throwable $e) {
-            self::markTestSkipped('Database unavailable: ' . $e->getMessage());
-        }
+        $this->adapter = self::configuredOrm()->getAdapter();
 
         $this->adapter->execute(
             'CREATE TABLE IF NOT EXISTS queue_messages (

@@ -10,6 +10,7 @@ use Semitexa\Orm\Application\Service\Sync\SchemaSyncLock;
 use Semitexa\Orm\Exception\SchemaSyncLockLostException;
 use Semitexa\Orm\Exception\SchemaSyncLockTimeoutException;
 use Semitexa\Orm\OrmManager;
+use Semitexa\Orm\Tests\Support\RequiresDatabase;
 
 /**
  * Two nodes deploying at once must not both diff, plan and run the same DDL.
@@ -17,6 +18,8 @@ use Semitexa\Orm\OrmManager;
  */
 final class SchemaSyncLockTest extends TestCase
 {
+    use RequiresDatabase;
+
     private OrmManager $orm;
     private OrmManager $otherNode;
     /** The other node's session, held for the whole test like SchemaSyncLock holds its own. */
@@ -25,15 +28,7 @@ final class SchemaSyncLockTest extends TestCase
 
     protected function setUp(): void
     {
-        try {
-            $this->orm = new OrmManager();
-            if ($this->orm->getDriver() !== 'mysql') {
-                throw new \RuntimeException('the schema lock is MySQL-only');
-            }
-            $this->orm->getAdapter()->query('SELECT 1');
-        } catch (\Throwable $e) {
-            self::markTestSkipped('MySQL unavailable: ' . $e->getMessage());
-        }
+        $this->orm = self::mysqlOrm('the schema lock is MySQL-only');
 
         // A named lock belongs to a session. Going through the adapter would
         // return the connection to the pool after each statement — under a

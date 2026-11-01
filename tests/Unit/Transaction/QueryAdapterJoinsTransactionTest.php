@@ -8,6 +8,7 @@ use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Semitexa\Orm\Domain\Model\ConnectionConfig;
 use Semitexa\Orm\OrmManager;
+use Semitexa\Orm\Tests\Support\RequiresDatabase;
 
 /**
  * Raw SQL in package stores went through getAdapter(), which under Swoole's
@@ -18,6 +19,8 @@ use Semitexa\Orm\OrmManager;
  */
 final class QueryAdapterJoinsTransactionTest extends TestCase
 {
+    use RequiresDatabase;
+
     #[Test]
     public function a_raw_write_through_the_query_adapter_rolls_back_with_the_transaction(): void
     {
@@ -32,18 +35,11 @@ final class QueryAdapterJoinsTransactionTest extends TestCase
     #[Test]
     public function on_mysql_a_raw_write_through_the_query_adapter_rolls_back_too(): void
     {
-        try {
-            $orm = new OrmManager();
-            if ($orm->getDriver() !== 'mysql') {
-                self::markTestSkipped('not MySQL');
-            }
-            $orm->getAdapter()->execute('CREATE TABLE IF NOT EXISTS qa_probe_tx (id INT AUTO_INCREMENT PRIMARY KEY, v VARCHAR(16)) ENGINE=InnoDB');
-            $orm->getAdapter()->execute('DELETE FROM qa_probe_tx');
-        } catch (\Throwable $e) {
-            self::markTestSkipped('MySQL unavailable: ' . $e->getMessage());
-        }
+        $orm = self::mysqlOrm('the test is about InnoDB');
 
         try {
+            $orm->getAdapter()->execute('CREATE TABLE IF NOT EXISTS qa_probe_tx (id INT AUTO_INCREMENT PRIMARY KEY, v VARCHAR(16)) ENGINE=InnoDB');
+            $orm->getAdapter()->execute('DELETE FROM qa_probe_tx');
             $this->rollBackAWrite($orm, 'qa_probe_tx');
             self::assertSame([], $orm->getAdapter()->execute('SELECT v FROM qa_probe_tx')->rows, 'the joined write rolled back');
 
@@ -71,25 +67,17 @@ final class QueryAdapterJoinsTransactionTest extends TestCase
     {
         // The case that matters: a real pool, where getAdapter() takes a
         // second connection. Without the change both writes would survive.
+        // Skipped or failed out here; inside the coroutine every error fails.
+        self::mysqlOrm('the test is about a MySQL pool')->shutdown();
         $outcome = null;
+        $failure = null;
         \Swoole\Runtime::enableCoroutine(SWOOLE_HOOK_ALL);
         try {
-            \Swoole\Coroutine\run(function () use (&$outcome): void {
+            \Swoole\Coroutine\run(function () use (&$outcome, &$failure): void {
+                $orm = new OrmManager();
                 try {
-                    $orm = new OrmManager();
-                    if ($orm->getDriver() !== 'mysql') {
-                        $outcome = 'not MySQL';
-
-                        return;
-                    }
                     $orm->getQueryAdapter()->execute('CREATE TABLE IF NOT EXISTS qa_probe_pool (id INT AUTO_INCREMENT PRIMARY KEY, v VARCHAR(16)) ENGINE=InnoDB');
                     $orm->getQueryAdapter()->execute('DELETE FROM qa_probe_pool');
-                } catch (\Throwable $e) {
-                    $outcome = 'MySQL unavailable: ' . $e->getMessage();
-
-                    return;
-                }
-                try {
                     try {
                         $orm->getTransactionManager()->run(static function () use ($orm): void {
                             $orm->getQueryAdapter()->execute("INSERT INTO qa_probe_pool (v) VALUES ('joined')");
@@ -99,9 +87,14 @@ final class QueryAdapterJoinsTransactionTest extends TestCase
                     } catch (\RuntimeException) {
                     }
                     $outcome = array_column($orm->getQueryAdapter()->execute('SELECT v FROM qa_probe_pool')->rows, 'v');
+                } catch (\Throwable $e) {
+                    $failure = $e;
                 } finally {
-                    $orm->getQueryAdapter()->execute('DROP TABLE IF EXISTS qa_probe_pool');
-                    $orm->shutdown();
+                    try {
+                        $orm->getQueryAdapter()->execute('DROP TABLE IF EXISTS qa_probe_pool');
+                    } finally {
+                        $orm->shutdown();
+                    }
                 }
             });
         } finally {
@@ -113,8 +106,8 @@ final class QueryAdapterJoinsTransactionTest extends TestCase
             \Swoole\Coroutine::set(['hook_flags' => SWOOLE_HOOK_ALL]);
         }
 
-        if (is_string($outcome)) {
-            self::markTestSkipped($outcome);
+        if ($failure !== null) {
+            throw $failure;
         }
         self::assertSame(['escaped'], $outcome, 'the joined write rolled back; the pooled one did not');
     }
