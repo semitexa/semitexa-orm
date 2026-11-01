@@ -17,6 +17,7 @@ use Semitexa\Orm\Attribute\Column;
 use Semitexa\Orm\Attribute\FromTable;
 use Semitexa\Orm\Attribute\PrimaryKey;
 use Semitexa\Orm\OrmManager;
+use Semitexa\Orm\Tests\Support\RequiresDatabase;
 use Semitexa\Orm\Trait\Seedable;
 
 /**
@@ -33,6 +34,8 @@ use Semitexa\Orm\Trait\Seedable;
  */
 final class SeedingTest extends TestCase
 {
+    use RequiresDatabase;
+
     #[Test]
     public function create_builds_a_readonly_model_through_its_constructor(): void
     {
@@ -179,17 +182,8 @@ final class SeedingTest extends TestCase
             return [null, $db];
         }
 
-        // verify:accept-test-change the two skips are the existing MySQL-unavailable and table-not-ours skips moved unchanged out of seeding_inserts_the_defaults_once_and_updates_a_changed_row so the duplicate-key test shares them
-        try {
-            $orm = new OrmManager();
-            if ($orm->getDriver() !== 'mysql') {
-                throw new \RuntimeException('the upsert is MySQL-only');
-            }
-            $db = $orm->getAdapter();
-            $db->query('SELECT 1');
-        } catch (\Throwable $e) {
-            self::markTestSkipped('MySQL unavailable: ' . $e->getMessage());
-        }
+        $orm = self::mysqlOrm('the upsert is MySQL-only');
+        $db = $orm->getAdapter();
 
         // Never drop a table this test did not create: a database that already
         // has one by this name keeps it, and the test says why it did not run.
