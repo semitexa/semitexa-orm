@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Application\Service\Sync;
 
+use Semitexa\Orm\Domain\Model\DdlOperation;
+
 class AuditLogger
 {
     public function __construct(
@@ -11,7 +13,7 @@ class AuditLogger
     ) {}
 
     /**
-     * @param DdlOperation[] $operations
+     * @param list<DdlOperation> $operations
      */
     public function log(array $operations): void
     {

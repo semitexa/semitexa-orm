@@ -382,4 +382,20 @@ final class TypeCasterOwnershipTest extends TestCase
             'a bare call has no column and must get the default form, not the last one seen',
         );
     }
+
+    /** A value no scalar cast can read is a mapping error said as one, not a 1 nobody stored. */
+    public function test_a_non_scalar_cannot_be_read_as_a_scalar(): void
+    {
+        $caster = new \Semitexa\Orm\Application\Service\Hydration\TypeCaster();
+        foreach ([['int', [1, 2], 'Cannot read a array as int.'], ['float', new \stdClass(), 'Cannot read a stdClass as float.'], ['string', new \DateTimeZone('UTC'), 'Cannot read a DateTimeZone as string.']] as [$type, $value, $message]) {
+            try {
+                $caster->castToPropertyType($value, $type, false);
+                self::fail("{$type} read a " . get_debug_type($value));
+            } catch (\InvalidArgumentException $e) {
+                self::assertSame($message, $e->getMessage());
+            }
+        }
+        // What a driver returns still reads.
+        self::assertSame([7, 1.5, '7'], [$caster->castToPropertyType('7', 'int', false), $caster->castToPropertyType('1.5', 'float', false), $caster->castToPropertyType(7, 'string', false)]);
+    }
 }
