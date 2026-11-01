@@ -4,13 +4,11 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Query;
 
-use Semitexa\Orm\Adapter\SqlIdentifier;
-
 /**
  * Shared WHERE-building logic for query builders that support filtering.
  *
  * Using class must declare:
- *   private array $wheres = [];
+ *   /** @var list<WhereCondition> *\/ private array $wheres = [];
  *   private array $params = [];
  *   private int $paramCounter = 0;
  */
@@ -22,13 +20,7 @@ trait WhereTrait
     {
         $this->assertValidOperator($operator);
         $paramName = $this->nextParam($column);
-        $this->wheres[] = [
-            'connector' => 'AND',
-            'type'      => 'basic',
-            'column'    => $column,
-            'operator'  => strtoupper($operator),
-            'param'     => $paramName,
-        ];
+        $this->wheres[] = WhereCondition::compare('AND', $column, strtoupper($operator), $paramName);
         $this->params[$paramName] = $value instanceof \BackedEnum ? $value->value : $value;
         return $this;
     }
@@ -37,38 +29,20 @@ trait WhereTrait
     {
         $this->assertValidOperator($operator);
         $paramName = $this->nextParam($column);
-        $this->wheres[] = [
-            'connector' => 'OR',
-            'type'      => 'basic',
-            'column'    => $column,
-            'operator'  => strtoupper($operator),
-            'param'     => $paramName,
-        ];
+        $this->wheres[] = WhereCondition::compare('OR', $column, strtoupper($operator), $paramName);
         $this->params[$paramName] = $value instanceof \BackedEnum ? $value->value : $value;
         return $this;
     }
 
     public function whereNull(string $column): static
     {
-        $this->wheres[] = [
-            'connector' => 'AND',
-            'type'      => 'null',
-            'column'    => $column,
-            'operator'  => 'IS NULL',
-            'param'     => null,
-        ];
+        $this->wheres[] = WhereCondition::null($column, 'IS NULL');
         return $this;
     }
 
     public function whereNotNull(string $column): static
     {
-        $this->wheres[] = [
-            'connector' => 'AND',
-            'type'      => 'null',
-            'column'    => $column,
-            'operator'  => 'IS NOT NULL',
-            'param'     => null,
-        ];
+        $this->wheres[] = WhereCondition::null($column, 'IS NOT NULL');
         return $this;
     }
 
@@ -83,13 +57,7 @@ trait WhereTrait
             $paramNames[] = ':' . $paramName;
             $this->params[$paramName] = $val instanceof \BackedEnum ? $val->value : $val;
         }
-        $this->wheres[] = [
-            'connector' => 'AND',
-            'type'      => 'in',
-            'column'    => $column,
-            'operator'  => 'IN',
-            'param'     => $paramNames,
-        ];
+        $this->wheres[] = WhereCondition::in($column, 'IN', $paramNames);
         return $this;
     }
 
@@ -104,26 +72,14 @@ trait WhereTrait
             $paramNames[] = ':' . $paramName;
             $this->params[$paramName] = $val instanceof \BackedEnum ? $val->value : $val;
         }
-        $this->wheres[] = [
-            'connector' => 'AND',
-            'type'      => 'not_in',
-            'column'    => $column,
-            'operator'  => 'NOT IN',
-            'param'     => $paramNames,
-        ];
+        $this->wheres[] = WhereCondition::in($column, 'NOT IN', $paramNames);
         return $this;
     }
 
     public function whereLike(string $column, string $pattern): static
     {
         $paramName = $this->nextParam($column);
-        $this->wheres[] = [
-            'connector' => 'AND',
-            'type'      => 'like',
-            'column'    => $column,
-            'operator'  => 'LIKE',
-            'param'     => $paramName,
-        ];
+        $this->wheres[] = WhereCondition::compare('AND', $column, 'LIKE', $paramName);
         $this->params[$paramName] = $pattern;
         return $this;
     }
@@ -132,12 +88,7 @@ trait WhereTrait
     {
         $paramFrom = $this->nextParam($column . '_from');
         $paramTo   = $this->nextParam($column . '_to');
-        $this->wheres[] = [
-            'connector' => 'AND',
-            'type'      => 'between',
-            'column'    => $column,
-            'param'     => [$paramFrom, $paramTo],
-        ];
+        $this->wheres[] = WhereCondition::between($column, $paramFrom, $paramTo);
         $this->params[$paramFrom] = $from;
         $this->params[$paramTo]   = $to;
         return $this;
@@ -185,11 +136,7 @@ trait WhereTrait
         for ($i = count($offsets) - 1; $i >= 0; $i--) {
             $sql = substr_replace($sql, ':' . $keys[$i], $offsets[$i], 1);
         }
-        $this->wheres[] = [
-            'connector' => 'AND',
-            'type'      => 'raw',
-            'sql'       => $sql,
-        ];
+        $this->wheres[] = WhereCondition::raw($sql);
         return $this;
     }
 
@@ -201,12 +148,8 @@ trait WhereTrait
     private function groupStagedConditions(): void
     {
         foreach ($this->wheres as $i => $where) {
-            if ($i > 0 && $where['connector'] === 'OR') {
-                $this->wheres = [[
-                    'connector' => 'AND',
-                    'type'      => 'raw',
-                    'sql'       => substr($this->buildWhereClause(), strlen(' WHERE ')),
-                ]];
+            if ($i > 0 && $where->connector === 'OR') {
+                $this->wheres = [WhereCondition::raw(substr($this->buildWhereClause(), strlen(' WHERE ')))];
 
                 return;
             }
@@ -230,61 +173,10 @@ trait WhereTrait
 
         $parts = [];
         foreach ($this->wheres as $i => $where) {
-            $connector = $i === 0 ? '' : " {$where['connector']} ";
-            $parts[]   = $connector . $this->buildWhereCondition($where);
+            $parts[] = ($i === 0 ? '' : " {$where->connector} ") . $where->render();
         }
 
         return ' WHERE ' . implode('', $parts);
-    }
-
-    /**
-     * @param array<string, mixed> $where
-     */
-    private function buildWhereCondition(array $where): string
-    {
-        $type = $where['type'];
-
-        // Parenthesized: a fragment containing OR must not bind looser than
-        // the conditions it is ANDed with (`a = ? AND b = ? OR c = ?`).
-        if ($type === 'raw') {
-            $sql = $where['sql'];
-            if (!is_string($sql)) {
-                throw new \LogicException('Raw WHERE condition sql must be a string.');
-            }
-
-            return '(' . $sql . ')';
-        }
-
-        // Support qualified column (e.g. alias.column) for relation filters.
-        // The backtick escaping this used to inline (VULN-004) is now
-        // SqlIdentifier's, so every builder gets the same rule.
-        $column = $where['column'];
-        if (!is_string($column)) {
-            throw new \LogicException('WHERE condition column must be a string.');
-        }
-        $col = SqlIdentifier::quoteQualified($column);
-
-        if ($type === 'null') {
-            return "{$col} {$where['operator']}";
-        }
-
-        if ($type === 'in' || $type === 'not_in') {
-            // `x IN ()` is invalid SQL: an empty list matches nothing, and
-            // excludes nothing — the same predicates ResourceModelQuery uses.
-            if ($where['param'] === []) {
-                return $type === 'in' ? '1 = 0' : '1 = 1';
-            }
-            $inList = implode(', ', $where['param']);
-            return "{$col} {$where['operator']} ({$inList})";
-        }
-
-        if ($type === 'between') {
-            [$paramFrom, $paramTo] = $where['param'];
-            return "{$col} BETWEEN :{$paramFrom} AND :{$paramTo}";
-        }
-
-        // basic / like
-        return "{$col} {$where['operator']} :{$where['param']}";
     }
 
     private function nextParam(string $column): string

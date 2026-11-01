@@ -11,7 +11,7 @@ class UpdateQuery implements WhereCapableInterface
 {
     use WhereTrait;
 
-    /** @var list<array<string, mixed>> staged WHERE conditions, in order */
+    /** @var list<WhereCondition> staged WHERE conditions, in order */
     private array $wheres = [];
 
     /** @var array<string, mixed> */
