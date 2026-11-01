@@ -408,5 +408,7 @@ final class TypeCasterOwnershipTest extends TestCase
             }
         }
         self::assertSame(7, $caster->castFromDb('7', new \Semitexa\Orm\Domain\Model\ColumnDefinition(name: 'value', type: \Semitexa\Orm\Adapter\MySqlType::Int, phpType: 'int')));
+        self::assertSame(1.5, $caster->castFromDb('1.5', new \Semitexa\Orm\Domain\Model\ColumnDefinition(name: 'value', type: \Semitexa\Orm\Adapter\MySqlType::Double, phpType: 'float')));
+        self::assertSame('text', $caster->castFromDb('text', new \Semitexa\Orm\Domain\Model\ColumnDefinition(name: 'value', type: \Semitexa\Orm\Adapter\MySqlType::Varchar, phpType: 'string')));
     }
 }
