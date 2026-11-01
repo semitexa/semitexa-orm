@@ -259,6 +259,16 @@ final class DeleteQueryTest extends TestCase
         self::assertSame([], $this->remainingIds());
     }
 
+    #[Test]
+    public function a_generated_column_named_rowid_is_seen_too(): void
+    {
+        $this->adapter->execute("CREATE TABLE gen (kind TEXT NOT NULL, rowid TEXT GENERATED ALWAYS AS ('same') VIRTUAL)");
+        $this->adapter->execute("INSERT INTO gen (kind) VALUES ('old'), ('old'), ('keep')");
+
+        self::assertSame(1, (new DeleteQuery('gen', $this->adapter))->where('kind', '=', 'old')->limit(1)->executeWhere());
+        self::assertSame(['keep', 'old'], array_column($this->adapter->query('SELECT kind FROM gen ORDER BY kind')->rows, 'kind'));
+    }
+
     /** A column named rowid is that column, not the row id: the limit must still hold, and the WHERE too. */
     #[Test]
     public function a_table_declaring_a_rowid_column_still_deletes_only_the_limit(): void
@@ -274,9 +284,15 @@ final class DeleteQueryTest extends TestCase
     public function a_table_declaring_every_row_id_name_is_refused_a_limit(): void
     {
         $this->adapter->execute('CREATE TABLE odd (rowid TEXT, _rowid_ TEXT, oid TEXT)');
+        $this->adapter->execute("INSERT INTO odd VALUES ('a', 'b', 'x')");
 
-        $this->expectExceptionMessage('limit() on SQLite needs the row id, and odd declares columns named rowid, _rowid_ and oid.');
-        (new DeleteQuery('odd', $this->adapter))->where('oid', '=', 'x')->limit(1)->executeWhere();
+        try {
+            (new DeleteQuery('odd', $this->adapter))->where('oid', '=', 'x')->limit(1)->executeWhere();
+            self::fail('a table declaring every row id name took a limited delete');
+        } catch (\LogicException $e) {
+            self::assertSame('limit() on SQLite needs the row id, and odd declares columns named rowid, _rowid_ and oid.', $e->getMessage());
+        }
+        self::assertSame([['oid' => 'x']], $this->adapter->query('SELECT oid FROM odd')->rows, 'refused before anything was deleted');
     }
 
     #[Test]

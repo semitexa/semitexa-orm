@@ -105,7 +105,8 @@ class DeleteQuery implements WhereCapableInterface
     {
         $declared = array_map(
             static fn (array $column): string => strtolower((string) ($column['name'] ?? '')),
-            $this->adapter->query('PRAGMA table_info(' . $this->quotedTable() . ')')->rows,
+            // table_xinfo, not table_info: a generated column called rowid is hidden from the latter.
+            $this->adapter->query('PRAGMA table_xinfo(' . $this->quotedTable() . ')')->rows,
         );
         foreach (['rowid', '_rowid_', 'oid'] as $name) {
             if (!in_array($name, $declared, true)) {
