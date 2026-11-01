@@ -60,6 +60,7 @@ final class ApiSurfaceTest extends TestCase
             'Semitexa\Orm\Query\ResourceModelQuery::fetchOne()',
             'Semitexa\Orm\Query\ResourceModelQuery::fetchOneAs()',
             'Semitexa\Orm\Query\ResourceModelQuery::forTenant()',
+            'Semitexa\Orm\Query\ResourceModelQuery::forUpdate()',
             'Semitexa\Orm\Query\ResourceModelQuery::includeSoftDeleted()',
             'Semitexa\Orm\Query\ResourceModelQuery::limit()',
             'Semitexa\Orm\Query\ResourceModelQuery::max()',

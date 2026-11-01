@@ -54,6 +54,7 @@ final class ResourceModelQuery
     /** @var list<array{column: ColumnRef, direction: Direction}> */
     private array $orderBys = [];
 
+    private bool $forUpdate = false;
     private ?int $limitValue = null;
     private ?int $offsetValue = null;
     private mixed $tenantValue = null;
@@ -331,6 +332,19 @@ final class ResourceModelQuery
         return $this;
     }
 
+    /**
+     * A locking read: the rows stay locked until the transaction ends. Only
+     * inside TransactionManager::run(); see LockingRead for what it refuses.
+     *
+     * @api
+     */
+    public function forUpdate(): self
+    {
+        $this->forUpdate = true;
+
+        return $this;
+    }
+
     /** @api */
     public function limit(int $limit): self
     {
@@ -409,6 +423,9 @@ final class ResourceModelQuery
     public function fetchAll(): array
     {
         $scope = $this->tenantScope();
+        if ($this->forUpdate) {
+            LockingRead::assertHolds($this->adapter);
+        }
         $result = $this->adapter->execute($this->buildSql(), $this->buildParams());
         $items = array_map(
             fn (array $row): object => $this->hydrator->hydrate($row, $this->resourceModelClass),
@@ -483,6 +500,9 @@ final class ResourceModelQuery
      */
     public function count(): int
     {
+        if ($this->forUpdate) {
+            LockingRead::refuse('count()');
+        }
         [$whereSql, $params] = $this->buildWhereAndParams();
         $metadata = $this->metadata();
         $sql = sprintf('SELECT COUNT(*) AS __c FROM %s%s', SqlIdentifier::quote($metadata->tableName), $whereSql);
@@ -558,6 +578,9 @@ final class ResourceModelQuery
      */
     public function countBy(ColumnRef $group): array
     {
+        if ($this->forUpdate) {
+            LockingRead::refuse('countBy()');
+        }
         $this->assertColumnBelongsToCurrentResourceModel($group);
         [$whereSql, $params] = $this->buildWhereAndParams();
         $metadata = $this->metadata();
@@ -591,6 +614,9 @@ final class ResourceModelQuery
      */
     public function countByDay(ColumnRef $moment): array
     {
+        if ($this->forUpdate) {
+            LockingRead::refuse('countByDay()');
+        }
         $this->assertColumnBelongsToCurrentResourceModel($moment);
         [$whereSql, $params] = $this->buildWhereAndParams();
         $sql = sprintf(
@@ -613,6 +639,9 @@ final class ResourceModelQuery
 
     private function aggregate(string $function, ColumnRef $column): mixed
     {
+        if ($this->forUpdate) {
+            LockingRead::refuse(strtolower($function) . '()');
+        }
         $this->assertColumnBelongsToCurrentResourceModel($column);
         [$whereSql, $params] = $this->buildWhereAndParams();
         $metadata = $this->metadata();
@@ -641,7 +670,11 @@ final class ResourceModelQuery
     {
         [$whereSql, $params] = $this->buildWhereAndParams();
         $metadata = $this->metadata();
-        $sql = sprintf('SELECT 1 FROM %s%s LIMIT 1', SqlIdentifier::quote($metadata->tableName), $whereSql);
+        if ($this->forUpdate) {
+            LockingRead::assertHolds($this->adapter);
+        }
+        $lock = $this->forUpdate ? LockingRead::clause($this->adapter) : '';
+        $sql = sprintf('SELECT 1 FROM %s%s LIMIT 1%s', SqlIdentifier::quote($metadata->tableName), $whereSql, $lock);
         $result = $this->adapter->execute($sql, $params);
 
         return $result->rows !== [];
@@ -814,7 +847,7 @@ final class ResourceModelQuery
             $sql .= sprintf(' LIMIT %d OFFSET %d', PHP_INT_MAX, $this->offsetValue);
         }
 
-        return $sql;
+        return $sql . ($this->forUpdate ? LockingRead::clause($this->adapter) : '');
     }
 
     /**
