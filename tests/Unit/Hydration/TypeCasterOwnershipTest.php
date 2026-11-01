@@ -397,5 +397,16 @@ final class TypeCasterOwnershipTest extends TestCase
         }
         // What a driver returns still reads.
         self::assertSame([7, 1.5, '7'], [$caster->castToPropertyType('7', 'int', false), $caster->castToPropertyType('1.5', 'float', false), $caster->castToPropertyType(7, 'string', false)]);
+
+        // The column pass too: an INT, a DOUBLE and a VARCHAR column refuse a non-scalar.
+        foreach ([[\Semitexa\Orm\Adapter\MySqlType::Int, [1, 2], 'Cannot read a array as int.'], [\Semitexa\Orm\Adapter\MySqlType::Double, new \stdClass(), 'Cannot read a stdClass as float.'], [\Semitexa\Orm\Adapter\MySqlType::Varchar, new \stdClass(), 'Cannot read a stdClass as string.']] as [$type, $value, $message]) {
+            try {
+                $caster->castFromDb($value, new \Semitexa\Orm\Domain\Model\ColumnDefinition(name: 'value', type: $type, phpType: 'mixed'));
+                self::fail($type->name . ' read a ' . get_debug_type($value));
+            } catch (\InvalidArgumentException $e) {
+                self::assertSame($message, $e->getMessage());
+            }
+        }
+        self::assertSame(7, $caster->castFromDb('7', new \Semitexa\Orm\Domain\Model\ColumnDefinition(name: 'value', type: \Semitexa\Orm\Adapter\MySqlType::Int, phpType: 'int')));
     }
 }
