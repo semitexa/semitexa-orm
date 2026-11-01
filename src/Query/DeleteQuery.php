@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Query;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
+use Semitexa\Orm\Adapter\ServerCapability;
 use Semitexa\Orm\Adapter\SqlIdentifier;
 
 class DeleteQuery implements WhereCapableInterface
@@ -18,6 +19,8 @@ class DeleteQuery implements WhereCapableInterface
     private array $params = [];
 
     private int $paramCounter = 0;
+
+    private ?int $limit = null;
 
     public function __construct(
         private readonly string $table,
@@ -36,19 +39,42 @@ class DeleteQuery implements WhereCapableInterface
      * be reused (InsertQuery is, one instance across chunks), and a mutating
      * execute() would AND every previous value into the next call.
      */
-    public function execute(string $column, mixed $value): void
+    public function execute(string $column, mixed $value): int
     {
         $query = clone $this;
         $query->groupStagedConditions();
-        $query->where($column, '=', $value)->executeWhere();
+
+        return $query->where($column, '=', $value)->executeWhere();
+    }
+
+    /**
+     * At most $rows rows per executeWhere(): a retention job purges in
+     * batches, each a short transaction, instead of one that locks the table
+     * for the whole backlog. Which rows of the match go first is the
+     * database's choice; repeat until executeWhere() returns less than $rows.
+     *
+     * On SQLite the rows go through the row id (rowid, or _rowid_/oid when
+     * the table declares a column of that name), so a WITHOUT ROWID table
+     * fails loudly; the ORM's sync never creates one. The limit stays on this
+     * builder, as its conditions do.
+     */
+    public function limit(int $rows): static
+    {
+        if ($rows < 1) {
+            throw new \InvalidArgumentException('limit() takes at least one row.');
+        }
+        $this->limit = $rows;
+
+        return $this;
     }
 
     /**
      * Delete rows matching the WHERE conditions built via where*() methods.
      *
+     * @return int the rows deleted, as the database reports them
      * @throws \LogicException When called without any WHERE condition (safety guard)
      */
-    public function executeWhere(): void
+    public function executeWhere(): int
     {
         if ($this->wheres === []) {
             throw new \LogicException(
@@ -57,8 +83,38 @@ class DeleteQuery implements WhereCapableInterface
             );
         }
 
-        $sql = 'DELETE FROM ' . $this->quotedTable() . $this->buildWhereClause();
-        $this->adapter->execute($sql, $this->params);
+        $where = $this->buildWhereClause();
+        $sql = match (true) {
+            $this->limit === null => 'DELETE FROM ' . $this->quotedTable() . $where,
+            $this->adapter->supports(ServerCapability::DeleteLimit) => 'DELETE FROM ' . $this->quotedTable() . $where . ' LIMIT ' . $this->limit,
+            // SQLite without DELETE ... LIMIT: the same rows through the row id.
+            default => sprintf('DELETE FROM %1$s WHERE %4$s IN (SELECT %4$s FROM %1$s%2$s LIMIT %3$d)', $this->quotedTable(), $where, $this->limit, $this->rowIdName()),
+        };
+
+        return $this->adapter->execute($sql, $this->params)->rowCount;
+    }
+
+    /**
+     * The name that means the row id in this table. A table may declare a
+     * column called rowid (or _rowid_, or oid), and then that name is the
+     * column: a non-unique one would let one LIMIT 1 delete every row sharing
+     * its value, outside the WHERE too. The first of the three the table
+     * does not declare is the row id; a table declaring all three is refused.
+     */
+    private function rowIdName(): string
+    {
+        $declared = array_map(
+            static fn (array $column): string => strtolower((string) ($column['name'] ?? '')),
+            // table_xinfo, not table_info: a generated column called rowid is hidden from the latter.
+            $this->adapter->query('PRAGMA table_xinfo(' . $this->quotedTable() . ')')->rows,
+        );
+        foreach (['rowid', '_rowid_', 'oid'] as $name) {
+            if (!in_array($name, $declared, true)) {
+                return $name;
+            }
+        }
+
+        throw new \LogicException("limit() on SQLite needs the row id, and {$this->table} declares columns named rowid, _rowid_ and oid.");
     }
 
     private function quotedTable(): string

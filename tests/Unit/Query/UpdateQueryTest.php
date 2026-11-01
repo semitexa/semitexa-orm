@@ -103,4 +103,11 @@ final class UpdateQueryTest extends TestCase
         self::assertStringContainsString('UPDATE `wid``get` SET', $sql, 'table identifier not escaped');
         self::assertStringContainsString('`la``bel` =', $sql, 'SET column identifier not escaped');
     }
+
+    #[Test]
+    public function an_update_says_how_many_rows_it_changed(): void
+    {
+        self::assertSame(2, (new UpdateQuery('widget', $this->adapter))->where('owner_id', '=', 'alice')->executeWhere(['label' => 'renamed']));
+        self::assertSame(0, (new UpdateQuery('widget', $this->adapter))->where('owner_id', '=', 'nobody')->executeWhere(['label' => 'x']));
+    }
 }

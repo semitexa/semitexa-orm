@@ -236,4 +236,116 @@ final class DeleteQueryTest extends TestCase
         }
         self::assertCount(2, $statements);
     }
+
+    #[Test]
+    public function a_delete_says_how_many_rows_it_took(): void
+    {
+        self::assertSame(2, (new DeleteQuery('widget', $this->adapter))->where('owner_id', '=', 'alice')->executeWhere());
+        self::assertSame(0, (new DeleteQuery('widget', $this->adapter))->where('owner_id', '=', 'nobody')->executeWhere());
+        self::assertSame(1, (new DeleteQuery('widget', $this->adapter))->execute('id', 3));
+    }
+
+    /** SQLite has no DELETE ... LIMIT in this build: the rows go through rowid. */
+    #[Test]
+    public function a_limited_delete_purges_in_batches_until_less_than_a_batch_is_left(): void
+    {
+        $batches = [];
+        do {
+            $deleted = (new DeleteQuery('widget', $this->adapter))->where('id', '>', 0)->limit(2)->executeWhere();
+            $batches[] = $deleted;
+        } while ($deleted === 2);
+
+        self::assertSame([2, 1], $batches);
+        self::assertSame([], $this->remainingIds());
+    }
+
+    #[Test]
+    public function a_generated_column_named_rowid_is_seen_too(): void
+    {
+        $this->adapter->execute("CREATE TABLE gen (kind TEXT NOT NULL, rowid TEXT GENERATED ALWAYS AS ('same') VIRTUAL)");
+        $this->adapter->execute("INSERT INTO gen (kind) VALUES ('old'), ('old'), ('keep')");
+
+        self::assertSame(1, (new DeleteQuery('gen', $this->adapter))->where('kind', '=', 'old')->limit(1)->executeWhere());
+        self::assertSame(['keep', 'old'], array_column($this->adapter->query('SELECT kind FROM gen ORDER BY kind')->rows, 'kind'));
+    }
+
+    /** A column named rowid is that column, not the row id: the limit must still hold, and the WHERE too. */
+    #[Test]
+    public function a_table_declaring_a_rowid_column_still_deletes_only_the_limit(): void
+    {
+        $this->adapter->execute('CREATE TABLE tagged (rowid TEXT NOT NULL, kind TEXT NOT NULL)');
+        $this->adapter->execute("INSERT INTO tagged VALUES ('same', 'old'), ('same', 'old'), ('same', 'keep')");
+
+        self::assertSame(1, (new DeleteQuery('tagged', $this->adapter))->where('kind', '=', 'old')->limit(1)->executeWhere());
+        self::assertSame(['keep', 'old'], array_column($this->adapter->query('SELECT kind FROM tagged ORDER BY kind')->rows, 'kind'));
+    }
+
+    #[Test]
+    public function a_table_declaring_every_row_id_name_is_refused_a_limit(): void
+    {
+        $this->adapter->execute('CREATE TABLE odd (rowid TEXT, _rowid_ TEXT, oid TEXT)');
+        $this->adapter->execute("INSERT INTO odd VALUES ('a', 'b', 'x')");
+
+        try {
+            (new DeleteQuery('odd', $this->adapter))->where('oid', '=', 'x')->limit(1)->executeWhere();
+            self::fail('a table declaring every row id name took a limited delete');
+        } catch (\LogicException $e) {
+            self::assertSame('limit() on SQLite needs the row id, and odd declares columns named rowid, _rowid_ and oid.', $e->getMessage());
+        }
+        self::assertSame([['oid' => 'x']], $this->adapter->query('SELECT oid FROM odd')->rows, 'refused before anything was deleted');
+    }
+
+    #[Test]
+    public function a_limit_takes_at_least_one_row(): void
+    {
+        $this->expectExceptionMessage('limit() takes at least one row.');
+        (new DeleteQuery('widget', $this->adapter))->limit(0);
+    }
+
+    #[Test]
+    public function execute_keeps_the_builder_s_limit(): void
+    {
+        self::assertSame(1, (new DeleteQuery('widget', $this->adapter))->limit(1)->execute('owner_id', 'alice'));
+        self::assertCount(2, $this->remainingIds());
+    }
+
+    /** Where the server has DELETE ... LIMIT (MySQL), the statement is the plain one. */
+    #[Test]
+    public function on_a_server_with_delete_limit_the_limit_is_native(): void
+    {
+        $recording = new class implements DatabaseAdapterInterface {
+            /** @var list<string> */
+            public array $sql = [];
+
+            public function supports(\Semitexa\Orm\Adapter\ServerCapability $capability): bool
+            {
+                return $capability === \Semitexa\Orm\Adapter\ServerCapability::DeleteLimit;
+            }
+
+            public function getServerVersion(): string
+            {
+                return '8.0.40';
+            }
+
+            public function execute(string $sql, array $params = []): \Semitexa\Orm\Adapter\QueryResult
+            {
+                $this->sql[] = $sql;
+
+                return new \Semitexa\Orm\Adapter\QueryResult(rows: [], rowCount: 3, lastInsertId: '0');
+            }
+
+            public function query(string $sql): \Semitexa\Orm\Adapter\QueryResult
+            {
+                return $this->execute($sql);
+            }
+
+            public function lastInsertId(): string
+            {
+                return '0';
+            }
+        };
+
+        self::assertSame(3, (new DeleteQuery('widget', $recording))->where('owner_id', '=', 'alice')->limit(500)->executeWhere());
+        self::assertSame(['DELETE FROM `widget` WHERE `owner_id` = :p_owner_id_1 LIMIT 500'], $recording->sql);
+    }
 }

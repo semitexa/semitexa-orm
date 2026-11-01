@@ -29,8 +29,9 @@ class UpdateQuery implements WhereCapableInterface
      *
      * @param array<string, mixed> $data Column name → value (must include PK)
      * @param string $pkColumn Primary key column name
+     * @return int the rows the database reports changed (MySQL: changed, not merely matched)
      */
-    public function execute(array $data, string $pkColumn): void
+    public function execute(array $data, string $pkColumn): int
     {
         $pkValue = $data[$pkColumn] ?? null;
         if ($pkValue === null) {
@@ -49,7 +50,7 @@ class UpdateQuery implements WhereCapableInterface
         }
 
         if ($setClauses === []) {
-            return;
+            return 0;
         }
 
         $params['pk_value'] = $pkValue;
@@ -57,7 +58,8 @@ class UpdateQuery implements WhereCapableInterface
 
         $sql = 'UPDATE ' . SqlIdentifier::quote($this->table) . " SET {$setString}"
             . ' WHERE ' . SqlIdentifier::quote($pkColumn) . ' = :pk_value';
-        $this->adapter->execute($sql, $params);
+
+        return $this->adapter->execute($sql, $params)->rowCount;
     }
 
     /**
@@ -65,9 +67,10 @@ class UpdateQuery implements WhereCapableInterface
      *
      * @param array<string, mixed> $data Column name → new value
      * @throws \LogicException When called without any WHERE condition (safety guard)
+     * @return int the rows the database reports changed (MySQL: changed, not merely matched)
      * @throws \InvalidArgumentException When $data is empty
      */
-    public function executeWhere(array $data): void
+    public function executeWhere(array $data): int
     {
         if ($this->wheres === []) {
             throw new \LogicException(
@@ -90,6 +93,6 @@ class UpdateQuery implements WhereCapableInterface
         $setString = implode(', ', $setClauses);
         $sql = 'UPDATE ' . SqlIdentifier::quote($this->table) . " SET {$setString}" . $this->buildWhereClause();
 
-        $this->adapter->execute($sql, $this->params);
+        return $this->adapter->execute($sql, $this->params)->rowCount;
     }
 }
