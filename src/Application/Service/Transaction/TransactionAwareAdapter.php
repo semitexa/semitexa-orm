@@ -71,6 +71,15 @@ final class TransactionAwareAdapter implements DatabaseAdapterInterface
         return $this->target()->lastInsertId();
     }
 
+    /**
+     * Whether a query through this adapter runs on an open transaction's
+     * connection: what a locking read needs to lock anything past itself.
+     */
+    public function inTransaction(): bool
+    {
+        return ($this->transactionsResolver)()?->currentAdapter() !== null;
+    }
+
     private function target(): DatabaseAdapterInterface
     {
         $transactions = ($this->transactionsResolver)();
