@@ -53,9 +53,10 @@ class DeleteQuery implements WhereCapableInterface
      * for the whole backlog. Which rows of the match go first is the
      * database's choice; repeat until executeWhere() returns less than $rows.
      *
-     * On SQLite the rows go through rowid, so a WITHOUT ROWID table fails
-     * loudly ("no such column: rowid"); the ORM's sync never creates one. The
-     * limit stays on this builder, as its conditions do.
+     * On SQLite the rows go through the row id (rowid, or _rowid_/oid when
+     * the table declares a column of that name), so a WITHOUT ROWID table
+     * fails loudly; the ORM's sync never creates one. The limit stays on this
+     * builder, as its conditions do.
      */
     public function limit(int $rows): static
     {
@@ -86,11 +87,33 @@ class DeleteQuery implements WhereCapableInterface
         $sql = match (true) {
             $this->limit === null => 'DELETE FROM ' . $this->quotedTable() . $where,
             $this->adapter->supports(ServerCapability::DeleteLimit) => 'DELETE FROM ' . $this->quotedTable() . $where . ' LIMIT ' . $this->limit,
-            // SQLite without DELETE ... LIMIT: the same rows through rowid.
-            default => sprintf('DELETE FROM %1$s WHERE rowid IN (SELECT rowid FROM %1$s%2$s LIMIT %3$d)', $this->quotedTable(), $where, $this->limit),
+            // SQLite without DELETE ... LIMIT: the same rows through the row id.
+            default => sprintf('DELETE FROM %1$s WHERE %4$s IN (SELECT %4$s FROM %1$s%2$s LIMIT %3$d)', $this->quotedTable(), $where, $this->limit, $this->rowIdName()),
         };
 
         return $this->adapter->execute($sql, $this->params)->rowCount;
+    }
+
+    /**
+     * The name that means the row id in this table. A table may declare a
+     * column called rowid (or _rowid_, or oid), and then that name is the
+     * column: a non-unique one would let one LIMIT 1 delete every row sharing
+     * its value, outside the WHERE too. The first of the three the table
+     * does not declare is the row id; a table declaring all three is refused.
+     */
+    private function rowIdName(): string
+    {
+        $declared = array_map(
+            static fn (array $column): string => strtolower((string) ($column['name'] ?? '')),
+            $this->adapter->query('PRAGMA table_info(' . $this->quotedTable() . ')')->rows,
+        );
+        foreach (['rowid', '_rowid_', 'oid'] as $name) {
+            if (!in_array($name, $declared, true)) {
+                return $name;
+            }
+        }
+
+        throw new \LogicException("limit() on SQLite needs the row id, and {$this->table} declares columns named rowid, _rowid_ and oid.");
     }
 
     private function quotedTable(): string

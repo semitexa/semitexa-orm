@@ -259,6 +259,26 @@ final class DeleteQueryTest extends TestCase
         self::assertSame([], $this->remainingIds());
     }
 
+    /** A column named rowid is that column, not the row id: the limit must still hold, and the WHERE too. */
+    #[Test]
+    public function a_table_declaring_a_rowid_column_still_deletes_only_the_limit(): void
+    {
+        $this->adapter->execute('CREATE TABLE tagged (rowid TEXT NOT NULL, kind TEXT NOT NULL)');
+        $this->adapter->execute("INSERT INTO tagged VALUES ('same', 'old'), ('same', 'old'), ('same', 'keep')");
+
+        self::assertSame(1, (new DeleteQuery('tagged', $this->adapter))->where('kind', '=', 'old')->limit(1)->executeWhere());
+        self::assertSame(['keep', 'old'], array_column($this->adapter->query('SELECT kind FROM tagged ORDER BY kind')->rows, 'kind'));
+    }
+
+    #[Test]
+    public function a_table_declaring_every_row_id_name_is_refused_a_limit(): void
+    {
+        $this->adapter->execute('CREATE TABLE odd (rowid TEXT, _rowid_ TEXT, oid TEXT)');
+
+        $this->expectExceptionMessage('limit() on SQLite needs the row id, and odd declares columns named rowid, _rowid_ and oid.');
+        (new DeleteQuery('odd', $this->adapter))->where('oid', '=', 'x')->limit(1)->executeWhere();
+    }
+
     #[Test]
     public function a_limit_takes_at_least_one_row(): void
     {
