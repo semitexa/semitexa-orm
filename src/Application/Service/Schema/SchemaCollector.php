@@ -58,7 +58,7 @@ class SchemaCollector
         $this->errors = [];
         $this->warnings = [];
 
-        // A discovered class that does not load is reported, not a ReflectionException.
+        // A name discovery returns but cannot load (a stale index) is reported; classes discovery itself drops are tk-discovery-reports-dropped-classes.
         $classes = array_values(array_filter($discovered = $this->classDiscovery()->findClassesWithAttribute(FromTable::class), 'class_exists'));
         foreach (array_diff($discovered, $classes) as $missing) {
             $this->errors[] = "Class '{$missing}' carries #[FromTable] but cannot be loaded.";
