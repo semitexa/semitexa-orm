@@ -47,7 +47,16 @@ final class SchemaReset
         return $tables;
     }
 
-    /** @return list<string> the tables dropped */
+    /**
+     * Drops every table. Foreign keys are switched off first, but a pooled
+     * adapter may run that statement on one connection and the drops on
+     * others, as a Swoole-hooked pool outside a coroutine does. So the drops
+     * go in passes: a table another one still references fails, and is
+     * tried again after the rest. A pass that drops nothing ends it with the
+     * last error, so no table is silently left.
+     *
+     * @return list<string> the tables dropped
+     */
     public function dropAll(): array
     {
         $tables = $this->tables();
@@ -57,8 +66,22 @@ final class SchemaReset
         $sqlite = $this->driver === 'sqlite';
         $this->adapter->execute($sqlite ? 'PRAGMA foreign_keys = OFF' : 'SET FOREIGN_KEY_CHECKS = 0');
         try {
-            foreach ($tables as $table) {
-                $this->adapter->execute('DROP TABLE IF EXISTS ' . SqlIdentifier::quote($table, $sqlite ? SqlIdentifier::DOUBLE_QUOTE : SqlIdentifier::BACKTICK));
+            $left = $tables;
+            while ($left !== []) {
+                $failed = [];
+                $error = null;
+                foreach ($left as $table) {
+                    try {
+                        $this->adapter->execute('DROP TABLE IF EXISTS ' . SqlIdentifier::quote($table, $sqlite ? SqlIdentifier::DOUBLE_QUOTE : SqlIdentifier::BACKTICK));
+                    } catch (\Throwable $e) {
+                        $failed[] = $table;
+                        $error = $e;
+                    }
+                }
+                if ($failed !== [] && count($failed) === count($left)) {
+                    throw new \RuntimeException('could not drop ' . implode(', ', $failed) . ': ' . $error?->getMessage(), 0, $error);
+                }
+                $left = $failed;
             }
         } finally {
             $this->adapter->execute($sqlite ? 'PRAGMA foreign_keys = ON' : 'SET FOREIGN_KEY_CHECKS = 1');

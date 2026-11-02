@@ -59,7 +59,7 @@ final class OrmFreshCommandTest extends TestCase
         putenv('APP_ENV=test');
         $dir = sys_get_temp_dir() . '/semitexa-fresh-' . bin2hex(random_bytes(4));
         mkdir($dir);
-        file_put_contents($dir . '/Orders.php', "<?php\n#[FromTable(name: 'orders')]\nfinal class Orders extends Missing {}\n");
+        file_put_contents($dir . '/Orders.php', "<?php\nuse Semitexa\\Orm\\Attribute\\FromTable;\n#[FromTable(name: 'orders')]\nfinal class Orders extends Missing {}\n");
         try {
             $discovery = $this->createStub(ClassDiscovery::class);
             $discovery->method('findClassesWithAttribute')->willReturn([]);
