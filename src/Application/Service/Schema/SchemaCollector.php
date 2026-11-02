@@ -58,11 +58,12 @@ class SchemaCollector
         $this->errors = [];
         $this->warnings = [];
 
-        // A name discovery returns but cannot load (a stale index) is reported; classes discovery itself drops are tk-discovery-reports-dropped-classes.
+        // A name discovery returns but cannot load (a stale index) is reported.
         $classes = array_values(array_filter($discovered = $this->classDiscovery()->findClassesWithAttribute(FromTable::class), 'class_exists'));
         foreach (array_diff($discovered, $classes) as $missing) {
             $this->errors[] = "Class '{$missing}' carries #[FromTable] but cannot be loaded.";
         }
+        $this->reportUninspected();
         /** @var array<string, TableDefinition> $tables */
         $tables = [];
 
@@ -684,6 +685,28 @@ class SchemaCollector
         foreach ($table->getRelations() as $relation) {
             if ($relation->foreignKey === $columnName) {
                 $this->warnings[] = "Deprecated column '{$columnName}' in table '{$table->name}' is used in a relation.";
+            }
+        }
+    }
+
+    /**
+     * The classes discovery could not inspect are absent from $classes, so a
+     * resource among them is absent from the schema (tk-discovery-reports-
+     * dropped-classes: orm:sync finished green over one). A class whose source
+     * declares #[FromTable] is certainly a resource: an error. Any other is
+     * named as a warning: it may be one, and failing every sync on a class
+     * that only extends an optional dependency would be a false alarm.
+     */
+    private function reportUninspected(): void
+    {
+        $map = $this->classDiscovery()->getClassMap();
+        foreach ($this->classDiscovery()->unloadableClasses() as $className => $why) {
+            $file = $map[$className] ?? null;
+            $source = is_string($file) && is_file($file) ? (string) @file_get_contents($file) : '';
+            if (preg_match('/#\[\s*(?:\\\\?[A-Za-z_][\w\\\\]*\\\\)?FromTable\b/', $source) === 1) {
+                $this->errors[] = "Class '{$className}' declares #[FromTable] but could not be inspected ({$why}); its table is missing from the schema.";
+            } else {
+                $this->warnings[] = "Class '{$className}' could not be inspected ({$why}); if it is a #[FromTable] resource, its table is missing from the schema.";
             }
         }
     }
