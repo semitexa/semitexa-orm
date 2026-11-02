@@ -62,7 +62,13 @@ final class DeclaredClassAttributes
                 continue;
             }
             $previous = $tokens[$i - 1][0] ?? null;
-            $declares = in_array($id, [T_CLASS, T_TRAIT, T_INTERFACE, T_ENUM], true) && $previous !== T_DOUBLE_COLON && $previous !== T_NEW;
+            if ($id === T_CLASS && $previous === T_NEW) {
+                // `new class { use T; }`: its body holds no import either.
+                $i = self::skipBody($tokens, $i);
+                $attributes = [];
+                continue;
+            }
+            $declares = in_array($id, [T_CLASS, T_TRAIT, T_INTERFACE, T_ENUM], true) && $previous !== T_DOUBLE_COLON;
             if ($declares) {
                 $short = self::nameAt($tokens, $i + 1);
                 if ($id === T_CLASS && strtolower(ltrim(($namespace === '' ? '' : $namespace . '\\') . $short, '\\')) === strtolower($wanted)) {
@@ -73,7 +79,8 @@ final class DeclaredClassAttributes
                         $fromTable = $fromTable || $resolved === strtolower(FromTable::class);
                         if ($resolved === strtolower(Connection::class)) {
                             // Not one string literal (a constant, a concatenation): unknown, never assumed.
-                            $connection = $attribute['literal'];
+                            // #[Connection] / #[Connection()] is the attribute's own default.
+                            $connection = !$attribute['args'] || $attribute['literal'] === '' ? 'default' : $attribute['literal'];
                         }
                     }
 
@@ -242,7 +249,14 @@ final class DeclaredClassAttributes
      */
     private static function literal(array $args): ?string
     {
+        if ($args === []) {
+            return '';
+        }
+        // `name:` is the attribute's only parameter; any other name is no literal of it.
         if (count($args) === 3 && $args[0][0] === T_STRING && $args[1][0] === ':') {
+            if (strtolower($args[0][1]) !== 'name') {
+                return null;
+            }
             $args = [$args[2]];
         }
         if (count($args) !== 1 || $args[0][0] !== T_CONSTANT_ENCAPSED_STRING) {

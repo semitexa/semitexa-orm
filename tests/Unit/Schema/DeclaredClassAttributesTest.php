@@ -73,10 +73,18 @@ final class DeclaredClassAttributesTest extends TestCase
         $relative = "<?php\nnamespace Semitexa\\Orm\\Attribute;\n#[namespace\\FromTable(name: 'r')]\nfinal class Relative {}\n";
         self::assertTrue(DeclaredClassAttributes::of($relative, 'Semitexa\\Orm\\Attribute\\Relative')?->fromTable);
 
-        foreach (["DB_ALIAS", "name: DB_ALIAS", "'anal' . 'ytics'"] as $argument) {
+        foreach (["DB_ALIAS", "name: DB_ALIAS", "'anal' . 'ytics'", "other: 'analytics'"] as $argument) {
             $source = "<?php\nnamespace App;\nuse Semitexa\\Orm\\Attribute\\{FromTable, Connection};\n#[FromTable(name: 'c')]\n#[Connection({$argument})]\nfinal class Computed {}\n";
-            self::assertNull(DeclaredClassAttributes::of($source, 'App\\Computed')?->connection, "{$argument} is no literal: the connection is unknown");
+            $declared = DeclaredClassAttributes::of($source, 'App\\Computed');
+            self::assertNotNull($declared, "{$argument}: the declaration is found");
+            self::assertNull($declared->connection, "{$argument} is no literal: the connection is unknown");
         }
+        foreach (['', '()'] as $bare) {
+            $source = "<?php\nnamespace App;\nuse Semitexa\\Orm\\Attribute\\Connection;\n#[Connection{$bare}]\nfinal class Bare {}\n";
+            self::assertSame('default', DeclaredClassAttributes::of($source, 'App\\Bare')?->connection, "#[Connection{$bare}] is the default connection");
+        }
+        $anonymous = "<?php\nnamespace App;\nuse Semitexa\\Orm\\Attribute\\FromTable;\n\$x = new class { use \\Other\\FromTable; };\n#[FromTable(name: 'a')]\nfinal class AfterAnonymous {}\n";
+        self::assertTrue(DeclaredClassAttributes::of($anonymous, 'App\\AfterAnonymous')?->fromTable, 'an anonymous class body holds no import');
         $named = "<?php\nnamespace App;\nuse Semitexa\\Orm\\Attribute\\Connection;\n#[Connection(name: 'analytics')]\nfinal class Named {}\n";
         self::assertSame('analytics', DeclaredClassAttributes::of($named, 'App\\Named')?->connection);
     }
