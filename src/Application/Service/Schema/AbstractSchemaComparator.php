@@ -157,4 +157,32 @@ abstract class AbstractSchemaComparator implements SchemaComparatorInterface
      * @return list<string> The change descriptions, empty when the column matches.
      */
     abstract protected function compareColumn(ColumnDefinition $code, DbColumnState $db): array;
+
+    /**
+     * One cell of a catalog row (INFORMATION_SCHEMA, PRAGMA) as the text it is.
+     * A driver hands names, types and rules back as strings, numbers as strings
+     * or ints; anything else is not a schema this comparator can read, and it
+     * says so rather than comparing a cast of it.
+     *
+     * @param array<string, mixed> $row
+     */
+    protected static function text(array $row, string $column): string
+    {
+        return self::textOrNull($row, $column) ?? throw new \UnexpectedValueException(sprintf('The schema catalog returned no %s.', $column));
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     */
+    protected static function textOrNull(array $row, string $column): ?string
+    {
+        $value = $row[$column] ?? null;
+
+        return match (true) {
+            $value === null => null,
+            is_string($value) => $value,
+            is_int($value), is_float($value) => (string) $value,
+            default => throw new \UnexpectedValueException(sprintf('The schema catalog returned %s for %s, not text.', get_debug_type($value), $column)),
+        };
+    }
 }

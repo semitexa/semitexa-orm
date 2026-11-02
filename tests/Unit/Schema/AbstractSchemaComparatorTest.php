@@ -7,8 +7,6 @@ namespace Semitexa\Orm\Tests\Unit\Schema;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Semitexa\Orm\Application\Service\Schema\AbstractSchemaComparator;
-use Semitexa\Orm\Domain\Model\ColumnDefinition;
-use Semitexa\Orm\Domain\Model\DbColumnState;
 use Semitexa\Orm\Domain\Model\DbIndexState;
 use Semitexa\Orm\Domain\Model\IndexDefinition;
 use Semitexa\Orm\Domain\Model\SchemaDiff;
@@ -139,46 +137,28 @@ final class AbstractSchemaComparatorTest extends TestCase
         self::assertSame([], $diff->getDropIndexes());
         self::assertSame([], $diff->getAddIndexes());
     }
-}
-
-/**
- * Minimal concrete comparator: supplies the one abstract hook and exposes the
- * protected shared methods, so the base can be exercised without a database.
- */
-final class FkAwareComparatorStub extends AbstractSchemaComparator
-{
-    /**
-     * @param array<string, bool> $fkIndexNames
-     */
-    public function __construct(array $fkIndexNames)
-    {
-        $this->fkIndexNames = $fkIndexNames;
-    }
 
     /**
-     * @param IndexDefinition[] $codeIndexes
-     * @param DbIndexState[]    $dbIndexes
+     * A catalog cell is text, and a number read as text: a cell of any other
+     * kind is not a schema the comparator can read, and it says so rather
+     * than comparing a cast of it.
      */
-    public function runCompareIndexes(string $table, array $codeIndexes, array $dbIndexes, SchemaDiff $diff): void
+    #[Test]
+    public function a_catalog_cell_is_read_as_text_and_refused_when_it_is_not(): void
     {
-        $this->compareIndexes($table, $codeIndexes, $dbIndexes, $diff);
-    }
+        $row = ['NAME' => 'orders', 'WIDTH' => 11, 'DEFAULT' => null, 'ODD' => ['x']];
 
-    /**
-     * @param string[] $columns
-     */
-    public function runGenerateIndexName(string $table, array $columns, bool $unique): string
-    {
-        return $this->generateIndexName($table, $columns, $unique);
-    }
-
-    public function compare(array $codeSchema): SchemaDiff
-    {
-        return new SchemaDiff();
-    }
-
-    protected function compareColumn(ColumnDefinition $code, DbColumnState $db): array
-    {
-        return [];
+        self::assertSame('orders', FkAwareComparatorStub::cell($row, 'NAME'));
+        self::assertSame('11', FkAwareComparatorStub::cell($row, 'WIDTH'));
+        self::assertNull(FkAwareComparatorStub::cellOrNull($row, 'DEFAULT'));
+        self::assertNull(FkAwareComparatorStub::cellOrNull($row, 'ABSENT'));
+        foreach (['DEFAULT', 'ODD'] as $column) {
+            try {
+                FkAwareComparatorStub::cell($row, $column);
+                self::fail($column . ' was read as text');
+            } catch (\UnexpectedValueException $e) {
+                self::assertStringContainsString($column, $e->getMessage());
+            }
+        }
     }
 }
