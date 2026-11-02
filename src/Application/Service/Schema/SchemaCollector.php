@@ -58,7 +58,11 @@ class SchemaCollector
         $this->errors = [];
         $this->warnings = [];
 
-        $classes = $this->classDiscovery()->findClassesWithAttribute(FromTable::class);
+        // A discovered class that does not load is reported, not a ReflectionException.
+        $classes = array_values(array_filter($discovered = $this->classDiscovery()->findClassesWithAttribute(FromTable::class), 'class_exists'));
+        foreach (array_diff($discovered, $classes) as $missing) {
+            $this->errors[] = "Class '{$missing}' carries #[FromTable] but cannot be loaded.";
+        }
         /** @var array<string, TableDefinition> $tables */
         $tables = [];
 
@@ -90,6 +94,7 @@ class SchemaCollector
         return $tables;
     }
 
+    /** @param class-string $className */
     private function matchesConnectionFilter(string $className): bool
     {
         if ($this->connectionNameFilter === null) {
@@ -116,6 +121,7 @@ class SchemaCollector
     }
 
     /**
+     * @param class-string $className
      * @param array<string, TableDefinition> $tables
      */
     private function processClass(string $className, array &$tables): void
@@ -185,6 +191,7 @@ class SchemaCollector
     }
 
     /**
+     * @param \ReflectionClass<object> $ref
      * @return \ReflectionProperty[]
      */
     private function getAllProperties(\ReflectionClass $ref): array
@@ -227,7 +234,6 @@ class SchemaCollector
                 && $property->getAttributes(HasMany::class) === []
                 && $property->getAttributes(OneToOne::class) === []
                 && $property->getAttributes(ManyToMany::class) === []
-                && $property->getAttributes(Aggregate::class) === []
             ) {
                 $this->errors[] = "Property '{$property->getName()}' in '{$className}' has no #[Column] attribute.";
             }
@@ -251,7 +257,7 @@ class SchemaCollector
             }
 
             // uuid strategy requires Binary or Varchar column type
-            if ($pkStrategy === 'uuid' && $columnAttrs !== []) {
+            if ($pkStrategy === 'uuid') {
                 /** @var Column $colCheck */
                 $colCheck = $columnAttrs[0]->newInstance();
                 $isBinaryOrVarchar = ($colCheck->type instanceof MySqlType && in_array($colCheck->type, [MySqlType::Binary, MySqlType::Varchar], true))
@@ -369,8 +375,8 @@ class SchemaCollector
         if (enum_exists($phpType)) {
             $ref = new \ReflectionEnum($phpType);
             if ($ref->isBacked()) {
-                $backingType = (string) $ref->getBackingType();
-                $phpType = $backingType;
+                $backing = $ref->getBackingType();
+                $phpType = $backing instanceof \ReflectionNamedType ? $backing->getName() : $phpType;
             } else {
                 $this->errors[] = "Property '{$propName}' in '{$className}': non-backed enum '{$phpType}' cannot be mapped to a database column.";
                 return;
@@ -445,7 +451,7 @@ class SchemaCollector
     /**
      * Add synthetic table definitions for ManyToMany pivot tables so they are created by orm:sync.
      *
-     * @param list<string> $classes FromTable class names
+     * @param list<class-string> $classes FromTable class names
      * @param array<string, TableDefinition> $tables
      */
     private function addPivotTables(array $classes, array &$tables): void
@@ -467,14 +473,14 @@ class SchemaCollector
 
         foreach ($tables as $tableName => $table) {
             foreach ($table->getRelations() as $relation) {
-                if (($relation['type'] ?? '') !== 'many_to_many') {
+                if ($relation->type !== 'many_to_many') {
                     continue;
                 }
-                $pivotTable = $relation['pivotTable'] ?? null;
-                $foreignKey = $relation['foreignKey'] ?? null;
-                $relatedKey = $relation['relatedKey'] ?? null;
-                $targetClass = $relation['target'];
-                if ($pivotTable === null || $foreignKey === null || $relatedKey === null || $targetClass === '') {
+                $pivotTable = $relation->pivotTable;
+                $foreignKey = $relation->foreignKey;
+                $relatedKey = $relation->relatedKey;
+                $targetClass = $relation->target;
+                if ($pivotTable === null || $relatedKey === null || $targetClass === '') {
                     continue;
                 }
                 if (isset($tables[$pivotTable])) {
@@ -556,7 +562,7 @@ class SchemaCollector
         $classToTable = [];
         foreach ($tables as $tableName => $table) {
             foreach ($table->getRelations() as $relation) {
-                $targetClass = $relation['target'];
+                $targetClass = $relation->target;
                 if ($targetClass === '') {
                     continue;
                 }
@@ -579,14 +585,12 @@ class SchemaCollector
 
         foreach ($tables as $tableName => $table) {
             foreach ($table->getRelations() as $relation) {
-                $type       = $relation['type'];
-                $targetClass = $relation['target'];
-                $foreignKey = $relation['foreignKey'];
-                $onDelete   = $relation['onDelete'] ?? null;
-                $onUpdate   = $relation['onUpdate'] ?? null;
+                $type        = $relation->type;
+                $targetClass = $relation->target;
+                $foreignKey  = $relation->foreignKey;
+                $onDelete    = $relation->onDelete;
+                $onUpdate    = $relation->onUpdate;
 
-                /** @var string|null $onDelete */
-                /** @var string|null $onUpdate */
                 $targetTable = $classToTable[$targetClass] ?? null;
                 if ($targetTable === null) {
                     continue;
@@ -636,8 +640,8 @@ class SchemaCollector
                     ));
                 } elseif ($type === 'many_to_many') {
                     // FK is on the pivot table: pivot.foreignKey -> this table, pivot.relatedKey -> target table
-                    $pivotTable = $relation['pivotTable'] ?? null;
-                    $relatedKey = $relation['relatedKey'] ?? null;
+                    $pivotTable = $relation->pivotTable;
+                    $relatedKey = $relation->relatedKey;
                     if ($pivotTable === null || $relatedKey === null) {
                         continue;
                     }
@@ -678,7 +682,7 @@ class SchemaCollector
         }
 
         foreach ($table->getRelations() as $relation) {
-            if ($relation['foreignKey'] === $columnName) {
+            if ($relation->foreignKey === $columnName) {
                 $this->warnings[] = "Deprecated column '{$columnName}' in table '{$table->name}' is used in a relation.";
             }
         }

@@ -720,7 +720,7 @@ class SyncEngine
         $classToTable = [];
         foreach ($tables as $table) {
             foreach ($table->getRelations() as $relation) {
-                $targetClass = $relation['target'];
+                $targetClass = $relation->target;
                 if (isset($classToTable[$targetClass])) {
                     continue;
                 }
@@ -738,8 +738,8 @@ class SyncEngine
         foreach ($tables as $table) {
             $deps[$table->name] = [];
             foreach ($table->getRelations() as $relation) {
-                if ($relation['type'] === 'belongs_to') {
-                    $targetTable = $classToTable[$relation['target']] ?? null;
+                if ($relation->type === 'belongs_to') {
+                    $targetTable = $classToTable[$relation->target] ?? null;
                     if ($targetTable !== null && isset($tableMap[$targetTable])) {
                         $deps[$table->name][] = $targetTable;
                     }
