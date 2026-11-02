@@ -382,4 +382,33 @@ final class TypeCasterOwnershipTest extends TestCase
             'a bare call has no column and must get the default form, not the last one seen',
         );
     }
+
+    /** A value no scalar cast can read is a mapping error said as one, not a 1 nobody stored. */
+    public function test_a_non_scalar_cannot_be_read_as_a_scalar(): void
+    {
+        $caster = new \Semitexa\Orm\Application\Service\Hydration\TypeCaster();
+        foreach ([['int', [1, 2], 'Cannot read a array as int.'], ['float', new \stdClass(), 'Cannot read a stdClass as float.'], ['string', new \DateTimeZone('UTC'), 'Cannot read a DateTimeZone as string.']] as [$type, $value, $message]) {
+            try {
+                $caster->castToPropertyType($value, $type, false);
+                self::fail("{$type} read a " . get_debug_type($value));
+            } catch (\InvalidArgumentException $e) {
+                self::assertSame($message, $e->getMessage());
+            }
+        }
+        // What a driver returns still reads.
+        self::assertSame([7, 1.5, '7'], [$caster->castToPropertyType('7', 'int', false), $caster->castToPropertyType('1.5', 'float', false), $caster->castToPropertyType(7, 'string', false)]);
+
+        // The column pass too: an INT, a DOUBLE and a VARCHAR column refuse a non-scalar.
+        foreach ([[\Semitexa\Orm\Adapter\MySqlType::Int, [1, 2], 'Cannot read a array as int.'], [\Semitexa\Orm\Adapter\MySqlType::Double, new \stdClass(), 'Cannot read a stdClass as float.'], [\Semitexa\Orm\Adapter\MySqlType::Varchar, new \stdClass(), 'Cannot read a stdClass as string.']] as [$type, $value, $message]) {
+            try {
+                $caster->castFromDb($value, new \Semitexa\Orm\Domain\Model\ColumnDefinition(name: 'value', type: $type, phpType: 'mixed'));
+                self::fail($type->name . ' read a ' . get_debug_type($value));
+            } catch (\InvalidArgumentException $e) {
+                self::assertSame($message, $e->getMessage());
+            }
+        }
+        self::assertSame(7, $caster->castFromDb('7', new \Semitexa\Orm\Domain\Model\ColumnDefinition(name: 'value', type: \Semitexa\Orm\Adapter\MySqlType::Int, phpType: 'int')));
+        self::assertSame(1.5, $caster->castFromDb('1.5', new \Semitexa\Orm\Domain\Model\ColumnDefinition(name: 'value', type: \Semitexa\Orm\Adapter\MySqlType::Double, phpType: 'float')));
+        self::assertSame('text', $caster->castFromDb('text', new \Semitexa\Orm\Domain\Model\ColumnDefinition(name: 'value', type: \Semitexa\Orm\Adapter\MySqlType::Varchar, phpType: 'string')));
+    }
 }

@@ -46,9 +46,9 @@ class TypeCaster
             MySqlType::TinyInt, MySqlType::SmallInt,
             MySqlType::Int, MySqlType::Bigint, MySqlType::Year,
             SqliteType::TinyInt, SqliteType::SmallInt,
-            SqliteType::Int, SqliteType::Bigint               => (int) $value,
+            SqliteType::Int, SqliteType::Bigint               => (int) self::scalar($value, 'int'),
             MySqlType::Float, MySqlType::Double,
-            SqliteType::Float, SqliteType::Double             => (float) $value,
+            SqliteType::Float, SqliteType::Double             => (float) self::scalar($value, 'float'),
             // A DECIMAL is exact: the driver's string keeps every digit and the
             // scale ("19.90"). Through a float it came back "19.9" to a string
             // property and lost digits past ~15 significant ones; a float
@@ -63,7 +63,7 @@ class TypeCaster
             SqliteType::Varchar, SqliteType::Char,
             SqliteType::Text, SqliteType::Time,
             SqliteType::Datetime, SqliteType::Date,
-            SqliteType::Json                                  => (string) $value,
+            SqliteType::Json                                  => (string) self::scalar($value, 'string'),
             MySqlType::Blob, SqliteType::Blob                 => $value, // raw bytes
             MySqlType::Binary, SqliteType::Binary             => is_string($value) && strlen($value) === 16
                 ? Uuid7::fromBytes($value)
@@ -72,6 +72,23 @@ class TypeCaster
             MySqlType::Date                                   => $this->castToDateTime($value),
             default                                           => $value,
         };
+    }
+
+    /**
+     * A value a scalar cast can read: what a driver returns (a scalar) or a
+     * Stringable. Anything else is a mapping error said as one: `(int)` on an
+     * array is 1 and on an object a warning, a value nobody stored.
+     */
+    private static function scalar(mixed $value, string $as): int|float|string|bool
+    {
+        if (is_scalar($value)) {
+            return $value;
+        }
+        if ($value instanceof \Stringable) {
+            return (string) $value;
+        }
+
+        throw new \InvalidArgumentException(sprintf('Cannot read a %s as %s.', get_debug_type($value), $as));
     }
 
     /**
@@ -125,8 +142,8 @@ class TypeCaster
 
         // Scalar types
         return match ($phpType) {
-            'int' => (int) $value,
-            'float' => (float) $value,
+            'int' => (int) self::scalar($value, 'int'),
+            'float' => (float) self::scalar($value, 'float'),
             'bool' => (bool) $value,
             'string' => match (true) {
                 is_array($value) => json_encode($value, JSON_UNESCAPED_UNICODE) ?: '[]',
@@ -139,15 +156,15 @@ class TypeCaster
                 // it going the other way, so what was written comes back — to
                 // the second; see formatForColumn() on sub-second precision.
                 $value instanceof \DateTimeInterface => $this->formatForColumn($value, $this->columnInPlay()),
-                default => (string) $value,
+                default => (string) self::scalar($value, 'string'),
             },
-            'array' => is_array($value) ? $value : json_decode((string) $value, true),
+            'array' => is_array($value) ? $value : json_decode((string) self::scalar($value, 'array'), true),
             'DateTimeImmutable', '\DateTimeImmutable' => $value instanceof \DateTimeImmutable
                 ? $value
-                : new \DateTimeImmutable((string) $value, new \DateTimeZone('UTC')),
+                : new \DateTimeImmutable((string) self::scalar($value, 'DateTimeImmutable'), new \DateTimeZone('UTC')),
             'DateTime', '\DateTime' => $value instanceof \DateTime
                 ? $value
-                : new \DateTime((string) $value, new \DateTimeZone('UTC')),
+                : new \DateTime((string) self::scalar($value, 'DateTime'), new \DateTimeZone('UTC')),
             default => $this->castToEnum($value, $phpType),
         };
     }
@@ -290,7 +307,7 @@ class TypeCaster
 
         // Stored without an offset, written as UTC by castToDb(); an explicit
         // offset in the string still wins over the zone given here.
-        return new \DateTimeImmutable((string) $value, new \DateTimeZone('UTC'));
+        return new \DateTimeImmutable((string) self::scalar($value, 'DateTimeImmutable'), new \DateTimeZone('UTC'));
     }
     /**
      * Cache: phpType → true (backed enum) | false (not a backed enum).
