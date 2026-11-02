@@ -146,13 +146,13 @@ final class AbstractSchemaComparatorTest extends TestCase
     #[Test]
     public function a_catalog_cell_is_read_as_text_and_refused_when_it_is_not(): void
     {
-        $row = ['NAME' => 'orders', 'WIDTH' => 11, 'DEFAULT' => null, 'ODD' => ['x']];
+        $row = ['NAME' => 'orders', 'WIDTH' => 11, 'DEFAULT' => null, 'FLAG' => true, 'ODD' => ['x']];
 
         self::assertSame('orders', FkAwareComparatorStub::cell($row, 'NAME'));
         self::assertSame('11', FkAwareComparatorStub::cell($row, 'WIDTH'));
         self::assertNull(FkAwareComparatorStub::cellOrNull($row, 'DEFAULT'));
         self::assertNull(FkAwareComparatorStub::cellOrNull($row, 'ABSENT'));
-        foreach (['DEFAULT', 'ODD'] as $column) {
+        foreach (['DEFAULT', 'FLAG', 'ODD'] as $column) {
             try {
                 FkAwareComparatorStub::cell($row, $column);
                 self::fail($column . ' was read as text');
