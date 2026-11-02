@@ -46,4 +46,23 @@ final class SchemaCollectorUninspectedTest extends TestCase
         self::assertSame(["Class 'App\\Orders' declares #[FromTable] but could not be inspected (load error: Class \"Missing\" not found); its table is missing from the schema."], $collector->getErrors());
         self::assertContains("Class 'App\\Helper' could not be inspected (load error: Class \"Missing\" not found); if it is a #[FromTable] resource, its table is missing from the schema.", $collector->getWarnings());
     }
+
+    /** Another connection's resource is not this sync's error; an unreadable source is. */
+    #[Test]
+    public function the_report_is_scoped_to_the_connection_and_an_unreadable_source_fails_it(): void
+    {
+        file_put_contents($this->dir . '/Events.php', "<?php\nuse Semitexa\\Orm\\Attribute\\FromTable;\nuse Semitexa\\Orm\\Attribute\\Connection;\n#[FromTable(name: 'events')]\n#[Connection('analytics')]\nfinal class Events extends Missing {}\n");
+        $discovery = $this->createStub(ClassDiscovery::class);
+        $discovery->method('findClassesWithAttribute')->willReturn([]);
+        $discovery->method('getClassMap')->willReturn(['App\\Events' => $this->dir . '/Events.php', 'App\\Gone' => $this->dir . '/Gone.php']);
+        $discovery->method('unloadableClasses')->willReturn(['App\\Events' => 'load error', 'App\\Gone' => 'does not exist']);
+
+        $default = new SchemaCollector(classDiscovery: $discovery, driver: 'sqlite', connectionNameFilter: 'default');
+        $default->collect();
+        self::assertSame(["Class 'App\\Gone' could not be inspected (does not exist) and its source could not be read; if it is a #[FromTable] resource, its table is missing from the schema."], $default->getErrors(), 'analytics is not the default sync\'s to report');
+
+        $analytics = new SchemaCollector(classDiscovery: $discovery, driver: 'sqlite', connectionNameFilter: 'analytics');
+        $analytics->collect();
+        self::assertContains("Class 'App\\Events' declares #[FromTable] but could not be inspected (load error); its table is missing from the schema.", $analytics->getErrors());
+    }
 }

@@ -32,13 +32,15 @@ final class SchemaResetTest extends TestCase
         $adapter->execute('CREATE TABLE customers (id INTEGER PRIMARY KEY)');
         $adapter->execute('CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL REFERENCES customers(id))');
         $adapter->execute('CREATE TABLE "odd ""name""" (id INTEGER)');
+        // LIKE 'sqlite_%' would have spared it: `_` matches any character.
+        $adapter->execute('CREATE TABLE sqliteXorders (id INTEGER)');
         $adapter->execute('INSERT INTO customers (id) VALUES (1)');
         $adapter->execute('INSERT INTO orders (id, customer_id) VALUES (1, 1)');
 
         $reset = new SchemaReset($adapter, 'sqlite', $this->path);
-        self::assertSame(['customers', 'odd "name"', 'orders'], $reset->tables());
+        self::assertSame(['customers', 'odd "name"', 'orders', 'sqliteXorders'], $reset->tables());
 
-        self::assertSame(['customers', 'odd "name"', 'orders'], $reset->dropAll(), 'the referenced table goes before the one pointing at it, in name order');
+        self::assertSame(['customers', 'odd "name"', 'orders', 'sqliteXorders'], $reset->dropAll(), 'the referenced table goes before the one pointing at it, in name order');
         self::assertSame([], $reset->tables());
         self::assertSame([], $reset->dropAll(), 'an empty database has nothing to drop');
 

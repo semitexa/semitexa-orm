@@ -54,6 +54,12 @@ final class OrmFreshCommand extends BaseCommand
             return Command::FAILURE;
         }
         $connection = trim((string) $input->getOption('connection'));
+        if ($connection === '') {
+            // orm:sync refuses it too, but only after the tables are gone.
+            $io->error('The --connection option must not be empty.');
+
+            return Command::FAILURE;
+        }
         $seed = (bool) $input->getOption('seed');
         if ($seed && $connection !== 'default') {
             // orm:seed seeds the default connection only.
@@ -62,6 +68,18 @@ final class OrmFreshCommand extends BaseCommand
             return Command::FAILURE;
         }
         $orm = $this->connections->manager($connection);
+        // The schema the sync will build, checked before anything is dropped:
+        // orm:sync refuses a schema with errors, and it would refuse it here
+        // with the database already empty.
+        $collector = $orm->getSchemaCollector();
+        $collector->collect();
+        if ($collector->getErrors() !== []) {
+            $io->error('Schema validation errors; nothing was dropped:');
+            $io->listing($collector->getErrors());
+            $orm->shutdown();
+
+            return Command::FAILURE;
+        }
         $reset = new SchemaReset($orm->getAdapter(), $orm->getDriver(), $orm->getDatabaseName());
         $dropped = $reset->dropAll();
         $io->text(sprintf('Dropped %d table(s) from %s (connection: %s).', count($dropped), $orm->getDatabaseName(), $connection));

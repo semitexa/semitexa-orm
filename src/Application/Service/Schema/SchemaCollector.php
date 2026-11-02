@@ -692,18 +692,30 @@ class SchemaCollector
     /**
      * The classes discovery could not inspect are absent from $classes, so a
      * resource among them is absent from the schema (tk-discovery-reports-
-     * dropped-classes: orm:sync finished green over one). A class whose source
-     * declares #[FromTable] is certainly a resource: an error. Any other is
-     * named as a warning: it may be one, and failing every sync on a class
-     * that only extends an optional dependency would be a false alarm.
+     * dropped-classes: orm:sync finished green over one). A class whose own
+     * attributes declare #[FromTable] (read from its source, the declaration
+     * only) is certainly a resource: an error, unless it names another
+     * connection than the one synced. A source that cannot be read is an
+     * error too. Any other class is a warning: it may be a resource, and
+     * failing every sync on a class that only extends an optional dependency
+     * would be a false alarm.
      */
     private function reportUninspected(): void
     {
         $map = $this->classDiscovery()->getClassMap();
         foreach ($this->classDiscovery()->unloadableClasses() as $className => $why) {
             $file = $map[$className] ?? null;
-            $source = is_string($file) && is_file($file) ? (string) @file_get_contents($file) : '';
-            if (preg_match('/#\[\s*(?:\\\\?[A-Za-z_][\w\\\\]*\\\\)?FromTable\b/', $source) === 1) {
+            $source = is_string($file) && is_file($file) ? @file_get_contents($file) : false;
+            if ($source === false) {
+                // Unread, it may be a resource: a gate that cannot check does not pass.
+                $this->errors[] = "Class '{$className}' could not be inspected ({$why}) and its source could not be read; if it is a #[FromTable] resource, its table is missing from the schema.";
+                continue;
+            }
+            $declared = DeclaredClassAttributes::of($source, $className);
+            if ($declared !== null && $this->connectionNameFilter !== null && $declared->connection !== $this->connectionNameFilter) {
+                continue; // another connection's class: not this schema's to report
+            }
+            if ($declared !== null && $declared->fromTable) {
                 $this->errors[] = "Class '{$className}' declares #[FromTable] but could not be inspected ({$why}); its table is missing from the schema.";
             } else {
                 $this->warnings[] = "Class '{$className}' could not be inspected ({$why}); if it is a #[FromTable] resource, its table is missing from the schema.";

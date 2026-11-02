@@ -23,11 +23,17 @@ final class SchemaReset
         private readonly string $database,
     ) {}
 
-    /** @return list<string> the tables there are, sorted */
+    /**
+     * The tables there are, sorted. SQLite's own tables are left out by GLOB:
+     * LIKE's `_` matches any character, which spared a user table such as
+     * sqliteXorders.
+     *
+     * @return list<string>
+     */
     public function tables(): array
     {
         $rows = $this->driver === 'sqlite'
-            ? $this->adapter->execute("SELECT name AS t FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")->rows
+            ? $this->adapter->execute("SELECT name AS t FROM sqlite_master WHERE type = 'table' AND name NOT GLOB 'sqlite_*'")->rows
             : $this->adapter->execute("SELECT TABLE_NAME AS t FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = :db AND TABLE_TYPE = 'BASE TABLE'", ['db' => $this->database])->rows;
         $tables = [];
         foreach ($rows as $row) {
