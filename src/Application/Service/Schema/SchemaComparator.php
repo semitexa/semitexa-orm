@@ -12,16 +12,9 @@ use Semitexa\Orm\Domain\Model\DbIndexState;
 use Semitexa\Orm\Domain\Model\DbTableState;
 use Semitexa\Orm\Domain\Model\SchemaDiff;
 use Semitexa\Orm\Domain\Model\TableDefinition;
-
-
-
-
-
-
-
-
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Adapter\MySqlType;
+
 class SchemaComparator extends AbstractSchemaComparator
 {
     /** @param string[] $ignoreTables Table names to exclude from DROP detection */
@@ -99,7 +92,7 @@ class SchemaComparator extends AbstractSchemaComparator
             ['db' => $this->database],
         );
         foreach ($tableResult->rows as $row) {
-            $tableComments[$row['TABLE_NAME']] = $row['TABLE_COMMENT'];
+            $tableComments[self::text($row, 'TABLE_NAME')] = self::textOrNull($row, 'TABLE_COMMENT') ?? '';
         }
 
         // Read columns
@@ -114,7 +107,7 @@ class SchemaComparator extends AbstractSchemaComparator
         );
 
         foreach ($result->rows as $row) {
-            $tableName = $row['TABLE_NAME'];
+            $tableName = self::text($row, 'TABLE_NAME');
             if (in_array($tableName, $this->ignoreTables, true)) {
                 continue;
             }
@@ -122,17 +115,17 @@ class SchemaComparator extends AbstractSchemaComparator
                 $tables[$tableName] = new DbTableState($tableName, $tableComments[$tableName] ?? '');
             }
             $tables[$tableName]->addColumn(new DbColumnState(
-                name: $row['COLUMN_NAME'],
-                dataType: $row['DATA_TYPE'],
-                columnType: $row['COLUMN_TYPE'],
-                nullable: $row['IS_NULLABLE'] === 'YES',
-                defaultValue: $row['COLUMN_DEFAULT'],
-                isPrimaryKey: $row['COLUMN_KEY'] === 'PRI',
-                isAutoIncrement: str_contains($row['EXTRA'], 'auto_increment'),
-                maxLength: $row['CHARACTER_MAXIMUM_LENGTH'] !== null ? (int) $row['CHARACTER_MAXIMUM_LENGTH'] : null,
-                numericPrecision: $row['NUMERIC_PRECISION'] !== null ? (int) $row['NUMERIC_PRECISION'] : null,
-                numericScale: $row['NUMERIC_SCALE'] !== null ? (int) $row['NUMERIC_SCALE'] : null,
-                comment: $row['COLUMN_COMMENT'],
+                name: self::text($row, 'COLUMN_NAME'),
+                dataType: self::text($row, 'DATA_TYPE'),
+                columnType: self::text($row, 'COLUMN_TYPE'),
+                nullable: self::textOrNull($row, 'IS_NULLABLE') === 'YES',
+                defaultValue: self::textOrNull($row, 'COLUMN_DEFAULT'),
+                isPrimaryKey: self::textOrNull($row, 'COLUMN_KEY') === 'PRI',
+                isAutoIncrement: str_contains(self::textOrNull($row, 'EXTRA') ?? '', 'auto_increment'),
+                maxLength: self::number($row, 'CHARACTER_MAXIMUM_LENGTH'),
+                numericPrecision: self::number($row, 'NUMERIC_PRECISION'),
+                numericScale: self::number($row, 'NUMERIC_SCALE'),
+                comment: self::textOrNull($row, 'COLUMN_COMMENT') ?? '',
             ));
         }
 
@@ -145,18 +138,21 @@ class SchemaComparator extends AbstractSchemaComparator
             ['db' => $this->database],
         );
 
+        /** @var array<string, array{table: string, name: string, columns: list<string>, unique: bool}> $indexGroups */
         $indexGroups = [];
         foreach ($indexResult->rows as $row) {
-            $key = $row['TABLE_NAME'] . '.' . $row['INDEX_NAME'];
+            $table = self::text($row, 'TABLE_NAME');
+            $name = self::text($row, 'INDEX_NAME');
+            $key = $table . '.' . $name;
             if (!isset($indexGroups[$key])) {
                 $indexGroups[$key] = [
-                    'table' => $row['TABLE_NAME'],
-                    'name' => $row['INDEX_NAME'],
+                    'table' => $table,
+                    'name' => $name,
                     'columns' => [],
-                    'unique' => (int) $row['NON_UNIQUE'] === 0,
+                    'unique' => self::number($row, 'NON_UNIQUE') === 0,
                 ];
             }
-            $indexGroups[$key]['columns'][] = $row['COLUMN_NAME'];
+            $indexGroups[$key]['columns'][] = self::text($row, 'COLUMN_NAME');
         }
 
         foreach ($indexGroups as $idx) {
@@ -225,6 +221,18 @@ class SchemaComparator extends AbstractSchemaComparator
         return $changes;
     }
 
+    /**
+     * A numeric catalog cell (a length, a precision): null when the column has none.
+     *
+     * @param array<string, mixed> $row
+     */
+    private static function number(array $row, string $column): ?int
+    {
+        $value = self::textOrNull($row, $column);
+
+        return $value === null ? null : (int) $value;
+    }
+
     private function buildExpectedColumnType(ColumnDefinition $col): string
     {
         return $col->type->canonicalName($col->length, $col->precision, $col->scale);
@@ -243,18 +251,20 @@ class SchemaComparator extends AbstractSchemaComparator
         if (is_bool($default)) {
             return $default ? '1' : '0';
         }
-        return (string) $default;
+        if (is_scalar($default) || $default instanceof \Stringable) {
+            return (string) $default;
+        }
+
+        // SyncEngine::defaultClause() could not write such a default either.
+        throw new \UnexpectedValueException(sprintf('A column default of %s has no SQL form.', get_debug_type($default)));
     }
 
     private function normalizeType(string $type): string
     {
         $type = strtolower(trim($type));
         // MySQL may report integer types with display width — strip it for comparison
-        $type = preg_replace('/^int\(\d+\)$/', 'int', $type);
-        $type = preg_replace('/^bigint\(\d+\)$/', 'bigint', $type);
-        $type = preg_replace('/^tinyint\((\d+)\)$/', 'tinyint($1)', $type); // keep tinyint(1) for boolean
-        $type = preg_replace('/^smallint\(\d+\)$/', 'smallint', $type);
-        return $type;
+        // tinyint keeps its width: tinyint(1) is the boolean.
+        return preg_replace(['/^int\(\d+\)$/', '/^bigint\(\d+\)$/', '/^smallint\(\d+\)$/'], ['int', 'bigint', 'smallint'], $type) ?? $type;
     }
 
 
@@ -266,6 +276,7 @@ class SchemaComparator extends AbstractSchemaComparator
      * - FK exists in both but definition differs → DROP + ADD
      *
      * @param array<string, TableDefinition> $codeSchema
+     * @param array<string, array{table: string, column: string, referencedTable: string, referencedColumn: string, onDelete: string, onUpdate: string}> $dbFks
      */
     private function compareForeignKeys(array $codeSchema, SchemaDiff $diff, array $dbFks): void
     {
@@ -333,13 +344,13 @@ class SchemaComparator extends AbstractSchemaComparator
 
         $fks = [];
         foreach ($result->rows as $row) {
-            $fks[$row['CONSTRAINT_NAME']] = [
-                'table'            => $row['TABLE_NAME'],
-                'column'           => $row['COLUMN_NAME'],
-                'referencedTable'  => $row['REFERENCED_TABLE_NAME'],
-                'referencedColumn' => $row['REFERENCED_COLUMN_NAME'],
-                'onDelete'         => $row['DELETE_RULE'],
-                'onUpdate'         => $row['UPDATE_RULE'],
+            $fks[self::text($row, 'CONSTRAINT_NAME')] = [
+                'table'            => self::text($row, 'TABLE_NAME'),
+                'column'           => self::text($row, 'COLUMN_NAME'),
+                'referencedTable'  => self::text($row, 'REFERENCED_TABLE_NAME'),
+                'referencedColumn' => self::text($row, 'REFERENCED_COLUMN_NAME'),
+                'onDelete'         => self::text($row, 'DELETE_RULE'),
+                'onUpdate'         => self::text($row, 'UPDATE_RULE'),
             ];
         }
 
@@ -374,7 +385,7 @@ class SchemaComparator extends AbstractSchemaComparator
 
         $names = [];
         foreach ($result->rows as $row) {
-            $names[$row['TABLE_NAME'] . '.' . $row['INDEX_NAME']] = true;
+            $names[self::text($row, 'TABLE_NAME') . '.' . self::text($row, 'INDEX_NAME')] = true;
         }
         return $names;
     }
