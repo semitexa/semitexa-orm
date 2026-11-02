@@ -16,7 +16,7 @@ class TableDefinition
     /** @var IndexDefinition[] */
     private array $indexes = [];
 
-    /** @var array<string, array{type: string, target: string, foreignKey: string, pivotTable?: string, relatedKey?: string}> */
+    /** @var array<string, RelationDefinition> property => relation */
     private array $relations = [];
 
     /** @var ForeignKeyDefinition[] */
@@ -90,22 +90,7 @@ class TableDefinition
         ?ForeignKeyAction $onDelete = null,
         ?ForeignKeyAction $onUpdate = null,
     ): void {
-        $relation = [
-            'type'       => $type,
-            'target'     => $target,
-            'foreignKey' => $foreignKey,
-            'onDelete'   => $onDelete,
-            'onUpdate'   => $onUpdate,
-        ];
-
-        if ($pivotTable !== null) {
-            $relation['pivotTable'] = $pivotTable;
-        }
-        if ($relatedKey !== null) {
-            $relation['relatedKey'] = $relatedKey;
-        }
-
-        $this->relations[$property] = $relation;
+        $this->relations[$property] = new RelationDefinition($type, $target, $foreignKey, $onDelete, $onUpdate, $pivotTable, $relatedKey);
     }
 
     public function getColumn(string $name): ?ColumnDefinition
@@ -125,7 +110,7 @@ class TableDefinition
         return $this->indexes;
     }
 
-    /** @return array<string, array{type: string, target: string, foreignKey: string, pivotTable?: string, relatedKey?: string}> */
+    /** @return array<string, RelationDefinition> property => relation */
     public function getRelations(): array
     {
         return $this->relations;
