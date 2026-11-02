@@ -73,7 +73,7 @@ final class DeclaredClassAttributesTest extends TestCase
         $relative = "<?php\nnamespace Semitexa\\Orm\\Attribute;\n#[namespace\\FromTable(name: 'r')]\nfinal class Relative {}\n";
         self::assertTrue(DeclaredClassAttributes::of($relative, 'Semitexa\\Orm\\Attribute\\Relative')?->fromTable);
 
-        foreach (["DB_ALIAS", "name: DB_ALIAS", "'anal' . 'ytics'", "other: 'analytics'"] as $argument) {
+        foreach (["DB_ALIAS", "name: DB_ALIAS", "'anal' . 'ytics'", "other: 'analytics'", "Name: 'analytics'"] as $argument) {
             $source = "<?php\nnamespace App;\nuse Semitexa\\Orm\\Attribute\\{FromTable, Connection};\n#[FromTable(name: 'c')]\n#[Connection({$argument})]\nfinal class Computed {}\n";
             $declared = DeclaredClassAttributes::of($source, 'App\\Computed');
             self::assertNotNull($declared, "{$argument}: the declaration is found");

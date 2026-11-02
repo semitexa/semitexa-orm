@@ -254,7 +254,7 @@ final class DeclaredClassAttributes
         }
         // `name:` is the attribute's only parameter; any other name is no literal of it.
         if (count($args) === 3 && $args[0][0] === T_STRING && $args[1][0] === ':') {
-            if (strtolower($args[0][1]) !== 'name') {
+            if ($args[0][1] !== 'name') { // named arguments match case-sensitively
                 return null;
             }
             $args = [$args[2]];
