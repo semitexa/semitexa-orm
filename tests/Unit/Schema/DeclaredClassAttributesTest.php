@@ -54,6 +54,33 @@ final class DeclaredClassAttributesTest extends TestCase
         self::assertFalse(DeclaredClassAttributes::of($unimported, 'App\\Local')?->fromTable, 'an unimported FromTable is App\\FromTable, not the ORM\'s');
     }
 
+    /** Raised on orm#105 (third review): trait uses, case, groups, escapes, `namespace\\`, and non-literal connections. */
+    #[Test]
+    public function the_file_is_read_as_php_reads_it(): void
+    {
+        $trait = "<?php\nnamespace App;\nuse Semitexa\\Orm\\Attribute\\FromTable;\nfinal class First { use \\Other\\FromTable; }\n#[FromTable(name: 'b')]\nfinal class Second {}\n";
+        self::assertTrue(DeclaredClassAttributes::of($trait, 'App\\Second')?->fromTable, 'a trait use inside a class body is no import');
+
+        $upper = "<?php\nnamespace App;\n#[\\SEMITEXA\\ORM\\ATTRIBUTE\\FROMTABLE(name: 'u')]\nfinal class Upper {}\n";
+        self::assertTrue(DeclaredClassAttributes::of($upper, 'App\\Upper')?->fromTable, 'class names are case-insensitive');
+
+        $group = "<?php\nnamespace App;\nuse Semitexa\\Orm\\Attribute\\{function helper, FromTable};\n#[FromTable(name: 'g')]\nfinal class Grouped {}\n";
+        self::assertTrue(DeclaredClassAttributes::of($group, 'App\\Grouped')?->fromTable, 'only the function member of a group is skipped');
+
+        $escaped = "<?php\nnamespace App;\nuse Semitexa\\Orm\\Attribute\\{FromTable, Connection};\n#[FromTable(name: 'e')]\n#[Connection('analytics\\n')]\nfinal class Escaped {}\n";
+        self::assertSame('analytics\\n', DeclaredClassAttributes::of($escaped, 'App\\Escaped')?->connection, 'a single-quoted \\n stays two characters');
+
+        $relative = "<?php\nnamespace Semitexa\\Orm\\Attribute;\n#[namespace\\FromTable(name: 'r')]\nfinal class Relative {}\n";
+        self::assertTrue(DeclaredClassAttributes::of($relative, 'Semitexa\\Orm\\Attribute\\Relative')?->fromTable);
+
+        foreach (["DB_ALIAS", "name: DB_ALIAS", "'anal' . 'ytics'"] as $argument) {
+            $source = "<?php\nnamespace App;\nuse Semitexa\\Orm\\Attribute\\{FromTable, Connection};\n#[FromTable(name: 'c')]\n#[Connection({$argument})]\nfinal class Computed {}\n";
+            self::assertNull(DeclaredClassAttributes::of($source, 'App\\Computed')?->connection, "{$argument} is no literal: the connection is unknown");
+        }
+        $named = "<?php\nnamespace App;\nuse Semitexa\\Orm\\Attribute\\Connection;\n#[Connection(name: 'analytics')]\nfinal class Named {}\n";
+        self::assertSame('analytics', DeclaredClassAttributes::of($named, 'App\\Named')?->connection);
+    }
+
     #[Test]
     public function the_attributes_of_another_class_in_the_file_are_not_this_one_s(): void
     {

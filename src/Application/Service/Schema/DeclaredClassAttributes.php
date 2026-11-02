@@ -27,7 +27,8 @@ final class DeclaredClassAttributes
 
     private function __construct(
         public readonly bool $fromTable,
-        public readonly string $connection,
+        /** The #[Connection] it names; null when its argument is not one string literal (unknown). */
+        public readonly ?string $connection,
     ) {}
 
     /** The class's declared attributes, or null when the source declares no such class. */
@@ -38,7 +39,7 @@ final class DeclaredClassAttributes
         $namespace = '';
         /** @var array<string, string> $imports */
         $imports = [];
-        /** @var list<array{name: string, firstString: ?string}> $attributes */
+        /** @var list<array{name: string, literal: ?string, args: bool}> $attributes */
         $attributes = [];
         $n = count($tokens);
         for ($i = 0; $i < $n; $i++) {
@@ -49,7 +50,7 @@ final class DeclaredClassAttributes
                 $attributes = [];
                 continue;
             }
-            if ($id === T_USE && $attributes === []) {
+            if ($id === T_USE && $attributes === [] && ($tokens[$i + 1][0] ?? null) !== '(') {
                 $i = self::imports($tokens, $i + 1, $imports);
                 continue;
             }
@@ -60,21 +61,28 @@ final class DeclaredClassAttributes
             if (in_array($id, [T_FINAL, T_ABSTRACT, T_READONLY], true)) {
                 continue;
             }
-            if ($id === T_CLASS) {
+            $previous = $tokens[$i - 1][0] ?? null;
+            $declares = in_array($id, [T_CLASS, T_TRAIT, T_INTERFACE, T_ENUM], true) && $previous !== T_DOUBLE_COLON && $previous !== T_NEW;
+            if ($declares) {
                 $short = self::nameAt($tokens, $i + 1);
-                if (ltrim(($namespace === '' ? '' : $namespace . '\\') . $short, '\\') === $wanted) {
+                if ($id === T_CLASS && strtolower(ltrim(($namespace === '' ? '' : $namespace . '\\') . $short, '\\')) === strtolower($wanted)) {
                     $fromTable = false;
                     $connection = 'default';
                     foreach ($attributes as $attribute) {
-                        $resolved = self::resolve($attribute['name'], $namespace, $imports);
-                        $fromTable = $fromTable || $resolved === FromTable::class;
-                        if ($resolved === Connection::class && $attribute['firstString'] !== null) {
-                            $connection = $attribute['firstString'];
+                        $resolved = strtolower(self::resolve($attribute['name'], $namespace, $imports));
+                        $fromTable = $fromTable || $resolved === strtolower(FromTable::class);
+                        if ($resolved === strtolower(Connection::class)) {
+                            // Not one string literal (a constant, a concatenation): unknown, never assumed.
+                            $connection = $attribute['literal'];
                         }
                     }
 
                     return new self($fromTable, $connection);
                 }
+                // Another declaration: its body holds trait `use`s and closures, not imports.
+                $i = self::skipBody($tokens, $i);
+                $attributes = [];
+                continue;
             }
             // Anything else ends the run of attributes before a declaration.
             $attributes = [];
@@ -125,10 +133,17 @@ final class DeclaredClassAttributes
         $prefix = '';
         $current = '';
         $alias = null;
+        $inGroup = false;
+        $skipMember = false;
         $n = count($tokens);
         for (; $at < $n; $at++) {
             [$id, $text] = $tokens[$at];
             if ($id === T_FUNCTION || $id === T_CONST) {
+                if ($inGroup) {
+                    // `use A\{function f, B}`: only this member imports no class.
+                    $skipMember = true;
+                    continue;
+                }
                 while ($at < $n && $tokens[$at][0] !== ';') {
                     $at++;
                 }
@@ -136,13 +151,15 @@ final class DeclaredClassAttributes
                 return $at;
             }
             if ($id === ';' || $id === ',' || $id === '}') {
-                self::import($imports, $prefix . $current, $alias);
-                [$current, $alias] = ['', null];
+                if (!$skipMember) {
+                    self::import($imports, $prefix . $current, $alias);
+                }
+                [$current, $alias, $skipMember] = ['', null, false];
                 if ($id === ';') {
                     return $at;
                 }
             } elseif ($id === '{') {
-                [$prefix, $current] = [$current, ''];
+                [$prefix, $current, $inGroup] = [$current, '', true];
             } elseif ($id === T_AS) {
                 $alias = '';
             } elseif ($id === T_NS_SEPARATOR) {
@@ -171,20 +188,26 @@ final class DeclaredClassAttributes
     }
 
     /**
-     * One `#[ … ]` group: each attribute's name and its first string argument.
-     * Depth counts the bracket tokens only, so a `[` in a string is text.
+     * One `#[ … ]` group: each attribute's name, and its argument when that is
+     * exactly one string literal (positional or `name:`). Depth counts the
+     * bracket tokens only, so a `[` in a string is text.
      *
      * @param list<array{0: int|string, 1: string}> $tokens
-     * @param list<array{name: string, firstString: ?string}> $attributes
+     * @param list<array{name: string, literal: ?string, args: bool}> $attributes
      */
     private static function attributeGroup(array $tokens, int $at, array &$attributes): int
     {
         $depth = 1;
         $parens = 0;
         $expectName = true;
+        /** @var list<array{0: int|string, 1: string}> $args */
+        $args = [];
         $n = count($tokens);
         for (; $at < $n; $at++) {
             [$id, $text] = $tokens[$at];
+            if ($parens > 0 && !($parens === 1 && $id === ')')) {
+                $args[] = $tokens[$at];
+            }
             if ($id === '[') {
                 $depth++;
             } elseif ($id === ']') {
@@ -194,15 +217,62 @@ final class DeclaredClassAttributes
             } elseif ($id === '(') {
                 $parens++;
             } elseif ($id === ')') {
-                $parens--;
+                if (--$parens === 0 && $attributes !== []) {
+                    $last = count($attributes) - 1;
+                    $attributes[$last]['literal'] = self::literal($args);
+                    $attributes[$last]['args'] = true;
+                    $args = [];
+                }
             } elseif ($id === ',' && $depth === 1 && $parens === 0) {
                 $expectName = true;
-            } elseif ($expectName && in_array($id, self::NAMES, true)) {
-                $attributes[] = ['name' => $text, 'firstString' => null];
+            } elseif ($expectName && $parens === 0 && in_array($id, self::NAMES, true)) {
+                $attributes[] = ['name' => $text, 'literal' => null, 'args' => false];
                 $expectName = false;
-            } elseif ($id === T_CONSTANT_ENCAPSED_STRING && $parens > 0 && $attributes !== []) {
-                $last = count($attributes) - 1;
-                $attributes[$last]['firstString'] ??= stripcslashes(substr($text, 1, -1));
+            }
+        }
+
+        return $at;
+    }
+
+    /**
+     * The value of an argument list that is one string literal, `'x'` or
+     * `name: 'x'`; null for anything else.
+     *
+     * @param list<array{0: int|string, 1: string}> $args
+     */
+    private static function literal(array $args): ?string
+    {
+        if (count($args) === 3 && $args[0][0] === T_STRING && $args[1][0] === ':') {
+            $args = [$args[2]];
+        }
+        if (count($args) !== 1 || $args[0][0] !== T_CONSTANT_ENCAPSED_STRING) {
+            return null;
+        }
+        $raw = $args[0][1];
+        $body = substr($raw, 1, -1);
+
+        // Single quotes keep every escape but \\ and \' literal; double quotes decode them.
+        return $raw[0] === "'" ? str_replace(['\\\\', "\\'"], ['\\', "'"], $body) : stripcslashes($body);
+    }
+
+    /**
+     * The index of the `}` that closes the body of the declaration at $at.
+     *
+     * @param list<array{0: int|string, 1: string}> $tokens
+     */
+    private static function skipBody(array $tokens, int $at): int
+    {
+        $n = count($tokens);
+        while ($at < $n && $tokens[$at][0] !== '{') {
+            $at++;
+        }
+        $depth = 0;
+        for (; $at < $n; $at++) {
+            $id = $tokens[$at][0];
+            if ($id === '{' || $id === T_CURLY_OPEN || $id === T_DOLLAR_OPEN_CURLY_BRACES) {
+                $depth++;
+            } elseif ($id === '}' && --$depth === 0) {
+                return $at;
             }
         }
 
@@ -214,6 +284,9 @@ final class DeclaredClassAttributes
     {
         if (str_starts_with($name, '\\')) {
             return ltrim($name, '\\');
+        }
+        if (str_starts_with(strtolower($name), 'namespace\\')) {
+            return ltrim(($namespace === '' ? '' : $namespace . '\\') . substr($name, strlen('namespace\\')), '\\');
         }
         $parts = explode('\\', $name);
         $first = strtolower($parts[0]);

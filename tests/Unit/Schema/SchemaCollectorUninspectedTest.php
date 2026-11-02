@@ -44,7 +44,7 @@ final class SchemaCollectorUninspectedTest extends TestCase
         $collector->collect();
 
         self::assertSame(["Class 'App\\Orders' declares #[FromTable] but could not be inspected (load error: Class \"Missing\" not found); its table is missing from the schema."], $collector->getErrors());
-        self::assertContains("Class 'App\\Helper' could not be inspected (load error: Class \"Missing\" not found); if it is a #[FromTable] resource, its table is missing from the schema.", $collector->getWarnings());
+        self::assertSame(["Class 'App\\Helper' could not be inspected (load error: Class \"Missing\" not found); if it is a #[FromTable] resource, its table is missing from the schema."], $collector->getWarnings(), 'exactly one warning, none for Orders');
     }
 
     /** Another connection's resource is not this sync's error; an unreadable source is. */

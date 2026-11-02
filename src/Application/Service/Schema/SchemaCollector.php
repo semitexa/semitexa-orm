@@ -712,8 +712,8 @@ class SchemaCollector
                 continue;
             }
             $declared = DeclaredClassAttributes::of($source, $className);
-            if ($declared !== null && $this->connectionNameFilter !== null && $declared->connection !== $this->connectionNameFilter) {
-                continue; // another connection's class: not this schema's to report
+            if ($declared !== null && $this->connectionNameFilter !== null && $declared->connection !== null && $declared->connection !== $this->connectionNameFilter) {
+                continue; // another connection's class (an unknown one is never another's)
             }
             if ($declared !== null && $declared->fromTable) {
                 $this->errors[] = "Class '{$className}' declares #[FromTable] but could not be inspected ({$why}); its table is missing from the schema.";
