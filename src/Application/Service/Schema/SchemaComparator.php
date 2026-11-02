@@ -251,7 +251,12 @@ class SchemaComparator extends AbstractSchemaComparator
         if (is_bool($default)) {
             return $default ? '1' : '0';
         }
-        return (string) $default;
+        if (is_scalar($default) || $default instanceof \Stringable) {
+            return (string) $default;
+        }
+
+        // SyncEngine::defaultClause() could not write such a default either.
+        throw new \UnexpectedValueException(sprintf('A column default of %s has no SQL form.', get_debug_type($default)));
     }
 
     private function normalizeType(string $type): string
