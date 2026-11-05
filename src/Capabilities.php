@@ -40,6 +40,11 @@ use Semitexa\Core\Attribute\Capability;
                 public string $tenantId,
                 #[Column(type: MySqlType::Varchar, length: 32)]
                 public string $status,
+                #[Column(type: MySqlType::Varchar, length: 36)]
+                public string $customer_id,
+                // A plain column gets no foreign key: BelongsTo is what makes orm:sync add one.
+                #[BelongsTo(target: CustomerResource::class, foreignKey: 'customer_id', onDelete: ForeignKeyAction::Restrict)]
+                public ?CustomerResource $customer = null,
             ) {}
         }
 
