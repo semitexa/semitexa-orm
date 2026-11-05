@@ -65,9 +65,10 @@ use Semitexa\Core\Attribute\Capability;
         // A #[TenantScoped] read names its authority or throws: forTenant() for one tenant, or
         // withoutTenantScope() with a system token for all of them. There is no silent global read.
         // Injection is refused inside a trait, so $orm lives on the class.
-        // insert(), update() and delete() on the repository are atomic with their owned children.
-        // Rows come back as the resource. A separate business object takes a second class argument,
-        // an #[AsMapper] class between the two, and fetchAllAs().
+        // With one class argument only query() works, and rows come back as the resource.
+        // findById(), insert(), update() and delete() go through a mapper: pass the business class
+        // as the second argument, with an #[AsMapper] class between the two. Writes are atomic with
+        // their owned children.
         USAGE,
 )]
 final class Capabilities
