@@ -43,6 +43,16 @@ final class SchemaResetTest extends TestCase
         );
     }
 
+    /** An account with DROP and no ALTER worked on one session before the keys went first, and still does. */
+    #[Test]
+    public function a_key_that_will_not_go_leaves_it_to_the_passes(): void
+    {
+        $adapter = new SessionlessMysqlAdapter(['authors', 'books'], [['books', 'fk_author', 'authors']], refusesAlter: true);
+
+        self::assertSame(['authors', 'books'], (new SchemaReset($adapter, 'mysql', 'app'))->dropAll());
+        self::assertSame([], $adapter->tables);
+    }
+
     /** A drop refused on its first pass is tried again after the rest (a pooled FK switch may not reach it). */
     #[Test]
     public function a_drop_refused_once_is_retried_after_the_rest(): void

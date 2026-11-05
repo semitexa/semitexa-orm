@@ -21,7 +21,7 @@ final class SessionlessMysqlAdapter implements DatabaseAdapterInterface
      * @param list<string> $tables
      * @param list<array{string, string, string}> $keys table, key name, referenced table
      */
-    public function __construct(public array $tables, private array $keys)
+    public function __construct(public array $tables, private array $keys, private readonly bool $refusesAlter = false)
     {
     }
 
@@ -30,10 +30,15 @@ final class SessionlessMysqlAdapter implements DatabaseAdapterInterface
         if (str_contains($sql, 'INFORMATION_SCHEMA.TABLES')) {
             return new QueryResult(array_map(static fn (string $table): array => ['t' => $table], $this->tables));
         }
-        if (str_contains($sql, 'INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS')) {
+        if ($sql === 'SELECT TABLE_NAME AS t, CONSTRAINT_NAME AS k FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = :db'
+            && $params === ['db' => 'app']
+        ) {
             return new QueryResult(array_map(static fn (array $key): array => ['t' => $key[0], 'k' => $key[1]], $this->keys));
         }
         if (preg_match('/^ALTER TABLE `(\w+)` DROP FOREIGN KEY `(\w+)`$/', $sql, $alter) === 1) {
+            if ($this->refusesAlter) {
+                throw new \RuntimeException('ALTER command denied to user');
+            }
             $this->alters[] = $sql;
             $this->keys = array_values(array_filter($this->keys, static fn (array $key): bool => $key[1] !== $alter[2]));
         }
@@ -44,6 +49,7 @@ final class SessionlessMysqlAdapter implements DatabaseAdapterInterface
                 }
             }
             $this->tables = array_values(array_diff($this->tables, [$drop[1]]));
+            $this->keys = array_values(array_filter($this->keys, static fn (array $key): bool => $key[0] !== $drop[1]));
         }
 
         return new QueryResult();

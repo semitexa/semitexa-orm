@@ -12,8 +12,8 @@ use Semitexa\Orm\Adapter\SqlIdentifier;
  * nothing (bench-no-fresh-schema-command: resetting a dev database took a
  * hand-written DROP per table, or deleting the volume). Every base table
  * goes, whether or not the code still declares it: a fresh schema is the
- * one the code describes and nothing else. Foreign keys are not checked
- * while the tables go, so the order does not matter.
+ * one the code describes and nothing else. See dropAll() for what happens
+ * to foreign keys while the tables go.
  */
 final class SchemaReset
 {
@@ -52,10 +52,10 @@ final class SchemaReset
      * for one session, and a pooled adapter may run the drops on others, as a
      * Swoole-hooked pool outside a coroutine does. So MySQL's keys go before
      * the tables: two tables that reference each other have no order to drop
-     * them in, and no switch would reach them. The drops still go in passes,
-     * for a key that appears meanwhile: a pass that drops nothing ends it with
-     * the last error, so no table is silently left. The account needs ALTER,
-     * as the orm:sync that follows does.
+     * them in, and no switch would reach them. A key that will not go stays:
+     * an account without ALTER or a table MySQL refuses to rebuild still has
+     * the switch on one session. So the drops go in passes, and a pass that
+     * drops nothing ends it with the last error: no table is silently left.
      *
      * @return list<string> the tables dropped
      */
@@ -105,11 +105,15 @@ final class SchemaReset
             $table = $key['t'] ?? $key['T'] ?? null;
             $name = $key['k'] ?? $key['K'] ?? null;
             if (is_string($table) && is_string($name)) {
-                $this->adapter->execute(sprintf(
-                    'ALTER TABLE %s DROP FOREIGN KEY %s',
-                    SqlIdentifier::quote($table),
-                    SqlIdentifier::quote($name),
-                ));
+                try {
+                    $this->adapter->execute(sprintf(
+                        'ALTER TABLE %s DROP FOREIGN KEY %s',
+                        SqlIdentifier::quote($table),
+                        SqlIdentifier::quote($name),
+                    ));
+                } catch (\Throwable) {
+                    continue;
+                }
             }
         }
     }
