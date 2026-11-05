@@ -26,6 +26,48 @@ use Semitexa\Core\Attribute\Capability;
         'hand-written PDO queries plus a bespoke row-to-object mapper',
         'a migration file written by hand for every column added to a model',
     ],
+    usage: <<<'USAGE'
+        // The table is declared on the class, and bin/semitexa orm:sync creates or alters it.
+        #[FromTable(name: 'orders')]
+        #[TenantScoped(strategy: 'same_storage', column: 'tenantId')]
+        final readonly class OrderResource
+        {
+            public function __construct(
+                #[PrimaryKey(strategy: 'uuid')]
+                #[Column(type: MySqlType::Varchar, length: 36)]
+                public string $id,
+                #[Column(type: MySqlType::Varchar, length: 64)]
+                public string $tenantId,
+                #[Column(type: MySqlType::Varchar, length: 32)]
+                public string $status,
+            ) {}
+        }
+
+        // Read through a service. Column names go through ColumnRef, which refuses an unknown one.
+        #[AsService]
+        final class OrderStore
+        {
+            use OrmBackedStore;
+
+            #[InjectAsReadonly]
+            protected OrmManager $orm;
+
+            public function open(string $tenantId): array
+            {
+                return $this->domainRepository(OrderResource::class)
+                    ->forTenant($tenantId)
+                    ->query()
+                    ->where(ColumnRef::for(OrderResource::class, 'status'), Operator::Equals, 'open')
+                    ->fetchAll();
+            }
+        }
+
+        // A #[TenantScoped] read without forTenant() throws: there is no silent global read.
+        // Injection is refused inside a trait, so $orm lives on the class.
+        // insert(), update() and delete() on the repository are atomic with their owned children.
+        // Rows come back as the resource. A separate business object takes a second class argument,
+        // an #[AsMapper] class between the two, and fetchAllAs().
+        USAGE,
 )]
 final class Capabilities
 {
