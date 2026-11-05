@@ -54,7 +54,8 @@ final class SchemaReset
      * the tables: two tables that reference each other have no order to drop
      * them in, and no switch would reach them. The drops still go in passes,
      * for a key that appears meanwhile: a pass that drops nothing ends it with
-     * the last error, so no table is silently left.
+     * the last error, so no table is silently left. The account needs ALTER,
+     * as the orm:sync that follows does.
      *
      * @return list<string> the tables dropped
      */
