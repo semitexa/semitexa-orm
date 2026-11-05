@@ -62,7 +62,8 @@ use Semitexa\Core\Attribute\Capability;
             }
         }
 
-        // A #[TenantScoped] read without forTenant() throws: there is no silent global read.
+        // A #[TenantScoped] read names its authority or throws: forTenant() for one tenant, or
+        // withoutTenantScope() with a system token for all of them. There is no silent global read.
         // Injection is refused inside a trait, so $orm lives on the class.
         // insert(), update() and delete() on the repository are atomic with their owned children.
         // Rows come back as the resource. A separate business object takes a second class argument,
