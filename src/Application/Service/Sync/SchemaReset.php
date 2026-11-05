@@ -48,12 +48,13 @@ final class SchemaReset
     }
 
     /**
-     * Drops every table. Foreign keys are switched off first, but a pooled
-     * adapter may run that statement on one connection and the drops on
-     * others, as a Swoole-hooked pool outside a coroutine does. So the drops
-     * go in passes: a table another one still references fails, and is
-     * tried again after the rest. A pass that drops nothing ends it with the
-     * last error, so no table is silently left.
+     * Drops every table. Foreign keys are switched off first, but that lasts
+     * for one session, and a pooled adapter may run the drops on others, as a
+     * Swoole-hooked pool outside a coroutine does. So MySQL's keys go before
+     * the tables: two tables that reference each other have no order to drop
+     * them in, and no switch would reach them. The drops still go in passes,
+     * for a key that appears meanwhile: a pass that drops nothing ends it with
+     * the last error, so no table is silently left.
      *
      * @return list<string> the tables dropped
      */
@@ -66,6 +67,9 @@ final class SchemaReset
         $sqlite = $this->driver === 'sqlite';
         $this->adapter->execute($sqlite ? 'PRAGMA foreign_keys = OFF' : 'SET FOREIGN_KEY_CHECKS = 0');
         try {
+            if (!$sqlite) {
+                $this->dropForeignKeys();
+            }
             $left = $tables;
             while ($left !== []) {
                 $failed = [];
@@ -88,5 +92,24 @@ final class SchemaReset
         }
 
         return $tables;
+    }
+
+    private function dropForeignKeys(): void
+    {
+        $keys = $this->adapter->execute(
+            'SELECT TABLE_NAME AS t, CONSTRAINT_NAME AS k FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = :db',
+            ['db' => $this->database],
+        )->rows;
+        foreach ($keys as $key) {
+            $table = $key['t'] ?? $key['T'] ?? null;
+            $name = $key['k'] ?? $key['K'] ?? null;
+            if (is_string($table) && is_string($name)) {
+                $this->adapter->execute(sprintf(
+                    'ALTER TABLE %s DROP FOREIGN KEY %s',
+                    SqlIdentifier::quote($table),
+                    SqlIdentifier::quote($name),
+                ));
+            }
+        }
     }
 }

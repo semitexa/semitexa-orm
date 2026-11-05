@@ -9,6 +9,7 @@ use PHPUnit\Framework\TestCase;
 use Semitexa\Orm\Adapter\SqliteAdapter;
 use Semitexa\Orm\Application\Service\Sync\SchemaReset;
 use Semitexa\Orm\Tests\Unit\Sync\Fixture\RefuseFirstDropAdapter;
+use Semitexa\Orm\Tests\Unit\Sync\Fixture\SessionlessMysqlAdapter;
 
 /** orm:fresh empties the database of every table, foreign keys or not (bench-no-fresh-schema-command). */
 final class SchemaResetTest extends TestCase
@@ -23,6 +24,23 @@ final class SchemaResetTest extends TestCase
     protected function tearDown(): void
     {
         @unlink($this->path);
+    }
+
+    /** A pool hands each statement its own session, so the switch reaches no drop: the keys have to go first. */
+    #[Test]
+    public function two_tables_that_reference_each_other_go_without_a_session(): void
+    {
+        $adapter = new SessionlessMysqlAdapter(
+            ['authors', 'books', 'loose'],
+            [['authors', 'fk_favourite', 'books'], ['books', 'fk_author', 'authors']],
+        );
+
+        self::assertSame(['authors', 'books', 'loose'], (new SchemaReset($adapter, 'mysql', 'app'))->dropAll());
+        self::assertSame([], $adapter->tables);
+        self::assertSame(
+            ['ALTER TABLE `authors` DROP FOREIGN KEY `fk_favourite`', 'ALTER TABLE `books` DROP FOREIGN KEY `fk_author`'],
+            $adapter->alters,
+        );
     }
 
     /** A drop refused on its first pass is tried again after the rest (a pooled FK switch may not reach it). */
