@@ -53,7 +53,8 @@ final class OrmFreshCommand extends BaseCommand
 
             return Command::FAILURE;
         }
-        $connection = trim((string) $input->getOption('connection'));
+        $requested = $input->getOption('connection');
+        $connection = is_string($requested) ? trim($requested) : '';
         if ($connection === '') {
             // orm:sync refuses it too, but only after the tables are gone.
             $io->error('The --connection option must not be empty.');
