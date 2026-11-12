@@ -78,6 +78,43 @@ final class TransactionManagerDeadConnectionTest extends TestCase
         self::assertSame(2, $pushedBeforeWork, 'run once the connection was handed back');
         self::assertFalse($manager->isActive());
     }
+
+    /**
+     * A cached read dropped for a write must be dropped again when the commit
+     * threw: a read in between cached the value the database may never have
+     * taken, and afterRollback() skips a failed commit (tk-failed-commit-keeps-cached-write).
+     */
+    #[Test]
+    public function work_right_either_way_runs_on_a_failed_commit_and_a_rollback_but_not_a_commit(): void
+    {
+        $pool = new DeadCommitPool();
+        $manager = new TransactionManager($pool, new DeadConnFakeAdapter());
+        $ran = [];
+
+        try {
+            $manager->run(static function () use ($manager, &$ran): void {
+                $manager->afterRollback(static function () use (&$ran): void { $ran[] = 'commit failed'; }, evenIfCommitFailed: true);
+                $manager->afterRollback(static function () use (&$ran): void { $ran[] = 'not this'; });
+            });
+            self::fail('the commit failure must propagate');
+        } catch (\PDOException) {
+        }
+        self::assertSame(['commit failed'], $ran, 'only the work that is right either way');
+
+        try {
+            $manager->run(static function () use ($manager, &$ran): void {
+                $manager->afterRollback(static function () use (&$ran): void { $ran[] = 'rolled back'; }, evenIfCommitFailed: true);
+                throw new \RuntimeException('the work failed');
+            });
+        } catch (\RuntimeException) {
+        }
+        $manager->run(static function () use ($manager, &$ran): void {
+            $manager->afterRollback(static function () use (&$ran): void { $ran[] = 'committed'; }, evenIfCommitFailed: true);
+        });
+        $manager->afterRollback(static function () use (&$ran): void { $ran[] = 'none open'; }, evenIfCommitFailed: true);
+
+        self::assertSame(['commit failed', 'rolled back'], $ran);
+    }
 }
 
 /** First pop: a PDO dead at COMMIT time (commit AND rollback throw). Later pops: healthy sqlite. */

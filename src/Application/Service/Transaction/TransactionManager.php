@@ -169,12 +169,14 @@ class TransactionManager
      * effect outside the database a rollback cannot undo by itself: a file
      * stored for a row that was never written stayed, unreferenced, for good.
      * A throw from $work is logged; the rollback's own error still reaches the
-     * caller.
+     * caller. A COMMIT that threw may have gone through, so the work is skipped
+     * then, unless $evenIfCommitFailed: for work right either way, such as
+     * dropping a cached read (tk-failed-commit-keeps-cached-write).
      */
-    public function afterRollback(callable $work): void
+    public function afterRollback(callable $work, bool $evenIfCommitFailed = false): void
     {
         if ($this->isActive()) {
-            $this->bufferEvent(new AfterRollback($work(...)));
+            $this->bufferEvent(new AfterRollback($work(...), $evenIfCommitFailed));
         }
     }
 
@@ -667,22 +669,16 @@ class TransactionManager
      */
     private static function runRolledBack(array $events, string $connectionName, bool $committing = false): void
     {
-        if ($committing) {
-            $skipped = count(array_filter($events, static fn (object $event): bool => $event instanceof AfterRollback));
-            if ($skipped > 0) {
-                StaticLoggerBridge::warning('orm', 'The commit failed and may have gone through: afterRollback() work was not run, and what it was to undo is kept.', [
-                    'connection' => $connectionName,
-                    'skipped' => $skipped,
-                ]);
-            }
-
-            return;
+        $undo = array_filter($events, static fn (object $event): bool => $event instanceof AfterRollback);
+        $work = array_filter($undo, static fn (AfterRollback $event): bool => !$committing || $event->evenIfCommitFailed);
+        if (count($undo) > count($work)) {
+            StaticLoggerBridge::warning('orm', 'The commit failed and may have gone through: afterRollback() work was not run, and what it was to undo is kept.', [
+                'connection' => $connectionName,
+                'skipped' => count($undo) - count($work),
+            ]);
         }
 
-        foreach ($events as $event) {
-            if (!$event instanceof AfterRollback) {
-                continue;
-            }
+        foreach ($work as $event) {
             try {
                 ($event->work)();
             } catch (\Throwable $e) {
