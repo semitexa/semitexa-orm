@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Application\Service\Transaction;
 
+use Semitexa\Orm\Adapter\DialectAwareInterface;
+use Semitexa\Orm\Adapter\DialectResolver;
+use Semitexa\Orm\Adapter\SqlDialect;
 use Semitexa\Orm\Application\Service\Persistence\ReplicatedWriteGuard;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Adapter\DriverErrorClassifier;
@@ -17,8 +20,14 @@ use Semitexa\Orm\Adapter\ServerCapability;
  * Adapter that wraps a single PDO connection (not a pool).
  * Used inside TransactionManager to ensure all operations run on the same connection.
  */
-class SingleConnectionAdapter implements DatabaseAdapterInterface
+class SingleConnectionAdapter implements DialectAwareInterface, DatabaseAdapterInterface
 {
+    /** A transaction's own connection: the dialect is its PDO driver's, whatever adapter opened it. */
+    public function dialect(): SqlDialect
+    {
+        return DialectResolver::forDriver($this->driverName());
+    }
+
     use PreparesCachedStatements;
 
     /**

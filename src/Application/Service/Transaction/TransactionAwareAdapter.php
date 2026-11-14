@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Application\Service\Transaction;
 
+use Semitexa\Orm\Adapter\DialectAwareInterface;
+use Semitexa\Orm\Adapter\DialectResolver;
+use Semitexa\Orm\Adapter\SqlDialect;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Adapter\QueryResult;
 use Semitexa\Orm\Adapter\ServerCapability;
@@ -31,8 +34,13 @@ use Semitexa\Orm\Adapter\ServerCapability;
  * the adapter there would silently disable those branches. Repositories and
  * stores' raw SQL get it (OrmManager::getQueryAdapter()); none dialect-branch.
  */
-final class TransactionAwareAdapter implements DatabaseAdapterInterface
+final class TransactionAwareAdapter implements DialectAwareInterface, DatabaseAdapterInterface
 {
+    public function dialect(): SqlDialect
+    {
+        return DialectResolver::for(($this->adapterResolver)());
+    }
+
     /**
      * @param \Closure(): DatabaseAdapterInterface $adapterResolver
      * @param \Closure(): ?TransactionManager $transactionsResolver

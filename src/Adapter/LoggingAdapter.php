@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Adapter;
 
+
 /**
  * Decorator that records every query executed through the wrapped adapter.
  *
@@ -13,8 +14,13 @@ namespace Semitexa\Orm\Adapter;
  *   $log = $logging->getQueryLog(); // QueryLogEntry[]
  *   $logging->clearQueryLog();
  */
-class LoggingAdapter implements DatabaseAdapterInterface
+class LoggingAdapter implements DialectAwareInterface, DatabaseAdapterInterface
 {
+    public function dialect(): SqlDialect
+    {
+        return DialectResolver::for($this->inner);
+    }
+
     /** @var QueryLogEntry[] */
     private array $log = [];
 
