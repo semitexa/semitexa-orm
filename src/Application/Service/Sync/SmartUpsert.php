@@ -6,7 +6,7 @@ namespace Semitexa\Orm\Application\Service\Sync;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Adapter\SqlIdentifier;
-use Semitexa\Orm\Adapter\SqliteAdapter;
+use Semitexa\Orm\Adapter\DialectResolver;
 use Semitexa\Orm\Application\Service\Hydration\ResourceModelHydrator;
 use Semitexa\Orm\Domain\Model\ResourceMetadata;
 
@@ -72,7 +72,7 @@ class SmartUpsert
             return ['inserted' => 0, 'updated' => 0, 'unchanged' => 0];
         }
 
-        if ($this->adapter instanceof SqliteAdapter) {
+        if (DialectResolver::for($this->adapter)->upsertsWithOnConflict()) {
             return $this->batchUpsertSqlite($tableName, $pkColumn, $rows);
         }
 

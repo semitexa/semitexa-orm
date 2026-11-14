@@ -21,4 +21,9 @@ final class SqliteDialect implements SqlDialect
     {
         return false;
     }
+
+    public function upsertsWithOnConflict(): bool
+    {
+        return true;
+    }
 }

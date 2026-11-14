@@ -32,13 +32,11 @@ final class NoDialectSniffingTest extends TestCase
         'Application/Service/Schema/SchemaCollector.php' => 5,
         'Application/Service/Sync/SchemaReset.php' => 2,
         'Application/Service/Sync/SchemaSyncLock.php' => 1,
-        'Application/Service/Sync/SmartUpsert.php' => 1,
         'Application/Service/Sync/SyncEngine.php' => 1,
         'Application/Service/Transaction/SharedTestTransaction.php' => 6,
         'Application/Service/Transaction/TransactionManager.php' => 5,
         'Application/Service/WarmConnectionPoolListener.php' => 1,
         'OrmManager.php' => 12,
-        'Query/InsertQuery.php' => 2,
     ];
 
     #[Test]

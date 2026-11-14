@@ -20,4 +20,9 @@ final class MysqlDialect implements SqlDialect
     {
         return true;
     }
+
+    public function upsertsWithOnConflict(): bool
+    {
+        return false;
+    }
 }
