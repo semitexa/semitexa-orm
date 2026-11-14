@@ -23,6 +23,8 @@ final readonly class ResourceModelMetadata
         public ?string $versionProperty = null,
         /** #[Replicated]: writes are captured for multi-master replication. */
         public bool $replicated = false,
+        /** @var list<list<string>> the column names of each #[Index(unique: true)] the model declares */
+        public array $uniqueIndexes = [],
     ) {}
 
     /**

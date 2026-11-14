@@ -99,6 +99,7 @@ final class ApiSurfaceTest extends TestCase
             'Semitexa\Orm\Repository\DomainRepository::paginate()',
             'Semitexa\Orm\Repository\DomainRepository::query()',
             'Semitexa\Orm\Repository\DomainRepository::update()',
+            'Semitexa\Orm\Repository\DomainRepository::upsert()',
             'Semitexa\Orm\Repository\DomainRepository::withoutTenantScope()',
             'Semitexa\Orm\Repository\PaginatedResult',
             'Semitexa\Orm\Trait\HasTimestamps',

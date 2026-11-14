@@ -9,6 +9,7 @@ use Semitexa\Orm\Attribute\Column;
 use Semitexa\Orm\Attribute\Connection;
 use Semitexa\Orm\Attribute\FromTable;
 use Semitexa\Orm\Attribute\HasMany;
+use Semitexa\Orm\Attribute\Index;
 use Semitexa\Orm\Attribute\ManyToMany;
 use Semitexa\Orm\Attribute\OneToOne;
 use Semitexa\Orm\Attribute\PrimaryKey;
@@ -108,6 +109,7 @@ final class ResourceModelMetadataExtractor
             connectionName: $connectionName,
             versionProperty: $versionProperty,
             replicated: $replicated,
+            uniqueIndexes: $this->extractUniqueIndexes($ref),
         );
     }
 
@@ -260,6 +262,25 @@ final class ResourceModelMetadataExtractor
         }
 
         return null;
+    }
+
+    /**
+     * The column sets of the model's unique indexes, which an upsert's key must name.
+     *
+     * @param \ReflectionClass<object> $ref
+     * @return list<list<string>>
+     */
+    private function extractUniqueIndexes(\ReflectionClass $ref): array
+    {
+        $unique = [];
+        foreach ($ref->getAttributes(Index::class) as $attribute) {
+            $index = $attribute->newInstance();
+            if ($index->unique) {
+                $unique[] = array_values(array_map(strval(...), $index->columns));
+            }
+        }
+
+        return $unique;
     }
 
     /**
