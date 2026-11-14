@@ -7,8 +7,13 @@ namespace Semitexa\Orm\Adapter;
 use Semitexa\Orm\Application\Service\Persistence\ReplicatedWriteGuard;
 use Semitexa\Orm\Exception\ConnectionLostException;
 
-class MysqlAdapter implements DatabaseAdapterInterface
+class MysqlAdapter implements DialectAwareInterface, DatabaseAdapterInterface
 {
+    public function dialect(): SqlDialect
+    {
+        return new MysqlDialect();
+    }
+
     use PreparesCachedStatements;
 
     private string $serverVersion = '';

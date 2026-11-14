@@ -18,8 +18,13 @@ use Semitexa\Orm\Application\Service\Transaction\SharedTestTransaction;
  * - SQLite version detection via sqlite_version()
  * - Simpler execution model (no Swoole coroutine concerns)
  */
-class SqliteAdapter implements DatabaseAdapterInterface
+class SqliteAdapter implements DialectAwareInterface, DatabaseAdapterInterface
 {
+    public function dialect(): SqlDialect
+    {
+        return new SqliteDialect();
+    }
+
     private string $serverVersion = '';
     private ?\PDO $connection = null;
 
