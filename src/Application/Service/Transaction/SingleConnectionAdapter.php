@@ -67,7 +67,9 @@ class SingleConnectionAdapter implements DialectAwareInterface, DatabaseAdapterI
      */
     public function driverName(): string
     {
-        return (string) $this->connection->getAttribute(\PDO::ATTR_DRIVER_NAME);
+        $driver = $this->connection->getAttribute(\PDO::ATTR_DRIVER_NAME);
+
+        return is_string($driver) ? $driver : '';
     }
 
     public function getServerVersion(): string

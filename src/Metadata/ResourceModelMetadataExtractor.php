@@ -276,7 +276,7 @@ final class ResourceModelMetadataExtractor
         foreach ($ref->getAttributes(Index::class) as $attribute) {
             $index = $attribute->newInstance();
             if ($index->unique) {
-                $unique[] = array_values(array_map(strval(...), $index->columns));
+                $unique[] = array_values(array_filter($index->columns, is_string(...)));
             }
         }
 
