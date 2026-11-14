@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Query;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
+use Semitexa\Orm\Adapter\MysqlAdapter;
 use Semitexa\Orm\Adapter\SqlIdentifier;
 use Semitexa\Orm\Adapter\SqliteAdapter;
 use Semitexa\Orm\Application\Service\Transaction\SingleConnectionAdapter;
@@ -133,21 +134,23 @@ class InsertQuery
             . ' (' . implode(', ', array_map(SqlIdentifier::quote(...), array_keys($data))) . ')'
             . ' VALUES (' . implode(', ', $placeholders) . ')';
 
-        $sqlite = $this->isSqlite();
+        // MySQL is the one with its own form. ON CONFLICT (key) DO UPDATE SET col = excluded.col
+        // is SQLite's and PostgreSQL's alike, so any other driver takes it.
+        $mysql = $this->isMysql();
         $assignments = array_map(
             static fn (string $column): string => SqlIdentifier::quote($column) . ' = '
-                . ($sqlite ? 'excluded.' . SqlIdentifier::quote($column) : 'VALUES(' . SqlIdentifier::quote($column) . ')'),
+                . ($mysql ? 'VALUES(' . SqlIdentifier::quote($column) . ')' : 'excluded.' . SqlIdentifier::quote($column)),
             $updateColumns,
         );
         $assignments = [...$assignments, ...$rawAssignments];
 
-        if ($sqlite) {
-            $sql .= ' ON CONFLICT (' . implode(', ', array_map(SqlIdentifier::quote(...), $conflictColumns)) . ')'
-                . ($assignments === [] ? ' DO NOTHING' : ' DO UPDATE SET ' . implode(', ', $assignments));
-        } else {
+        if ($mysql) {
             // MySQL needs one assignment: a key column set to itself changes nothing.
             $first = SqlIdentifier::quote($conflictColumns[0]);
             $sql .= ' ON DUPLICATE KEY UPDATE ' . ($assignments === [] ? "{$first} = {$first}" : implode(', ', $assignments));
+        } else {
+            $sql .= ' ON CONFLICT (' . implode(', ', array_map(SqlIdentifier::quote(...), $conflictColumns)) . ')'
+                . ($assignments === [] ? ' DO NOTHING' : ' DO UPDATE SET ' . implode(', ', $assignments));
         }
 
         $this->adapter->execute($sql, $params);
@@ -155,12 +158,19 @@ class InsertQuery
 
     /**
      * Inside a transaction the adapter is the transaction's SingleConnectionAdapter, not a
-     * SqliteAdapter: asked by type alone, SQLite got MySQL's ON DUPLICATE KEY there.
+     * SqliteAdapter: asked by type alone, SQLite got MySQL's ON DUPLICATE KEY there. The
+     * connection's driver is read instead.
      */
     private function isSqlite(): bool
     {
         return $this->adapter instanceof SqliteAdapter
             || ($this->adapter instanceof SingleConnectionAdapter && $this->adapter->driverName() === 'sqlite');
+    }
+
+    private function isMysql(): bool
+    {
+        return $this->adapter instanceof MysqlAdapter
+            || ($this->adapter instanceof SingleConnectionAdapter && $this->adapter->driverName() === 'mysql');
     }
 
     /**
