@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Application\Service\Persistence;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
+use Semitexa\Orm\Adapter\ServerCapability;
 use Semitexa\Orm\Adapter\SqlIdentifier;
 use Semitexa\Orm\Application\Service\Transaction\TransactionManager;
 use Semitexa\Orm\Domain\Enum\RelationWritePolicy;
@@ -13,23 +14,26 @@ use Semitexa\Orm\Metadata\ResourceModelMetadata;
 use Semitexa\Orm\Query\InsertQuery;
 
 /**
- * The statement behind AggregateWriteEngine::upsert() (orm-gap-1-repository-upsert), kept
- * out of the engine, whose size is a recorded outlier.
+ * What AggregateWriteEngine::upsert() does (orm-gap-1-repository-upsert), kept out of the
+ * engine, whose size is a recorded outlier.
  *
- * - The key must be a declared #[Index(unique: true)], with the tenant column added on
- *   a tenant-scoped write, so an upsert can never reach another tenant's row; without a
- *   unique index the statement would only ever insert.
- * - One INSERT ... ON DUPLICATE KEY / ON CONFLICT (key) statement, so two writers cannot
- *   both insert. The row is then read back by its key: LAST_INSERT_ID says nothing on
- *   MySQL's update path, and the read-back gives the id, created_at and version the
- *   database holds.
+ * - The key must be a declared #[Index(unique: true)], with the tenant column added on a
+ *   tenant-scoped write, so the row it names can only be this tenant's.
+ * - Inside the engine's transaction the row is read by its key under a lock (FOR UPDATE
+ *   where the database has it), then UPDATEd by that key, or INSERTed when there is none.
+ *   No ON DUPLICATE KEY: MySQL fires it on whichever unique key collides first, the
+ *   primary key or an index the model never declared, and updates THAT row, another
+ *   tenant's included, while a read-back by the key finds this tenant's row untouched
+ *   (Fable's review, orm#110). An UPDATE by the key touches no other row; an INSERT that
+ *   collides on another key fails, and the transaction rolls it back. The same SQL on
+ *   every database. Two first writes of one key at once: one of them fails, loudly.
  * - The update leaves the primary key, the key, the tenant column and created_at as they
- *   are, and bumps a #[Version], so a stale update() holder is still refused.
- * - The primary key is never sent: the key decides the row, the database gives the id.
- * - Refused in v1: owned relations, #[Replicated], #[SoftDelete], a key through the
- *   primary key (insert() and update() say what is meant there), a model with another
- *   unique index (MySQL cannot hold the collision to the key), a null key value, and an
- *   engine with no transaction to roll a failed read-back back.
+ *   are, and bumps a #[Version], so a stale update() holder is still refused. The
+ *   caller's primary key is never written: the key decides the row, the database (or a
+ *   fresh uuid) the id.
+ * - Refused: owned relations, #[Replicated], #[SoftDelete], a key through the primary
+ *   key, a primary key the caller assigns (strategy other than auto or uuid), a null key
+ *   value, and an engine with no transaction.
  */
 final class AggregateUpsert
 {
@@ -55,6 +59,11 @@ final class AggregateUpsert
             }
         }
 
+        $strategy = $metadata->primaryKeyProperty !== null ? $metadata->column($metadata->primaryKeyProperty)->primaryKeyStrategy : null;
+        if ($strategy !== null && !in_array($strategy, ['auto', 'uuid'], true)) {
+            throw $refuse("its primary key is assigned by the caller ({$strategy}); upsert lets the key decide the row, so the id must be the database's or a fresh uuid.");
+        }
+
         $columns = [];
         foreach ($keyProperties as $property) {
             if ($property === $metadata->primaryKeyProperty) {
@@ -69,24 +78,11 @@ final class AggregateUpsert
 
         $wanted = $columns;
         sort($wanted);
-        $others = [];
-        $matched = false;
         foreach ($metadata->uniqueIndexes as $index) {
-            $sorted = $index;
-            sort($sorted);
-            $sorted === $wanted ? $matched = true : $others[] = $index;
-        }
-        if ($matched && $others !== []) {
-            // MySQL's ON DUPLICATE KEY fires on ANY unique key and cannot be held to one: a row
-            // matching another index, another tenant's included, would be updated (review,
-            // orm#110). The rule is the same on every database.
-            throw $refuse(sprintf(
-                'it declares another unique index (%s); a collision on it would update that row instead.',
-                implode(', ', $others[0]),
-            ));
-        }
-        if ($matched) {
-            return $columns;
+            sort($index);
+            if ($index === $wanted) {
+                return $columns;
+            }
         }
 
         throw $refuse(sprintf(
@@ -113,46 +109,50 @@ final class AggregateUpsert
      */
     public static function write(DatabaseAdapterInterface $adapter, ResourceModelMetadata $metadata, array $row, array $conflict): array
     {
-        foreach ($conflict as $column) {
+        $where = [];
+        $keyParams = [];
+        foreach ($conflict as $i => $column) {
             if (($row[$column] ?? null) === null) {
-                // A unique index lets NULLs repeat: it would insert, and the read-back by
-                // `= NULL` could not find the row (review, orm#110).
-                throw new \LogicException(sprintf('upsert() on %s: the key column %s is null; a null key never collides.', $metadata->className, $column));
+                // A unique index lets NULLs repeat, and `= NULL` finds no row (review, orm#110).
+                throw new \LogicException(sprintf('upsert() on %s: the key column %s is null; a null key names no row.', $metadata->className, $column));
             }
+            $where[] = SqlIdentifier::quote($column) . ' = :__k' . $i;
+            $keyParams['__k' . $i] = $row[$column];
         }
+        $table = SqlIdentifier::quote($metadata->tableName);
+        $byKey = ' WHERE ' . implode(' AND ', $where);
+        $select = 'SELECT * FROM ' . $table . $byKey . ' LIMIT 1';
+        $existing = $adapter->execute($select . ($adapter->supports(ServerCapability::LockingReads) ? ' FOR UPDATE' : ''), $keyParams)->rows;
+
         $primaryKey = $metadata->primaryKeyProperty;
         $pkColumn = $primaryKey !== null ? $metadata->column($primaryKey)->columnName : null;
-        if ($primaryKey !== null && $pkColumn !== null && $metadata->column($primaryKey)->primaryKeyStrategy === 'auto') {
-            // Never the caller's id: on MySQL a given id collides on the primary key, another
-            // tenant's row included (review, orm#110). The key decides the row; the read-back
-            // returns its id. (A uuid key is a fresh one, set by the engine.)
-            unset($row[$pkColumn]);
+        if ($existing === []) {
+            if ($primaryKey !== null && $pkColumn !== null && $metadata->column($primaryKey)->primaryKeyStrategy === 'auto') {
+                unset($row[$pkColumn]); // never the caller's id; the read-back returns the database's
+            }
+            (new InsertQuery($metadata->tableName, $adapter))->execute($row);
+        } else {
+            $versionColumn = $metadata->versionProperty !== null ? $metadata->column($metadata->versionProperty)->columnName : null;
+            $kept = [...$conflict, 'created_at', ...array_filter([$pkColumn, $versionColumn])];
+            $set = [];
+            $params = $keyParams;
+            foreach (array_keys($row) as $i => $column) {
+                if (!in_array($column, $kept, true)) {
+                    $set[] = SqlIdentifier::quote($column) . ' = :__u' . $i;
+                    $params['__u' . $i] = $row[$column];
+                }
+            }
+            if ($versionColumn !== null) {
+                $set[] = SqlIdentifier::quote($versionColumn) . ' = ' . SqlIdentifier::quote($versionColumn) . ' + 1';
+            }
+            if ($set !== []) {
+                $adapter->execute('UPDATE ' . $table . ' SET ' . implode(', ', $set) . $byKey, $params);
+            }
         }
-        $versionColumn = $metadata->versionProperty !== null ? $metadata->column($metadata->versionProperty)->columnName : null;
-        $kept = [...$conflict, 'created_at', ...array_filter([$pkColumn, $versionColumn])];
-        $updateColumns = array_values(array_filter(array_keys($row), static fn (string $c): bool => !in_array($c, $kept, true)));
-        $bump = $versionColumn === null ? [] : [SqlIdentifier::quote($versionColumn) . ' = ' . SqlIdentifier::quote($versionColumn) . ' + 1'];
 
-        (new InsertQuery($metadata->tableName, $adapter))->executeUpsert($row, $conflict, $updateColumns, $bump);
-
-        $where = [];
-        $params = [];
-        foreach ($conflict as $i => $column) {
-            $where[] = SqlIdentifier::quote($column) . ' = :__k' . $i;
-            $params['__k' . $i] = $row[$column] ?? null;
-        }
-        $stored = $adapter->execute(
-            'SELECT * FROM ' . SqlIdentifier::quote($metadata->tableName) . ' WHERE ' . implode(' AND ', $where) . ' LIMIT 1',
-            $params,
-        )->rows;
+        $stored = $adapter->execute($select, $keyParams)->rows;
         if ($stored === []) {
-            // MySQL matched another unique key (the primary key, another index): nothing was
-            // written under this key. Thrown inside the caller's transaction, so it rolls back.
-            throw new \LogicException(sprintf(
-                'upsert() on %s collided on a unique key other than (%s); nothing was written under that key.',
-                $metadata->className,
-                implode(', ', $conflict),
-            ));
+            throw new \LogicException(sprintf('upsert() on %s wrote no row under (%s).', $metadata->className, implode(', ', $conflict)));
         }
 
         return $stored[0];

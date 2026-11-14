@@ -14,6 +14,7 @@ use Semitexa\Orm\Metadata\ColumnRef;
 use Semitexa\Orm\OrmManager;
 use Semitexa\Orm\Repository\DomainRepository;
 use Semitexa\Orm\Tests\Fixture\Metadata\DirectTenantColumnResourceModel;
+use Semitexa\Orm\Tests\Fixture\Query\BookedNightResourceModel;
 use Semitexa\Orm\Tests\Fixture\Upsert\UpsertSetting;
 use Semitexa\Orm\Tests\Fixture\Upsert\UpsertSettingMapper;
 use Semitexa\Orm\Tests\Fixture\Upsert\TwoUniqueSetting;
@@ -133,17 +134,40 @@ final class DomainRepositoryUpsertTest extends TestCase
         );
     }
 
-    /** Review, orm#110: MySQL cannot hold the collision to one unique index, so a second one is refused everywhere. */
+    /**
+     * Fable's review, orm#110: the row is UPDATEd by its key, so a second unique index can only
+     * make the write fail, never redirect it to the row that index matches.
+     */
     #[Test]
-    public function a_model_with_another_unique_index_is_refused(): void
+    public function another_unique_index_can_fail_the_write_but_never_redirect_it(): void
     {
+        $this->orm->getAdapter()->execute('CREATE TABLE two_unique_settings (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, slug TEXT NOT NULL UNIQUE)');
         $registry = new MapperRegistry();
         $registry->build(mapperClasses: [TwoUniqueSettingMapper::class], domainModelClasses: [TwoUniqueSetting::class]);
         $repository = new DomainRepository(TwoUniqueSettingResource::class, TwoUniqueSetting::class, $this->orm->getAdapter(), $registry, writeEngine: $this->orm->getAggregateWriteEngine());
 
+        $repository->upsert(new TwoUniqueSetting(0, 'a', 's1'), TwoUniqueSettingResource::column('name'));
+        $repository->upsert(new TwoUniqueSetting(0, 'a', 's2'), TwoUniqueSettingResource::column('name'));
+        $repository->upsert(new TwoUniqueSetting(0, 'b', 's3'), TwoUniqueSettingResource::column('name'));
+        $before = $this->orm->getAdapter()->query('SELECT name, slug FROM two_unique_settings ORDER BY name')->rows;
+        self::assertSame([['name' => 'a', 'slug' => 's2'], ['name' => 'b', 'slug' => 's3']], $before);
+
+        try {
+            $repository->upsert(new TwoUniqueSetting(0, 'a', 's3'), TwoUniqueSettingResource::column('name'));
+            self::fail('a slug that is b\'s must fail the write, not move it to b');
+        } catch (\Throwable) {
+            // the UPDATE of a's row violates the slug index
+        }
+        self::assertSame($before, $this->orm->getAdapter()->query('SELECT name, slug FROM two_unique_settings ORDER BY name')->rows, 'both rows as they were');
+    }
+
+    /** Fable's review, orm#110: an id the caller assigns could be another tenant's row's. */
+    #[Test]
+    public function a_primary_key_the_caller_assigns_is_refused(): void
+    {
         $this->expectException(\LogicException::class);
-        $this->expectExceptionMessage('it declares another unique index (slug)');
-        $repository->upsert(new TwoUniqueSetting(0, 'a', 'b'), TwoUniqueSettingResource::column('name'));
+        $this->expectExceptionMessage('its primary key is assigned by the caller (manual)');
+        AggregateUpsert::conflictColumns(ResourceModelMetadataRegistry::default()->for(BookedNightResourceModel::class), ['room'], null);
     }
 
     /** Review, orm#110: a null key never collides (unique indexes let NULLs repeat), and `= NULL` finds nothing. */
@@ -151,7 +175,7 @@ final class DomainRepositoryUpsertTest extends TestCase
     public function a_null_key_value_is_refused(): void
     {
         $this->expectException(\LogicException::class);
-        $this->expectExceptionMessage('the key column name is null');
+        $this->expectExceptionMessage('the key column name is null; a null key names no row');
         AggregateUpsert::write(
             $this->orm->getAdapter(),
             ResourceModelMetadataRegistry::default()->for(UpsertSettingResource::class),

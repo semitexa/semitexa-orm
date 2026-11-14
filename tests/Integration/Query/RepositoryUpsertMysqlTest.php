@@ -15,8 +15,9 @@ use Semitexa\Orm\Tests\Fixture\Upsert\UpsertSettingResource;
 use Semitexa\Orm\Tests\Support\RequiresDatabase;
 
 /**
- * On MySQL an upsert is INSERT ... ON DUPLICATE KEY UPDATE, and the row is read back by its
- * key: LAST_INSERT_ID says nothing on the update path (orm-gap-1-repository-upsert).
+ * On MySQL an upsert locks the row by its key, then UPDATEs or INSERTs it, and reads it back
+ * (orm-gap-1-repository-upsert). No ON DUPLICATE KEY: it fires on whichever unique key
+ * collides first, an undeclared one included, and updates that row (Fable's review, orm#110).
  */
 final class RepositoryUpsertMysqlTest extends TestCase
 {
@@ -43,6 +44,38 @@ final class RepositoryUpsertMysqlTest extends TestCase
                 $this->orm->shutdown();
             }
         }
+    }
+
+    /** Fable's review, orm#110: a unique index the model never declared cannot redirect the write. */
+    #[Test]
+    public function an_undeclared_unique_index_fails_the_write_and_touches_no_other_tenants_row(): void
+    {
+        // Created BEFORE the declared (tenant_id, name) index, as a migration might, on a NOT NULL
+        // column (InnoDB checks NOT NULL unique keys in creation order): ON DUPLICATE KEY updated
+        // t2's row here, and the read-back by (t1, x) found t1's untouched. This test was red on it.
+        $this->orm->getAdapter()->execute('DROP TABLE upsert_settings');
+        $this->orm->getAdapter()->execute(
+            'CREATE TABLE upsert_settings (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id VARCHAR(64) NOT NULL, name VARCHAR(64) NOT NULL,'
+            . ' value VARCHAR(255) NOT NULL, created_at VARCHAR(32), version INT, UNIQUE KEY uniq_value (value), UNIQUE KEY uniq_tenant_name (tenant_id, name)) ENGINE=InnoDB',
+        );
+        $this->orm->getAdapter()->execute("INSERT INTO upsert_settings (tenant_id, name, value, created_at, version) VALUES ('t1', 'x', 'a', '2026-01-01', 1), ('t2', 'y', 'b', '2026-01-01', 1)");
+        $before = $this->orm->getAdapter()->query('SELECT tenant_id, name, value, version FROM upsert_settings ORDER BY tenant_id')->rows;
+
+        try {
+            $this->repository()->upsert(new UpsertSetting(0, '', 'x', 'b', '2026-02-02', 1), UpsertSettingResource::column('name'));
+            self::fail("t1's write of t2's value must fail, not update t2's row");
+        } catch (\Throwable) {
+            // duplicate entry on uniq_value; the transaction rolls back
+        }
+        self::assertSame($before, $this->orm->getAdapter()->query('SELECT tenant_id, name, value, version FROM upsert_settings ORDER BY tenant_id')->rows);
+    }
+
+    private function repository(): DomainRepository
+    {
+        $registry = new MapperRegistry();
+        $registry->build(mapperClasses: [UpsertSettingMapper::class], domainModelClasses: [UpsertSetting::class]);
+
+        return (new DomainRepository(UpsertSettingResource::class, UpsertSetting::class, $this->orm->getAdapter(), $registry, writeEngine: $this->orm->getAggregateWriteEngine()))->forTenant('t1');
     }
 
     #[Test]

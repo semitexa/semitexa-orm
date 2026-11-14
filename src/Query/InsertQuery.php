@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Semitexa\Orm\Query;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
-use Semitexa\Orm\Adapter\MysqlAdapter;
 use Semitexa\Orm\Adapter\SqlIdentifier;
 use Semitexa\Orm\Adapter\SqliteAdapter;
 use Semitexa\Orm\Application\Service\Transaction\SingleConnectionAdapter;
@@ -107,56 +106,6 @@ class InsertQuery
     }
 
     /**
-     * Insert one row, or update the row it collides with on $conflictColumns.
-     *
-     * Unlike execute(upsert: true), the conflict target and the columns an
-     * update may change are named by the caller: the key, the primary key and
-     * created_at are not rewritten when the row already exists.
-     *
-     * @param array<string, mixed> $data Column name → value
-     * @param list<string> $conflictColumns the columns of the unique index the row collides on
-     * @param list<string> $updateColumns columns set from the new row on a collision
-     * @param list<string> $rawAssignments SQL `"col" = <expression>` pieces, e.g. a version bump
-     */
-    public function executeUpsert(array $data, array $conflictColumns, array $updateColumns, array $rawAssignments = []): void
-    {
-        if ($data === [] || $conflictColumns === []) {
-            throw new \InvalidArgumentException('executeUpsert() requires a row and the columns it may collide on.');
-        }
-
-        $params = [];
-        $placeholders = [];
-        foreach (array_values($data) as $index => $value) {
-            $placeholders[] = ':v' . $index;
-            $params['v' . $index] = $value;
-        }
-        $sql = 'INSERT INTO ' . SqlIdentifier::quote($this->table)
-            . ' (' . implode(', ', array_map(SqlIdentifier::quote(...), array_keys($data))) . ')'
-            . ' VALUES (' . implode(', ', $placeholders) . ')';
-
-        // MySQL is the one with its own form. ON CONFLICT (key) DO UPDATE SET col = excluded.col
-        // is SQLite's and PostgreSQL's alike, so any other driver takes it.
-        $mysql = $this->isMysql();
-        $assignments = array_map(
-            static fn (string $column): string => SqlIdentifier::quote($column) . ' = '
-                . ($mysql ? 'VALUES(' . SqlIdentifier::quote($column) . ')' : 'excluded.' . SqlIdentifier::quote($column)),
-            $updateColumns,
-        );
-        $assignments = [...$assignments, ...$rawAssignments];
-
-        if ($mysql) {
-            // MySQL needs one assignment: a key column set to itself changes nothing.
-            $first = SqlIdentifier::quote($conflictColumns[0]);
-            $sql .= ' ON DUPLICATE KEY UPDATE ' . ($assignments === [] ? "{$first} = {$first}" : implode(', ', $assignments));
-        } else {
-            $sql .= ' ON CONFLICT (' . implode(', ', array_map(SqlIdentifier::quote(...), $conflictColumns)) . ')'
-                . ($assignments === [] ? ' DO NOTHING' : ' DO UPDATE SET ' . implode(', ', $assignments));
-        }
-
-        $this->adapter->execute($sql, $params);
-    }
-
-    /**
      * Inside a transaction the adapter is the transaction's SingleConnectionAdapter, not a
      * SqliteAdapter: asked by type alone, SQLite got MySQL's ON DUPLICATE KEY there. The
      * connection's driver is read instead.
@@ -165,12 +114,6 @@ class InsertQuery
     {
         return $this->adapter instanceof SqliteAdapter
             || ($this->adapter instanceof SingleConnectionAdapter && $this->adapter->driverName() === 'sqlite');
-    }
-
-    private function isMysql(): bool
-    {
-        return $this->adapter instanceof MysqlAdapter
-            || ($this->adapter instanceof SingleConnectionAdapter && $this->adapter->driverName() === 'mysql');
     }
 
     /**
