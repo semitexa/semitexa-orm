@@ -36,10 +36,19 @@ final class MysqlDialectNowTest extends TestCase
     public function now_is_utc_in_a_session_that_is_not(): void
     {
         $dialect = new MysqlDialect();
-        $this->orm->getAdapter()->execute("SET time_zone = '+05:00'");
-        // The zone is read in the same statement: a pooled adapter may hand the SELECT another
-        // connection, and on one at +00:00 NOW() would pass too (review, orm#115).
-        $row = $this->orm->getAdapter()->query('SELECT @@session.time_zone AS tz, ' . $dialect->now() . ' AS n, ' . $dialect->now(30) . ' AS later')->rows[0];
+        // One connection for the SET and the SELECT: a pooled adapter hands each statement its own,
+        // which the release preflight's full suite did (it read +00:00). A transaction holds one,
+        // and the zone is put back before it goes back to the pool.
+        $row = $this->orm->getTransactionManager()->run(function () use ($dialect): array {
+            $db = $this->orm->getQueryAdapter();
+            $db->execute("SET time_zone = '+05:00'");
+            try {
+                return $db->execute('SELECT @@session.time_zone AS tz, ' . $dialect->now() . ' AS n, ' . $dialect->now(30) . ' AS later')->rows[0];
+            } finally {
+                $db->execute("SET time_zone = '+00:00'");
+            }
+        });
+        // The zone read in the same statement: a SELECT on a +00:00 connection would let NOW() pass too.
         self::assertSame('+05:00', $row['tz'], 'the SELECT ran in the +05:00 session');
 
         $now = (new \DateTimeImmutable((string) $row['n'], new \DateTimeZone('UTC')))->getTimestamp();
