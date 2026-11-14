@@ -13,7 +13,8 @@ use PHPUnit\Framework\TestCase;
  * it would have to patch; `instanceof SqliteAdapter` is also blind inside a transaction,
  * where the adapter is a SingleConnectionAdapter.
  *
- * A guess is a driver name written as a string or an instanceof of a Sqlite/Mysql adapter,
+ * A guess is a driver name written as a string (pgsql too), an adapter's class written as a
+ * string, an instanceof of a Sqlite/Mysql adapter, or that adapter's ::class,
  * counted by PHP's tokenizer, so a comment never counts. The places that still guess are
  * listed with how many guesses each holds; one guess swapped for another in the same file
  * keeps the number, which the review of each step is there to see. Each PR that
@@ -54,8 +55,11 @@ final class NoDialectSniffingTest extends TestCase
             str_contains($class, 'sqlite');
             if ($a instanceof /* the adapter */ SqliteAdapter) {}
             if ($a instanceof \Semitexa\Orm\Adapter\SQLiteAdapter) {}
+            if ($a::class === SqliteAdapter::class || get_class($a) === \Semitexa\Orm\Adapter\MysqlAdapter::class) {}
+            is_a($a, 'Semitexa\Orm\Adapter\SqliteAdapter');
+            if ($driver === 'pgsql') {}
             PHP;
-        self::assertSame(10, self::guesses($guesses), 'a comment between instanceof and the class, and a class name in another case (review, orm#111)');
+        self::assertSame(14, self::guesses($guesses), 'comments, case, ::class, an adapter class as a string, PostgreSQL (review, orm#111)');
         self::assertSame(0, self::guesses("<?php\n// 'sqlite' in a comment\n/** 'mysql' in a docblock */\n\$x = 'sqlite3'; \$y = 'SqliteAdapterTest';\n"));
     }
 
@@ -102,7 +106,17 @@ final class NoDialectSniffingTest extends TestCase
             if (!is_array($token)) {
                 continue;
             }
-            if ($token[0] === T_CONSTANT_ENCAPSED_STRING && in_array(strtolower(substr($token[1], 1, -1)), ['sqlite', 'mysql'], true)) {
+            if ($token[0] === T_CONSTANT_ENCAPSED_STRING) {
+                $literal = strtolower(substr($token[1], 1, -1));
+                // A driver name, PostgreSQL's included, or an adapter's class written as a string.
+                if (in_array($literal, ['sqlite', 'mysql', 'pgsql', 'postgres', 'postgresql'], true) || preg_match('/(?:sqlite|mysql)adapter$/', $literal) === 1) {
+                    $count++;
+                }
+            }
+            // SqliteAdapter::class, compared to a ::class, get_class() or handed to is_a() (review, orm#111).
+            if (in_array($token[0], [T_STRING, T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED], true) && preg_match('/(?:^|\\\\)(?:Sqlite|Mysql)Adapter$/i', $token[1]) === 1
+                && is_array($tokens[$i + 1] ?? null) && $tokens[$i + 1][0] === T_DOUBLE_COLON
+                && is_array($tokens[$i + 2] ?? null) && $tokens[$i + 2][0] === T_CLASS) {
                 $count++;
             }
             $next = $tokens[$i + 1] ?? null;
