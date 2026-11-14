@@ -27,7 +27,6 @@ final class NoDialectSniffingTest extends TestCase
 
     /** @var array<string, int> */
     private const STILL_GUESSING = [
-        'Application/Console/Command/OrmStatusCommand.php' => 1,
         'Application/Service/Queue/DatabaseQueueTransport.php' => 1,
         'Application/Service/Schema/SchemaCollector.php' => 5,
         'Application/Service/Sync/SchemaReset.php' => 2,
@@ -35,7 +34,6 @@ final class NoDialectSniffingTest extends TestCase
         'Application/Service/Sync/SyncEngine.php' => 1,
         'Application/Service/Transaction/SharedTestTransaction.php' => 6,
         'Application/Service/Transaction/TransactionManager.php' => 5,
-        'Application/Service/WarmConnectionPoolListener.php' => 1,
         'OrmManager.php' => 12,
     ];
 

@@ -12,6 +12,7 @@ use Semitexa\Core\Server\Lifecycle\ServerLifecycleContext;
 use Semitexa\Core\Server\Lifecycle\ServerLifecycleListenerInterface;
 use Semitexa\Core\Server\Lifecycle\ServerLifecyclePhase;
 use Semitexa\Orm\Adapter\ConnectionPool;
+use Semitexa\Orm\Adapter\DialectResolver;
 use Semitexa\Orm\Application\Service\Connection\ConnectionRegistry;
 
 /**
@@ -48,7 +49,8 @@ final class WarmConnectionPoolListener implements ServerLifecycleListenerInterfa
 
         try {
             $manager = $this->connections->manager();
-            if ($manager->getDriver() === 'sqlite') {
+            // Asked of the configured driver's dialect, so no adapter is built here (tk-orm-dialect-layer).
+            if (!DialectResolver::forDriver($manager->getDriver())->usesConnectionPool()) {
                 return;
             }
 

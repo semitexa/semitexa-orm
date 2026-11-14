@@ -7,6 +7,7 @@ namespace Semitexa\Orm\Application\Console\Command;
 use Semitexa\Core\Attribute\AsCommand;
 use Semitexa\Core\Attribute\InjectAsReadonly;
 use Semitexa\Core\Console\BaseCommand;
+use Semitexa\Orm\Adapter\DialectResolver;
 use Semitexa\Orm\Adapter\ServerCapability;
 use Semitexa\Orm\Application\Service\Connection\ConnectionRegistry;
 use Symfony\Component\Console\Command\Command;
@@ -37,7 +38,7 @@ class OrmStatusCommand extends BaseCommand
         try {
             $orm = $this->connections->manager($connection);
             $adapter = $orm->getAdapter();
-            $isSqlite = str_contains(strtolower($adapter::class), 'sqlite');
+            $pooled = DialectResolver::for($adapter)->usesConnectionPool();
 
             // Server info
             $io->section('Database Server');
@@ -45,7 +46,7 @@ class OrmStatusCommand extends BaseCommand
                 ['Server Version' => $adapter->getServerVersion()],
                 ['Database' => $orm->getDatabaseName()],
             ];
-            if (!$isSqlite) {
+            if ($pooled) {
                 $pool = $orm->getPool();
                 $serverInfo[] = ['Pool Size' => (string) $pool->getSize()];
                 if ($pool instanceof \Semitexa\Orm\Adapter\ConnectionPool) {
