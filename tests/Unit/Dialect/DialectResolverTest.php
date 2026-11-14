@@ -52,7 +52,7 @@ final class DialectResolverTest extends TestCase
         self::assertSame("datetime('now')", DialectResolver::forDriver('sqlite')->now());
         self::assertSame("datetime('now', '+30 seconds')", DialectResolver::forDriver('sqlite')->now(30));
         self::assertSame("datetime('now', '-86400 seconds')", DialectResolver::forDriver('sqlite')->now(-86400));
-        self::assertSame('NOW()', DialectResolver::forDriver('mysql')->now());
-        self::assertSame('(NOW() + INTERVAL 30 SECOND)', DialectResolver::forDriver('mysql')->now(30));
+        self::assertSame('UTC_TIMESTAMP()', DialectResolver::forDriver('mysql')->now());
+        self::assertSame('(UTC_TIMESTAMP() + INTERVAL 30 SECOND)', DialectResolver::forDriver('mysql')->now(30));
     }
 }
