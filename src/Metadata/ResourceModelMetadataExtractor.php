@@ -275,8 +275,11 @@ final class ResourceModelMetadataExtractor
         $unique = [];
         foreach ($ref->getAttributes(Index::class) as $attribute) {
             $index = $attribute->newInstance();
-            if ($index->unique) {
-                $unique[] = array_values(array_map(strval(...), $index->columns));
+            // A declaration with a column that is not a string is dropped whole: SchemaCollector creates
+            // no index for it, so a key of its remaining columns would not be unique (review, orm#112).
+            $columns = array_values(array_filter($index->columns, is_string(...)));
+            if ($index->unique && $columns !== [] && count($columns) === count($index->columns)) {
+                $unique[] = $columns;
             }
         }
 
