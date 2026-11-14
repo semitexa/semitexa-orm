@@ -11,6 +11,7 @@ use Semitexa\Core\Queue\QueueInspectorInterface;
 use Semitexa\Core\Queue\StoppableQueueTransportInterface;
 use Semitexa\Core\Support\Row;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
+use Semitexa\Orm\Adapter\DialectResolver;
 use Semitexa\Orm\Application\Service\Uuid7;
 use Semitexa\Orm\OrmManager;
 
@@ -508,11 +509,8 @@ final class DatabaseQueueTransport implements DelayedQueueTransportInterface, Qu
      */
     private function sqlNow(int $seconds = 0): string
     {
-        if (($this->driver ??= $this->orm()->getDriver()) === 'sqlite') {
-            return $seconds === 0 ? "datetime('now')" : sprintf("datetime('now', '%+d seconds')", $seconds);
-        }
-
-        return $seconds === 0 ? 'NOW()' : sprintf('(NOW() + INTERVAL %d SECOND)', $seconds);
+        // The configured driver's dialect: no adapter is built to ask (tk-orm-dialect-layer).
+        return DialectResolver::forDriver($this->driver ??= $this->orm()->getDriver())->now($seconds);
     }
 
     private function adapter(): DatabaseAdapterInterface

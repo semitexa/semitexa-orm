@@ -26,4 +26,9 @@ final class SqliteDialect implements SqlDialect
     {
         return true;
     }
+
+    public function now(int $seconds = 0): string
+    {
+        return $seconds === 0 ? "datetime('now')" : sprintf("datetime('now', '%+d seconds')", $seconds);
+    }
 }

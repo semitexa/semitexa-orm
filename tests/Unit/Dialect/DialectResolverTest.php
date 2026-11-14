@@ -44,4 +44,15 @@ final class DialectResolverTest extends TestCase
         self::assertSame('mysql', DialectResolver::forDriver('mysql')->name());
         self::assertSame('sqlite', DialectResolver::forDriver('sqlite')->name());
     }
+
+    /** The queue's clock, as each database writes it (tk-orm-dialect-layer). */
+    #[Test]
+    public function now_is_written_in_each_databases_own_sql(): void
+    {
+        self::assertSame("datetime('now')", DialectResolver::forDriver('sqlite')->now());
+        self::assertSame("datetime('now', '+30 seconds')", DialectResolver::forDriver('sqlite')->now(30));
+        self::assertSame("datetime('now', '-86400 seconds')", DialectResolver::forDriver('sqlite')->now(-86400));
+        self::assertSame('NOW()', DialectResolver::forDriver('mysql')->now());
+        self::assertSame('(NOW() + INTERVAL 30 SECOND)', DialectResolver::forDriver('mysql')->now(30));
+    }
 }

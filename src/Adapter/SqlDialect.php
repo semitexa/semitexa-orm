@@ -30,4 +30,7 @@ interface SqlDialect
      * and PostgreSQL write it, rather than MySQL's `ON DUPLICATE KEY UPDATE col = VALUES(col)`.
      */
     public function upsertsWithOnConflict(): bool;
+
+    /** "Now", plus $seconds (negative for the past), as SQL this database evaluates, in UTC. */
+    public function now(int $seconds = 0): string;
 }

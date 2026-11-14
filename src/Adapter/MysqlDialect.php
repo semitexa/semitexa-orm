@@ -25,4 +25,9 @@ final class MysqlDialect implements SqlDialect
     {
         return false;
     }
+
+    public function now(int $seconds = 0): string
+    {
+        return $seconds === 0 ? 'NOW()' : sprintf('(NOW() + INTERVAL %d SECOND)', $seconds);
+    }
 }
