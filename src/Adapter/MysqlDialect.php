@@ -25,4 +25,14 @@ final class MysqlDialect implements SqlDialect
     {
         return false;
     }
+
+    /**
+     * UTC_TIMESTAMP(), not NOW(): NOW() is in the session's time zone, and only the
+     * adapter's own sessions are pinned to +00:00 (MySqlSessionTimeZone); the contract
+     * says UTC for any session (review, orm#115). Queue columns are DATETIME, zone-free.
+     */
+    public function now(int $seconds = 0): string
+    {
+        return $seconds === 0 ? 'UTC_TIMESTAMP()' : sprintf('(UTC_TIMESTAMP() + INTERVAL %d SECOND)', $seconds);
+    }
 }
