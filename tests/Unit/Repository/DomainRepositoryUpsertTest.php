@@ -17,6 +17,7 @@ use Semitexa\Orm\Tests\Fixture\Metadata\DirectTenantColumnResourceModel;
 use Semitexa\Orm\Tests\Fixture\Query\BookedNightResourceModel;
 use Semitexa\Orm\Tests\Fixture\Upsert\UpsertSetting;
 use Semitexa\Orm\Tests\Fixture\Upsert\UpsertSettingMapper;
+use Semitexa\Orm\Tests\Fixture\Upsert\MixedIndexSettingResource;
 use Semitexa\Orm\Tests\Fixture\Upsert\TwoUniqueSetting;
 use Semitexa\Orm\Tests\Fixture\Upsert\TwoUniqueSettingMapper;
 use Semitexa\Orm\Tests\Fixture\Upsert\TwoUniqueSettingResource;
@@ -161,6 +162,13 @@ final class DomainRepositoryUpsertTest extends TestCase
         }
         self::assertNotNull($refused, 'a slug that is b\'s must fail the write, not move it to b');
         self::assertSame($before, $this->orm->getAdapter()->query('SELECT name, slug FROM two_unique_settings ORDER BY name')->rows, 'both rows as they were');
+    }
+
+    /** Review, orm#112: a unique index with a non-string column is no index, so its other columns are no key. */
+    #[Test]
+    public function a_unique_index_with_a_column_that_is_not_a_string_is_not_declared(): void
+    {
+        self::assertSame([], ResourceModelMetadataRegistry::default()->for(MixedIndexSettingResource::class)->uniqueIndexes);
     }
 
     /** Fable's review, orm#110: an id the caller assigns could be another tenant's row's. */
