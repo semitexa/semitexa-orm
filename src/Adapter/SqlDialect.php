@@ -24,4 +24,10 @@ interface SqlDialect
 
     /** Whether connections come from a pool (MySQL) or are one file handle (SQLite). */
     public function usesConnectionPool(): bool;
+
+    /**
+     * Whether an upsert is written `ON CONFLICT (key) DO UPDATE SET col = excluded.col`, as SQLite
+     * and PostgreSQL write it, rather than MySQL's `ON DUPLICATE KEY UPDATE col = VALUES(col)`.
+     */
+    public function upsertsWithOnConflict(): bool;
 }
