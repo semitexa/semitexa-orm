@@ -152,12 +152,14 @@ final class DomainRepositoryUpsertTest extends TestCase
         $before = $this->orm->getAdapter()->query('SELECT name, slug FROM two_unique_settings ORDER BY name')->rows;
         self::assertSame([['name' => 'a', 'slug' => 's2'], ['name' => 'b', 'slug' => 's3']], $before);
 
+        // Only the upsert's own exception is caught: a fail() inside the try would be swallowed (review, orm#110).
+        $refused = null;
         try {
             $repository->upsert(new TwoUniqueSetting(0, 'a', 's3'), TwoUniqueSettingResource::column('name'));
-            self::fail('a slug that is b\'s must fail the write, not move it to b');
-        } catch (\Throwable) {
-            // the UPDATE of a's row violates the slug index
+        } catch (\Throwable $e) {
+            $refused = $e; // the UPDATE of a's row violates the slug index
         }
+        self::assertNotNull($refused, 'a slug that is b\'s must fail the write, not move it to b');
         self::assertSame($before, $this->orm->getAdapter()->query('SELECT name, slug FROM two_unique_settings ORDER BY name')->rows, 'both rows as they were');
     }
 

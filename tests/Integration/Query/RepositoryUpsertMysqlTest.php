@@ -61,12 +61,14 @@ final class RepositoryUpsertMysqlTest extends TestCase
         $this->orm->getAdapter()->execute("INSERT INTO upsert_settings (tenant_id, name, value, created_at, version) VALUES ('t1', 'x', 'a', '2026-01-01', 1), ('t2', 'y', 'b', '2026-01-01', 1)");
         $before = $this->orm->getAdapter()->query('SELECT tenant_id, name, value, version FROM upsert_settings ORDER BY tenant_id')->rows;
 
+        // Only the upsert's own exception is caught: a fail() inside the try would be swallowed (review, orm#110).
+        $refused = null;
         try {
             $this->repository()->upsert(new UpsertSetting(0, '', 'x', 'b', '2026-02-02', 1), UpsertSettingResource::column('name'));
-            self::fail("t1's write of t2's value must fail, not update t2's row");
-        } catch (\Throwable) {
-            // duplicate entry on uniq_value; the transaction rolls back
+        } catch (\Throwable $e) {
+            $refused = $e; // duplicate entry on uniq_value; the transaction rolls back
         }
+        self::assertNotNull($refused, "t1's write of t2's value must fail, not update t2's row");
         self::assertSame($before, $this->orm->getAdapter()->query('SELECT tenant_id, name, value, version FROM upsert_settings ORDER BY tenant_id')->rows);
     }
 
