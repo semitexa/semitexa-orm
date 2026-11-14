@@ -124,6 +124,11 @@ final class AggregateWriteEngine
         $metadata = $this->metadata($resourceModel::class);
         $scope = TenantWriteScope::from($tenantValue, $systemScopeToken);
         $conflict = AggregateUpsert::conflictColumns($metadata, $keyProperties, $this->scopedTenantColumn($metadata, $scope));
+        // Only a transaction undoes a write the read-back refuses; a uuid key is a fresh one (review, orm#110).
+        AggregateUpsert::requireTransaction($metadata, $this->transactions instanceof \Closure ? ($this->transactions)() : $this->transactions);
+        if (($pk = $metadata->primaryKeyProperty) !== null && $metadata->column($pk)->primaryKeyStrategy === 'uuid') {
+            $resourceModel = $this->reconstructWithPropertyOverride($resourceModel, $pk, '');
+        }
 
         $written = $this->atomically(function (DatabaseAdapterInterface $adapter) use ($resourceModel, $metadata, $scope, $conflict): object {
             $resourceModel = $this->applyTenantScope($this->prepareInsertResourceModel($resourceModel), $metadata, $scope);

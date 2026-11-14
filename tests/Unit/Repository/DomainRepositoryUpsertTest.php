@@ -7,6 +7,8 @@ namespace Semitexa\Orm\Tests\Unit\Repository;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Semitexa\Orm\Application\Service\Mapping\MapperRegistry;
+use Semitexa\Orm\Application\Service\Persistence\AggregateUpsert;
+use Semitexa\Orm\Metadata\ResourceModelMetadataRegistry;
 use Semitexa\Orm\Domain\Model\ConnectionConfig;
 use Semitexa\Orm\Metadata\ColumnRef;
 use Semitexa\Orm\OrmManager;
@@ -14,6 +16,9 @@ use Semitexa\Orm\Repository\DomainRepository;
 use Semitexa\Orm\Tests\Fixture\Metadata\DirectTenantColumnResourceModel;
 use Semitexa\Orm\Tests\Fixture\Upsert\UpsertSetting;
 use Semitexa\Orm\Tests\Fixture\Upsert\UpsertSettingMapper;
+use Semitexa\Orm\Tests\Fixture\Upsert\TwoUniqueSetting;
+use Semitexa\Orm\Tests\Fixture\Upsert\TwoUniqueSettingMapper;
+use Semitexa\Orm\Tests\Fixture\Upsert\TwoUniqueSettingResource;
 use Semitexa\Orm\Tests\Fixture\Upsert\UpsertSettingResource;
 
 /**
@@ -109,6 +114,67 @@ final class DomainRepositoryUpsertTest extends TestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('belongs to ' . DirectTenantColumnResourceModel::class);
         $this->repository->forTenant('t1')->upsert($this->setting('theme', 'dark', '2026-01-01'), ColumnRef::for(DirectTenantColumnResourceModel::class, 'tenantId'));
+    }
+
+    /** Review, orm#110: on MySQL a given id collides on the primary key, another tenant's row included. */
+    #[Test]
+    public function the_callers_id_is_never_sent_the_key_decides_the_row(): void
+    {
+        $t1 = $this->repository->forTenant('t1')->upsert(new UpsertSetting(999, '', 'theme', 'dark', '2026-01-01', 1), UpsertSettingResource::column('name'));
+        self::assertInstanceOf(UpsertSetting::class, $t1);
+        self::assertNotSame(999, $t1->id, 'the database gave the id');
+
+        // Another tenant passing t1's id gets a row of its own; t1's is untouched.
+        $this->repository->forTenant('t2')->upsert(new UpsertSetting($t1->id, '', 'other', 'changed', '2026-01-01', 1), UpsertSettingResource::column('name'));
+        self::assertSame(2, $this->rows());
+        self::assertSame(
+            [['tenant_id' => 't1', 'value' => 'dark', 'version' => 1]],
+            array_map(static fn (array $r): array => ['tenant_id' => $r['tenant_id'], 'value' => $r['value'], 'version' => (int) $r['version']], $this->orm->getAdapter()->query("SELECT tenant_id, value, version FROM upsert_settings WHERE id = {$t1->id}")->rows),
+        );
+    }
+
+    /** Review, orm#110: MySQL cannot hold the collision to one unique index, so a second one is refused everywhere. */
+    #[Test]
+    public function a_model_with_another_unique_index_is_refused(): void
+    {
+        $registry = new MapperRegistry();
+        $registry->build(mapperClasses: [TwoUniqueSettingMapper::class], domainModelClasses: [TwoUniqueSetting::class]);
+        $repository = new DomainRepository(TwoUniqueSettingResource::class, TwoUniqueSetting::class, $this->orm->getAdapter(), $registry, writeEngine: $this->orm->getAggregateWriteEngine());
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('it declares another unique index (slug)');
+        $repository->upsert(new TwoUniqueSetting(0, 'a', 'b'), TwoUniqueSettingResource::column('name'));
+    }
+
+    /** Review, orm#110: a null key never collides (unique indexes let NULLs repeat), and `= NULL` finds nothing. */
+    #[Test]
+    public function a_null_key_value_is_refused(): void
+    {
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('the key column name is null');
+        AggregateUpsert::write(
+            $this->orm->getAdapter(),
+            ResourceModelMetadataRegistry::default()->for(UpsertSettingResource::class),
+            ['tenant_id' => 't1', 'name' => null, 'value' => 'v'],
+            ['tenant_id', 'name'],
+        );
+    }
+
+    /** Review, orm#110: the read-back refuses a wrong collision, and only a transaction undoes the write. */
+    #[Test]
+    public function an_engine_with_no_transaction_is_refused_before_it_writes(): void
+    {
+        $registry = new MapperRegistry();
+        $registry->build(mapperClasses: [UpsertSettingMapper::class], domainModelClasses: [UpsertSetting::class]);
+        $bare = new DomainRepository(UpsertSettingResource::class, UpsertSetting::class, $this->orm->getAdapter(), $registry);
+
+        try {
+            $bare->forTenant('t1')->upsert($this->setting('theme', 'dark', '2026-01-01'), UpsertSettingResource::column('name'));
+            self::fail('no transaction, no upsert');
+        } catch (\LogicException $e) {
+            self::assertStringContainsString('needs a transaction manager', $e->getMessage());
+        }
+        self::assertSame(0, $this->rows());
     }
 
     private function setting(string $name, string $value, string $createdAt): UpsertSetting

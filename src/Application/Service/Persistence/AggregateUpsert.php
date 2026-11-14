@@ -6,6 +6,7 @@ namespace Semitexa\Orm\Application\Service\Persistence;
 
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Adapter\SqlIdentifier;
+use Semitexa\Orm\Application\Service\Transaction\TransactionManager;
 use Semitexa\Orm\Domain\Enum\RelationWritePolicy;
 use Semitexa\Orm\Metadata\ColumnMetadata;
 use Semitexa\Orm\Metadata\ResourceModelMetadata;
@@ -24,8 +25,11 @@ use Semitexa\Orm\Query\InsertQuery;
  *   database holds.
  * - The update leaves the primary key, the key, the tenant column and created_at as they
  *   are, and bumps a #[Version], so a stale update() holder is still refused.
- * - Refused in v1: owned relations, #[Replicated], #[SoftDelete], and a key through the
- *   primary key (insert() and update() say what is meant there).
+ * - The primary key is never sent: the key decides the row, the database gives the id.
+ * - Refused in v1: owned relations, #[Replicated], #[SoftDelete], a key through the
+ *   primary key (insert() and update() say what is meant there), a model with another
+ *   unique index (MySQL cannot hold the collision to the key), a null key value, and an
+ *   engine with no transaction to roll a failed read-back back.
  */
 final class AggregateUpsert
 {
@@ -65,11 +69,24 @@ final class AggregateUpsert
 
         $wanted = $columns;
         sort($wanted);
+        $others = [];
+        $matched = false;
         foreach ($metadata->uniqueIndexes as $index) {
-            sort($index);
-            if ($index === $wanted) {
-                return $columns;
-            }
+            $sorted = $index;
+            sort($sorted);
+            $sorted === $wanted ? $matched = true : $others[] = $index;
+        }
+        if ($matched && $others !== []) {
+            // MySQL's ON DUPLICATE KEY fires on ANY unique key and cannot be held to one: a row
+            // matching another index, another tenant's included, would be updated (review,
+            // orm#110). The rule is the same on every database.
+            throw $refuse(sprintf(
+                'it declares another unique index (%s); a collision on it would update that row instead.',
+                implode(', ', $others[0]),
+            ));
+        }
+        if ($matched) {
+            return $columns;
         }
 
         throw $refuse(sprintf(
@@ -77,6 +94,14 @@ final class AggregateUpsert
             implode(', ', $columns),
             $tenantColumn !== null ? ' (the tenant column is part of the key on a tenant-scoped write)' : '',
         ));
+    }
+
+    /** The read-back throws on a wrong collision, and only a transaction undoes the write (review, orm#110). */
+    public static function requireTransaction(ResourceModelMetadata $metadata, ?TransactionManager $transactions): void
+    {
+        if ($transactions === null) {
+            throw new \LogicException(sprintf('upsert() on %s needs a transaction manager; use the repository OrmManager builds.', $metadata->className));
+        }
     }
 
     /**
@@ -88,11 +113,20 @@ final class AggregateUpsert
      */
     public static function write(DatabaseAdapterInterface $adapter, ResourceModelMetadata $metadata, array $row, array $conflict): array
     {
+        foreach ($conflict as $column) {
+            if (($row[$column] ?? null) === null) {
+                // A unique index lets NULLs repeat: it would insert, and the read-back by
+                // `= NULL` could not find the row (review, orm#110).
+                throw new \LogicException(sprintf('upsert() on %s: the key column %s is null; a null key never collides.', $metadata->className, $column));
+            }
+        }
         $primaryKey = $metadata->primaryKeyProperty;
         $pkColumn = $primaryKey !== null ? $metadata->column($primaryKey)->columnName : null;
-        if ($primaryKey !== null && $pkColumn !== null && $metadata->column($primaryKey)->primaryKeyStrategy === 'auto'
-            && in_array($row[$pkColumn] ?? null, [null, '', 0], true)) {
-            unset($row[$pkColumn]); // the database assigns it; the read-back returns it
+        if ($primaryKey !== null && $pkColumn !== null && $metadata->column($primaryKey)->primaryKeyStrategy === 'auto') {
+            // Never the caller's id: on MySQL a given id collides on the primary key, another
+            // tenant's row included (review, orm#110). The key decides the row; the read-back
+            // returns its id. (A uuid key is a fresh one, set by the engine.)
+            unset($row[$pkColumn]);
         }
         $versionColumn = $metadata->versionProperty !== null ? $metadata->column($metadata->versionProperty)->columnName : null;
         $kept = [...$conflict, 'created_at', ...array_filter([$pkColumn, $versionColumn])];
