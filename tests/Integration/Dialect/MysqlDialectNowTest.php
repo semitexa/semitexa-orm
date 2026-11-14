@@ -37,7 +37,10 @@ final class MysqlDialectNowTest extends TestCase
     {
         $dialect = new MysqlDialect();
         $this->orm->getAdapter()->execute("SET time_zone = '+05:00'");
-        $row = $this->orm->getAdapter()->query('SELECT ' . $dialect->now() . ' AS n, ' . $dialect->now(30) . ' AS later')->rows[0];
+        // The zone is read in the same statement: a pooled adapter may hand the SELECT another
+        // connection, and on one at +00:00 NOW() would pass too (review, orm#115).
+        $row = $this->orm->getAdapter()->query('SELECT @@session.time_zone AS tz, ' . $dialect->now() . ' AS n, ' . $dialect->now(30) . ' AS later')->rows[0];
+        self::assertSame('+05:00', $row['tz'], 'the SELECT ran in the +05:00 session');
 
         $now = (new \DateTimeImmutable((string) $row['n'], new \DateTimeZone('UTC')))->getTimestamp();
         $later = (new \DateTimeImmutable((string) $row['later'], new \DateTimeZone('UTC')))->getTimestamp();
