@@ -13,41 +13,48 @@ use PHPUnit\Framework\TestCase;
  * it would have to patch; `instanceof SqliteAdapter` is also blind inside a transaction,
  * where the adapter is a SingleConnectionAdapter.
  *
- * The places that still guess are listed with how many guesses each holds. Each PR that
+ * A guess is a driver name written as a string or an instanceof of a Sqlite/Mysql adapter,
+ * counted by PHP's tokenizer, so a comment never counts. The places that still guess are
+ * listed with how many guesses each holds; one guess swapped for another in the same file
+ * keeps the number, which the review of each step is there to see. Each PR that
  * moves one onto the dialect lowers its number, and the test refuses a number that is
  * higher than the code (left behind) or lower (a new guess). src/Adapter is where the
  * answer is given (SqlDialect and the adapters), and ConnectionConfig reads the configured driver.
  */
 final class NoDialectSniffingTest extends TestCase
 {
-    /** Either quote: a guess written "sqlite" is the same guess (review, orm#111). */
-    private const PATTERN = "/instanceof\\s+\\\\?(?:Semitexa\\\\Orm\\\\Adapter\\\\)?(?:Sqlite|Mysql)Adapter\\b|[=!]==\\s*(['\"])(?:sqlite|mysql)\\1|(['\"])(?:sqlite|mysql)\\2\\s*[=!]==/";
 
     /** @var array<string, int> */
     private const STILL_GUESSING = [
+        'Application/Console/Command/OrmStatusCommand.php' => 1,
         'Application/Service/Queue/DatabaseQueueTransport.php' => 1,
-        'Application/Service/Schema/SchemaCollector.php' => 2,
+        'Application/Service/Schema/SchemaCollector.php' => 5,
         'Application/Service/Sync/SchemaReset.php' => 2,
         'Application/Service/Sync/SchemaSyncLock.php' => 1,
         'Application/Service/Sync/SmartUpsert.php' => 1,
         'Application/Service/Sync/SyncEngine.php' => 1,
-        'Application/Service/Transaction/SharedTestTransaction.php' => 3,
-        'Application/Service/Transaction/TransactionAwareAdapter.php' => 1,
-        'Application/Service/Transaction/TransactionManager.php' => 3,
+        'Application/Service/Transaction/SharedTestTransaction.php' => 6,
+        'Application/Service/Transaction/TransactionManager.php' => 5,
         'Application/Service/WarmConnectionPoolListener.php' => 1,
-        'OrmManager.php' => 7,
+        'OrmManager.php' => 12,
         'Query/InsertQuery.php' => 2,
     ];
 
     #[Test]
-    public function the_pattern_sees_every_way_a_guess_is_written(): void
+    public function every_way_a_guess_is_written_is_counted(): void
     {
-        foreach (['$a instanceof SqliteAdapter', '$a instanceof \\Semitexa\\Orm\\Adapter\\MysqlAdapter', "\$d === 'sqlite'", '$d === "sqlite"', "'mysql' !== \$d", '"mysql" === $d'] as $guess) {
-            self::assertSame(1, preg_match(self::PATTERN, $guess), $guess);
-        }
-        foreach (['$d === \'sqlite"', 'SqliteAdapterTest', "\$name === 'sqlite3'"] as $other) {
-            self::assertSame(0, preg_match(self::PATTERN, $other), $other);
-        }
+        // Review, orm#111: either quote, any comparison, a switch, in_array, str_contains; never a comment.
+        $guesses = <<<'PHP'
+            <?php
+            if ($a instanceof SqliteAdapter) {}
+            if ($a instanceof \Semitexa\Orm\Adapter\MysqlAdapter) {}
+            if ($d === 'sqlite' || $d == "mysql" || 'mysql' !== $d) {}
+            switch ($d) { case 'sqlite': break; }
+            in_array($d, ['mysql'], true);
+            str_contains($class, 'sqlite');
+            PHP;
+        self::assertSame(8, self::guesses($guesses));
+        self::assertSame(0, self::guesses("<?php\n// 'sqlite' in a comment\n/** 'mysql' in a docblock */\n\$x = 'sqlite3'; \$y = 'SqliteAdapterTest';\n"));
     }
 
     #[Test]
@@ -66,7 +73,7 @@ final class NoDialectSniffingTest extends TestCase
             }
             $source = file_get_contents($file->getPathname());
             self::assertIsString($source, 'cannot read ' . $file->getPathname());
-            $count = preg_match_all(self::PATTERN, $source);
+            $count = self::guesses($source);
             if ($count > 0) {
                 $found[$relative] = $count;
             }
@@ -76,5 +83,30 @@ final class NoDialectSniffingTest extends TestCase
         ksort($expected);
 
         self::assertSame($expected, $found, 'A place guesses the dialect from an adapter class or a driver string. Ask DialectResolver::for($adapter) instead; when a PR moves a place onto it, lower its number here.');
+    }
+
+    /**
+     * Each driver name written as a string ('sqlite', "mysql") and each instanceof of a
+     * Sqlite/Mysql adapter, read by PHP's tokenizer: a comparison, a case, in_array or
+     * str_contains alike, a comment never (review, orm#111).
+     */
+    private static function guesses(string $source): int
+    {
+        $tokens = array_values(array_filter(token_get_all($source), static fn (array|string $t): bool => !is_array($t) || $t[0] !== T_WHITESPACE));
+        $count = 0;
+        foreach ($tokens as $i => $token) {
+            if (!is_array($token)) {
+                continue;
+            }
+            if ($token[0] === T_CONSTANT_ENCAPSED_STRING && in_array(strtolower(substr($token[1], 1, -1)), ['sqlite', 'mysql'], true)) {
+                $count++;
+            }
+            $next = $tokens[$i + 1] ?? null;
+            if ($token[0] === T_INSTANCEOF && is_array($next) && preg_match('/(?:^|\\\\)(?:Sqlite|Mysql)Adapter$/', $next[1]) === 1) {
+                $count++;
+            }
+        }
+
+        return $count;
     }
 }
