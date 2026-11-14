@@ -7,6 +7,7 @@ namespace Semitexa\Orm\Query;
 use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
 use Semitexa\Orm\Adapter\SqlIdentifier;
 use Semitexa\Orm\Adapter\SqliteAdapter;
+use Semitexa\Orm\Application\Service\Transaction\SingleConnectionAdapter;
 
 class InsertQuery
 {
@@ -105,13 +106,24 @@ class InsertQuery
     }
 
     /**
+     * Inside a transaction the adapter is the transaction's SingleConnectionAdapter, not a
+     * SqliteAdapter: asked by type alone, SQLite got MySQL's ON DUPLICATE KEY there. The
+     * connection's driver is read instead.
+     */
+    private function isSqlite(): bool
+    {
+        return $this->adapter instanceof SqliteAdapter
+            || ($this->adapter instanceof SingleConnectionAdapter && $this->adapter->driverName() === 'sqlite');
+    }
+
+    /**
      * Build the upsert clause appropriate for the current database.
      *
      * @param string[] $columns
      */
     private function buildUpsertClause(array $columns): string
     {
-        if ($this->adapter instanceof SqliteAdapter) {
+        if ($this->isSqlite()) {
             // SQLite: ON CONFLICT DO UPDATE SET
             $updateParts = array_map(function (string $column): string {
                 $quoted = SqlIdentifier::quote($column);

@@ -51,6 +51,16 @@ class SingleConnectionAdapter implements DatabaseAdapterInterface
         return version_compare($this->serverVersion, $minVersion, '>=');
     }
 
+    /**
+     * The PDO driver under this connection ('sqlite', 'mysql'): a transaction hands the
+     * engine this wrapper, which is no SqliteAdapter, so SQL that differs by dialect
+     * asks here (orm-gap-1-repository-upsert).
+     */
+    public function driverName(): string
+    {
+        return (string) $this->connection->getAttribute(\PDO::ATTR_DRIVER_NAME);
+    }
+
     public function getServerVersion(): string
     {
         return $this->serverVersion;

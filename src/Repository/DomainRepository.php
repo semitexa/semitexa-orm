@@ -306,6 +306,39 @@ final class DomainRepository
         );
     }
 
+    /**
+     * Insert the model, or update the row that already holds its key: one statement,
+     * the stored row returned. The key must be a declared #[Index(unique: true)]
+     * (the tenant column joins it on a tenant-scoped repository), e.g.
+     * `$settings->upsert($setting, SettingResource::column('name'))`.
+     *
+     * @api
+     */
+    public function upsert(object $domainModel, ColumnRef $key, ColumnRef ...$more): object
+    {
+        $keys = [];
+        foreach ([$key, ...$more] as $column) {
+            if ($column->resourceModelClass !== $this->resourceModelClass) {
+                throw new \InvalidArgumentException(sprintf(
+                    'upsert() key %s belongs to %s, not %s.',
+                    $column->propertyName,
+                    $column->resourceModelClass,
+                    $this->resourceModelClass,
+                ));
+            }
+            $keys[] = $column->propertyName;
+        }
+
+        return $this->writeEngine->upsert(
+            $domainModel,
+            $this->resourceModelClass,
+            $this->mapperRegistry,
+            $keys,
+            $this->tenantValue,
+            $this->systemScopeToken,
+        );
+    }
+
     /** @api */
     public function update(object $domainModel): object
     {

@@ -105,6 +105,45 @@ final class AggregateWriteEngine
     }
 
     /**
+     * Insert the aggregate, or update the row it collides with on $keyProperties, in one
+     * statement, then read it back by the key (orm-gap-1-repository-upsert). What the key
+     * must be, what an update keeps and what is refused: {@see AggregateUpsert}.
+     *
+     * @param class-string $resourceModelClass
+     * @param list<string> $keyProperties
+     */
+    public function upsert(
+        object $domainModel,
+        string $resourceModelClass,
+        MapperRegistry $mapperRegistry,
+        array $keyProperties,
+        mixed $tenantValue = null,
+        ?SystemScopeToken $systemScopeToken = null,
+    ): object {
+        $resourceModel = $mapperRegistry->mapToSourceModel($domainModel, $resourceModelClass);
+        $metadata = $this->metadata($resourceModel::class);
+        $scope = TenantWriteScope::from($tenantValue, $systemScopeToken);
+        $conflict = AggregateUpsert::conflictColumns($metadata, $keyProperties, $this->scopedTenantColumn($metadata, $scope));
+        // Only a transaction undoes a write the read-back refuses; a uuid key is a fresh one (review, orm#110).
+        AggregateUpsert::requireTransaction($metadata, $this->transactions instanceof \Closure ? ($this->transactions)() : $this->transactions);
+        if (($pk = $metadata->primaryKeyProperty) !== null && $metadata->column($pk)->primaryKeyStrategy === 'uuid') {
+            $resourceModel = $this->reconstructWithPropertyOverride($resourceModel, $pk, '');
+        }
+
+        $written = $this->atomically(function (DatabaseAdapterInterface $adapter) use ($resourceModel, $metadata, $scope, $conflict): object {
+            $resourceModel = $this->applyTenantScope($this->prepareInsertResourceModel($resourceModel), $metadata, $scope);
+            $this->validateReferenceOnlyRelations($resourceModel, $metadata);
+            $stored = AggregateUpsert::write($adapter, $metadata, $this->hydrator->dehydrate($resourceModel), $conflict);
+
+            return $this->hydrator->hydrate($stored, $metadata->className);
+        });
+        // Data-less; the database cannot reliably say which path ran, so one Update.
+        $this->dispatchResourceChanged($metadata->className, ResourceChangeOperation::Update);
+
+        return $mapperRegistry->mapToDomain($written, $domainModel::class);
+    }
+
+    /**
      * @param class-string $resourceModelClass
      */
     public function update(
