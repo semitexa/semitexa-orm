@@ -52,8 +52,10 @@ final class NoDialectSniffingTest extends TestCase
             switch ($d) { case 'sqlite': break; }
             in_array($d, ['mysql'], true);
             str_contains($class, 'sqlite');
+            if ($a instanceof /* the adapter */ SqliteAdapter) {}
+            if ($a instanceof \Semitexa\Orm\Adapter\SQLiteAdapter) {}
             PHP;
-        self::assertSame(8, self::guesses($guesses));
+        self::assertSame(10, self::guesses($guesses), 'a comment between instanceof and the class, and a class name in another case (review, orm#111)');
         self::assertSame(0, self::guesses("<?php\n// 'sqlite' in a comment\n/** 'mysql' in a docblock */\n\$x = 'sqlite3'; \$y = 'SqliteAdapterTest';\n"));
     }
 
@@ -92,7 +94,9 @@ final class NoDialectSniffingTest extends TestCase
      */
     private static function guesses(string $source): int
     {
-        $tokens = array_values(array_filter(token_get_all($source), static fn (array|string $t): bool => !is_array($t) || $t[0] !== T_WHITESPACE));
+        // Comments go with the whitespace: `instanceof /* note */ SqliteAdapter` is still the guess,
+        // and a comment's own text never counts (review, orm#111).
+        $tokens = array_values(array_filter(token_get_all($source), static fn (array|string $t): bool => !is_array($t) || !in_array($t[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)));
         $count = 0;
         foreach ($tokens as $i => $token) {
             if (!is_array($token)) {
@@ -102,7 +106,7 @@ final class NoDialectSniffingTest extends TestCase
                 $count++;
             }
             $next = $tokens[$i + 1] ?? null;
-            if ($token[0] === T_INSTANCEOF && is_array($next) && preg_match('/(?:^|\\\\)(?:Sqlite|Mysql)Adapter$/', $next[1]) === 1) {
+            if ($token[0] === T_INSTANCEOF && is_array($next) && preg_match('/(?:^|\\\\)(?:Sqlite|Mysql)Adapter$/i', $next[1]) === 1) {
                 $count++;
             }
         }
