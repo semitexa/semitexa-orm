@@ -20,7 +20,8 @@ use PHPUnit\Framework\TestCase;
  */
 final class NoDialectSniffingTest extends TestCase
 {
-    private const PATTERN = "/instanceof\\s+\\\\?(?:Semitexa\\\\Orm\\\\Adapter\\\\)?(?:Sqlite|Mysql)Adapter\\b|[=!]==\\s*'(?:sqlite|mysql)'|'(?:sqlite|mysql)'\\s*[=!]==/";
+    /** Either quote: a guess written "sqlite" is the same guess (review, orm#111). */
+    private const PATTERN = "/instanceof\\s+\\\\?(?:Semitexa\\\\Orm\\\\Adapter\\\\)?(?:Sqlite|Mysql)Adapter\\b|[=!]==\\s*(['\"])(?:sqlite|mysql)\\1|(['\"])(?:sqlite|mysql)\\2\\s*[=!]==/";
 
     /** @var array<string, int> */
     private const STILL_GUESSING = [
@@ -37,6 +38,17 @@ final class NoDialectSniffingTest extends TestCase
         'OrmManager.php' => 7,
         'Query/InsertQuery.php' => 2,
     ];
+
+    #[Test]
+    public function the_pattern_sees_every_way_a_guess_is_written(): void
+    {
+        foreach (['$a instanceof SqliteAdapter', '$a instanceof \\Semitexa\\Orm\\Adapter\\MysqlAdapter', "\$d === 'sqlite'", '$d === "sqlite"', "'mysql' !== \$d", '"mysql" === $d'] as $guess) {
+            self::assertSame(1, preg_match(self::PATTERN, $guess), $guess);
+        }
+        foreach (['$d === \'sqlite"', 'SqliteAdapterTest', "\$name === 'sqlite3'"] as $other) {
+            self::assertSame(0, preg_match(self::PATTERN, $other), $other);
+        }
+    }
 
     #[Test]
     public function no_new_place_guesses_the_dialect(): void
