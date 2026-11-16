@@ -136,10 +136,16 @@ final class ApiSurfaceTest extends TestCase
             file_put_contents($dir . '/Model.php', "<?php\nnamespace {$ns};\n\n/** @api */\nfinal class Model\n{\n    use Stamps { touch as refresh; }\n}\n");
             file_put_contents($dir . '/Override.php', "<?php\nnamespace {$ns};\n\n/**\n *  @api\n */\nfinal class Override\n{\n    use Stamps;\n\n    /** @api Override's own, redeclared. */\n    public string \$id = '';\n\n    /** @api */\n    public function touch(): void {}\n}\n");
 
+            // A trait that redeclares Stamps' $id with its own mark owns it; a class
+            // using that trait only copies it (review, orm#117).
+            file_put_contents($dir . '/Outer.php', "<?php\nnamespace {$ns};\n\ntrait Outer\n{\n    use Stamps;\n\n    /** @api Outer's own. */\n    public string \$id = '';\n}\n");
+            file_put_contents($dir . '/Nested.php', "<?php\nnamespace {$ns};\n\n/** @api */\nfinal class Nested\n{\n    use Outer;\n}\n");
             file_put_contents($dir . '/Prose.php', "<?php\nnamespace {$ns};\n\n/**\n * Mark it so:\n *\n *     @api\n */\nfinal class Prose\n{\n}\n");
 
             self::assertSame([
                 "{$ns}\\Model",
+                "{$ns}\\Nested",
+                "{$ns}\\Outer::\$id",
                 "{$ns}\\Override",
                 "{$ns}\\Override::\$id",
                 "{$ns}\\Override::touch()",
@@ -215,13 +221,16 @@ final class ApiSurfaceTest extends TestCase
      */
     private static function fromTrait(\ReflectionClass $class, string $name): string|false|null
     {
+        // The trait used here first: its reflection already holds what it
+        // copied from its own traits, or its own redeclaration over them, which
+        // is what this class received (review, orm#117).
         foreach ($class->getTraits() as $trait) {
-            $own = self::fromTrait($trait, $name);
-            if ($own !== null) {
-                return $own;
-            }
             if (str_starts_with($name, '$') ? $trait->hasProperty(substr($name, 1)) : $trait->hasConstant($name)) {
                 return str_starts_with($name, '$') ? $trait->getProperty(substr($name, 1))->getDocComment() : ($trait->getReflectionConstant($name) ?: null)?->getDocComment();
+            }
+            $nested = self::fromTrait($trait, $name);
+            if ($nested !== null) {
+                return $nested;
             }
         }
 
