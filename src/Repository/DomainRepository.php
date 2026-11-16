@@ -377,7 +377,8 @@ final class DomainRepository
      *         ->limit(500));
      *
      * limit() makes it a batch: which rows of the match go first is the
-     * database's choice, so repeat until it returns less than the limit. What a
+     * database's choice, and a batch whose rows changed under it comes back
+     * short, so repeat until it returns 0. What a
      * single statement cannot do the way delete() does is refused: see
      * {@see BulkResourceDelete}. A whereRaw() subquery on this same table fails
      * on MySQL (error 1093).
