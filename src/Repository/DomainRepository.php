@@ -17,6 +17,7 @@ use Semitexa\Orm\Metadata\RelationRef;
 use Semitexa\Orm\Metadata\ResourceModelMetadata;
 use Semitexa\Orm\Metadata\ResourceModelMetadataRegistry;
 use Semitexa\Orm\Application\Service\Persistence\AggregateWriteEngine;
+use Semitexa\Orm\Application\Service\Persistence\BulkResourceDelete;
 use Semitexa\Orm\Application\Service\Transaction\TransactionManager;
 use Semitexa\Orm\Query\Direction;
 use Semitexa\Orm\Query\Operator;
@@ -37,6 +38,7 @@ final class DomainRepository
     private readonly ResourceModelHydrator $hydrator;
     private readonly ResourceModelRelationLoader $relationLoader;
     private readonly AggregateWriteEngine $writeEngine;
+    private readonly BulkResourceDelete $bulkDelete;
 
     private mixed $tenantValue = null;
     private ?SystemScopeToken $systemScopeToken = null;
@@ -72,6 +74,7 @@ final class DomainRepository
             $events,
             $transactions,
         );
+        $this->bulkDelete = new BulkResourceDelete($adapter, $events, $transactions);
     }
 
     /** @api */
@@ -361,6 +364,34 @@ final class DomainRepository
             $this->tenantValue,
             $this->systemScopeToken,
         );
+    }
+
+    /**
+     * Delete every row the criteria select, in one statement, within this
+     * repository's tenant scope; a soft-delete model is soft-deleted. The
+     * criteria shape this repository's own query(), so its scope is the one
+     * that applies:
+     *
+     *     $repo->deleteWhere(fn (ResourceModelQuery $q) => $q
+     *         ->where(Session::column('expires_at'), Operator::LessThan, $now)
+     *         ->limit(500));
+     *
+     * limit() makes it a batch: which rows of the match go first is the
+     * database's choice, so repeat until it returns less than the limit. What a
+     * single statement cannot do the way delete() does is refused: see
+     * {@see BulkResourceDelete}. A whereRaw() subquery on this same table fails
+     * on MySQL (error 1093).
+     *
+     * @api
+     * @param \Closure(ResourceModelQuery): mixed $criteria
+     * @return int the rows deleted, as the database reports them
+     */
+    public function deleteWhere(\Closure $criteria): int
+    {
+        $query = $this->query();
+        $criteria($query);
+
+        return $this->bulkDelete->run($query);
     }
 
     /**

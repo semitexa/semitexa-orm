@@ -88,6 +88,7 @@ final class ApiSurfaceTest extends TestCase
             'Semitexa\Orm\Query\SystemScopeToken::issue()',
             'Semitexa\Orm\Repository\DomainRepository::count()',
             'Semitexa\Orm\Repository\DomainRepository::delete()',
+            'Semitexa\Orm\Repository\DomainRepository::deleteWhere()',
             'Semitexa\Orm\Repository\DomainRepository::exists()',
             'Semitexa\Orm\Repository\DomainRepository::findAll()',
             'Semitexa\Orm\Repository\DomainRepository::findBy()',
