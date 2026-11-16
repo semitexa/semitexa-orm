@@ -775,42 +775,37 @@ final class ResourceModelQuery
      */
     public function toDebugSql(): string
     {
-        $sql = $this->buildSql();
-        $params = $this->buildParams();
-        $debugSql = '';
-        $length = strlen($sql);
-        $i = 0;
+        return DebugSql::interpolate($this->buildSql(), $this->buildParams());
+    }
 
-        // Single-pass replace so interpolated values cannot be rewritten by a
-        // later iteration, while quoted/comment regions stay untouched.
-        while ($i < $length) {
-            $segmentStart = $i;
-            if (RawSqlScanner::advancePastQuotedOrCommentRegion($sql, $i, $length)) {
-                $debugSql .= substr($sql, $segmentStart, $i - $segmentStart);
-                continue;
-            }
+    /**
+     * What a bulk delete of this query's rows needs: its conditions as a read
+     * would apply them, and the parts of a read a delete must refuse. Only for
+     * {@see \Semitexa\Orm\Application\Service\Persistence\BulkResourceDelete}.
+     *
+     * @internal
+     * @return array{metadata: ResourceModelMetadata, where: string, params: array<string, mixed>, ownConditions: int, limit: ?int, readOnlyParts: list<string>, onlySoftDeleted: bool, includeSoftDeleted: bool}
+     */
+    public function deletion(): array
+    {
+        [$where, $params] = $this->buildWhereAndParams();
+        $readOnlyParts = array_keys(array_filter([
+            'orderBy()' => $this->orderBys !== [],
+            'offset()' => $this->offsetValue !== null,
+            'withRelation()' => $this->relations !== [],
+            'forUpdate()' => $this->forUpdate,
+        ]));
 
-            if ($sql[$i] === ':') {
-                $nameEnd = $i + 1;
-                while ($nameEnd < $length && $this->isSqlPlaceholderNameChar($sql[$nameEnd])) {
-                    $nameEnd++;
-                }
-
-                if ($nameEnd > $i + 1) {
-                    $name = substr($sql, $i + 1, $nameEnd - $i - 1);
-                    $debugSql .= array_key_exists($name, $params)
-                        ? $this->formatDebugValue($params[$name])
-                        : substr($sql, $i, $nameEnd - $i);
-                    $i = $nameEnd;
-                    continue;
-                }
-            }
-
-            $debugSql .= $sql[$i];
-            $i++;
-        }
-
-        return $debugSql;
+        return [
+            'metadata' => $this->metadata(),
+            'where' => $where,
+            'params' => $params,
+            'ownConditions' => count($this->wheres),
+            'limit' => $this->limitValue,
+            'readOnlyParts' => $readOnlyParts,
+            'onlySoftDeleted' => $this->onlySoftDeleted,
+            'includeSoftDeleted' => $this->includeSoftDeleted,
+        ];
     }
 
     // ------------------------------------------------------------------
@@ -1075,14 +1070,6 @@ final class ResourceModelQuery
         return sprintf('%s%d', $hint, $this->paramCounter++);
     }
 
-    private function isSqlPlaceholderNameChar(string $ch): bool
-    {
-        return ($ch >= 'a' && $ch <= 'z')
-            || ($ch >= 'A' && $ch <= 'Z')
-            || ($ch >= '0' && $ch <= '9')
-            || $ch === '_';
-    }
-
     private function metadata(): ResourceModelMetadata
     {
         return ($this->metadataRegistry ?? ResourceModelMetadataRegistry::default())->for($this->resourceModelClass);
@@ -1142,35 +1129,5 @@ final class ResourceModelQuery
             pkStrategy: $column->primaryKeyStrategy ?? 'auto',
             propertyName: $column->propertyName,
         );
-    }
-
-    private function formatDebugValue(mixed $value): string
-    {
-        if ($value === null) {
-            return 'NULL';
-        }
-        if (is_bool($value)) {
-            return $value ? '1' : '0';
-        }
-        if (is_int($value) || is_float($value)) {
-            return (string) $value;
-        }
-        if ($value instanceof \DateTimeInterface) {
-            $value = $value->format('Y-m-d H:i:s');
-        }
-        if ($value instanceof \Stringable) {
-            $value = (string) $value;
-        }
-        if (is_string($value)) {
-            return "'" . str_replace("'", "''", $value) . "'";
-        }
-        if (is_scalar($value)) {
-            return "'" . str_replace("'", "''", (string) $value) . "'";
-        }
-        if ($value instanceof \BackedEnum) {
-            return "'" . str_replace("'", "''", (string) $value->value) . "'";
-        }
-
-        return "'" . str_replace("'", "''", json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: get_debug_type($value)) . "'";
     }
 }
