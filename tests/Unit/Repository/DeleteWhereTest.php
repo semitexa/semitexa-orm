@@ -7,6 +7,9 @@ namespace Semitexa\Orm\Tests\Unit\Repository;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Semitexa\Core\Event\EventDispatcherInterface;
+use Semitexa\Orm\Adapter\DatabaseAdapterInterface;
+use Semitexa\Orm\Adapter\QueryResult;
+use Semitexa\Orm\Adapter\ServerCapability;
 use Semitexa\Orm\Application\Service\Mapping\MapperRegistry;
 use Semitexa\Orm\Domain\Enum\ResourceChangeOperation;
 use Semitexa\Orm\Domain\Event\ResourceChangedEvent;
@@ -97,6 +100,67 @@ final class DeleteWhereTest extends TestCase
 
         self::assertSame([2, 1, 0], [$repository->deleteWhere($batch), $repository->deleteWhere($batch), $repository->deleteWhere($batch)]);
         self::assertSame(['l4'], array_column($this->orm->getAdapter()->query('SELECT id FROM bulk_logs')->rows, 'id'));
+    }
+
+    /**
+     * The batch is chosen by a read that locks nothing, so a row another
+     * transaction moved out of the match meanwhile is still in it: the write
+     * checks every condition again on the row it locks, under parameter names
+     * of its own (a native prepare refuses a name bound twice). Review, orm#119.
+     */
+    #[Test]
+    public function a_batch_checks_its_conditions_again_on_the_rows_it_writes(): void
+    {
+        $sql = [];
+        $recording = new class ($this->orm->getAdapter(), $sql) implements DatabaseAdapterInterface {
+            /** @param list<array{string, array<string, mixed>}> $sql */
+            public function __construct(private DatabaseAdapterInterface $inner, private array &$sql) {}
+
+            public function supports(ServerCapability $capability): bool
+            {
+                return $this->inner->supports($capability);
+            }
+
+            public function getServerVersion(): string
+            {
+                return $this->inner->getServerVersion();
+            }
+
+            public function execute(string $sql, array $params = []): QueryResult
+            {
+                $this->sql[] = [$sql, $params];
+
+                return $this->inner->execute($sql, $params);
+            }
+
+            public function query(string $sql): QueryResult
+            {
+                return $this->inner->query($sql);
+            }
+
+            public function lastInsertId(): string
+            {
+                return $this->inner->lastInsertId();
+            }
+        };
+        $repository = new DomainRepository(BulkSessionResourceModel::class, BulkSessionResourceModel::class, $recording, new MapperRegistry());
+
+        $deleted = $repository->forTenant('acme')->deleteWhere(fn (ResourceModelQuery $q) => $q
+            ->where(BulkSessionResourceModel::column('state'), Operator::Equals, 'expired')
+            ->whereRaw("id <> 'a:w0'")
+            ->limit(5));
+
+        self::assertSame(2, $deleted);
+        self::assertCount(1, $sql);
+        [$statement, $params] = $sql[0];
+        self::assertSame(
+            'UPDATE `bulk_sessions` SET `deletedAt` = :__bulk_deleted_at, `version` = `version` + 1'
+            . ' WHERE `id` IN (SELECT `id` FROM (SELECT `id` FROM `bulk_sessions` WHERE `tenantId` = :tenant_scope AND `deletedAt` IS NULL AND `state` = :w0 AND (id <> \'a:w0\') LIMIT 5) AS bulk_batch)'
+            . ' AND (`tenantId` = :tenant_scope__outer AND `deletedAt` IS NULL AND `state` = :w0__outer AND (id <> \'a:w0\'))',
+            $statement,
+        );
+        unset($params['__bulk_deleted_at']);
+        self::assertSame(['tenant_scope' => 'acme', 'w0' => 'expired', 'tenant_scope__outer' => 'acme', 'w0__outer' => 'expired'], $params);
     }
 
     #[Test]

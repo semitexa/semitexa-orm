@@ -13,6 +13,7 @@ use Semitexa\Orm\Domain\Enum\ResourceChangeOperation;
 use Semitexa\Orm\Domain\Event\ResourceChangedEvent;
 use Semitexa\Orm\Domain\Model\ResourceMetadata;
 use Semitexa\Orm\Metadata\ResourceModelMetadata;
+use Semitexa\Orm\Query\RawSqlScanner;
 use Semitexa\Orm\Query\ResourceModelQuery;
 
 /**
@@ -50,16 +51,22 @@ final class BulkResourceDelete
 
         $table = SqlIdentifier::quote($metadata->tableName);
         $where = $plan['where'];
+        $params = $plan['params'];
         if ($plan['limit'] !== null) {
             // A batch through the primary key, one shape for DELETE and UPDATE on
             // every dialect. The derived table lets MySQL read the table it writes.
             $primaryKey = $metadata->primaryKeyProperty
                 ?? throw new \LogicException(sprintf('deleteWhere() with limit() needs a primary key, and %s declares none.', $metadata->className));
             $pk = SqlIdentifier::quote($metadata->column($primaryKey)->columnName);
-            $where = sprintf(' WHERE %1$s IN (SELECT %1$s FROM (SELECT %1$s FROM %2$s%3$s LIMIT %4$d) AS bulk_batch)', $pk, $table, $where, $plan['limit']);
+            // The batch is chosen by a read that locks nothing: a row another
+            // transaction moves out of the match meanwhile is still in it. So the
+            // write checks the conditions again on the row it locks, under names of
+            // their own, since a native prepare refuses a name bound twice.
+            [$recheck, $recheckParams] = self::renamed(substr($where, strlen(' WHERE ')), $params, '__outer');
+            $where = sprintf(' WHERE %1$s IN (SELECT %1$s FROM (SELECT %1$s FROM %2$s%3$s LIMIT %4$d) AS bulk_batch) AND (%5$s)', $pk, $table, $where, $plan['limit'], $recheck);
+            $params += $recheckParams;
         }
 
-        $params = $plan['params'];
         if ($metadata->softDelete !== null && !$plan['onlySoftDeleted']) {
             // A name no query parameter takes: those are tenant_scope and generated ones.
             $params['__bulk_deleted_at'] = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s');
@@ -84,6 +91,41 @@ final class BulkResourceDelete
         }
 
         return $rows;
+    }
+
+    /**
+     * The same conditions under other parameter names: `:name` becomes
+     * `:name{$suffix}` wherever it is a parameter, outside quotes and comments.
+     *
+     * @param array<string, mixed> $params
+     * @return array{0: string, 1: array<string, mixed>}
+     */
+    private static function renamed(string $sql, array $params, string $suffix): array
+    {
+        $out = '';
+        $length = strlen($sql);
+        $i = 0;
+        while ($i < $length) {
+            $start = $i;
+            if (RawSqlScanner::advancePastQuotedOrCommentRegion($sql, $i, $length)) {
+                $out .= substr($sql, $start, $i - $start);
+                continue;
+            }
+            if ($sql[$i] === ':' && preg_match('/\G:([A-Za-z0-9_]+)/', $sql, $m, 0, $i) === 1 && array_key_exists($m[1], $params)) {
+                $out .= ':' . $m[1] . $suffix;
+                $i += strlen($m[0]);
+                continue;
+            }
+            $out .= $sql[$i];
+            $i++;
+        }
+
+        $renamed = [];
+        foreach ($params as $name => $value) {
+            $renamed[$name . $suffix] = $value;
+        }
+
+        return [$out, $renamed];
     }
 
     /** @param array{ownConditions: int, readOnlyParts: list<string>, onlySoftDeleted: bool, includeSoftDeleted: bool} $plan */
