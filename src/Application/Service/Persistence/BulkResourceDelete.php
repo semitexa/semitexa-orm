@@ -146,7 +146,7 @@ final class BulkResourceDelete
         }
         foreach ($metadata->relations() as $relation) {
             if ($relation->writePolicy !== RelationWritePolicy::ReferenceOnly) {
-                $refuse(sprintf('relation %s is written with its owner (%s), which one statement cannot do. Fetch the rows and delete() each.', $relation->propertyName, $relation->writePolicy->value));
+                $refuse(sprintf('relation %s is written with its owner (%s), which one statement cannot do. Fetch the rows and delete() each.', $relation->propertyName, $relation->writePolicy->value ?? 'none declared'));
             }
         }
         if ($metadata->softDelete === null && ($plan['onlySoftDeleted'] || $plan['includeSoftDeleted'])) {
