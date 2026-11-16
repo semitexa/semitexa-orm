@@ -114,7 +114,8 @@ final class ApiSurfaceTest extends TestCase
      * A trait's members are copied into every class that uses it, and reflection
      * names that class as their declaring one: a member marked in the trait is
      * the trait's promise, not one more for each user, under its own name or an
-     * alias. A method the class declares itself over the trait's is the class's.
+     * alias. A method the class declares itself over the trait's is the class's,
+     * and so is a property it redeclares with a docblock of its own.
      * A mark may sit up to four spaces in; further in, it is an example in the prose.
      */
     #[Test]
@@ -133,13 +134,14 @@ final class ApiSurfaceTest extends TestCase
         try {
             file_put_contents($dir . '/Stamps.php', "<?php\nnamespace {$ns};\n\n/** @api */\ntrait Stamps\n{\n    /** @api */\n    public string \$id = '';\n\n    /** @api */\n    public function touch(): void {}\n}\n");
             file_put_contents($dir . '/Model.php', "<?php\nnamespace {$ns};\n\n/** @api */\nfinal class Model\n{\n    use Stamps { touch as refresh; }\n}\n");
-            file_put_contents($dir . '/Override.php', "<?php\nnamespace {$ns};\n\n/**\n *  @api\n */\nfinal class Override\n{\n    use Stamps;\n\n    /** @api */\n    public function touch(): void {}\n}\n");
+            file_put_contents($dir . '/Override.php', "<?php\nnamespace {$ns};\n\n/**\n *  @api\n */\nfinal class Override\n{\n    use Stamps;\n\n    /** @api Override's own, redeclared. */\n    public string \$id = '';\n\n    /** @api */\n    public function touch(): void {}\n}\n");
 
             file_put_contents($dir . '/Prose.php', "<?php\nnamespace {$ns};\n\n/**\n * Mark it so:\n *\n *     @api\n */\nfinal class Prose\n{\n}\n");
 
             self::assertSame([
                 "{$ns}\\Model",
                 "{$ns}\\Override",
+                "{$ns}\\Override::\$id",
                 "{$ns}\\Override::touch()",
                 "{$ns}\\Stamps",
                 "{$ns}\\Stamps::\$id",
@@ -189,9 +191,12 @@ final class ApiSurfaceTest extends TestCase
                 // Inherited members count on their parent; a trait's copies, which reflection
                 // reports as declared here, count on the trait. A copied method keeps the
                 // trait's file (aliased or not); a property or constant only its name.
+                // A class that redeclares the property or constant (PHP allows a
+                // compatible redeclaration) wrote its own docblock: a different
+                // one is the class's own declaration, and its mark its own promise.
                 $copied = $member instanceof \ReflectionMethod
                     ? $member->getFileName() !== $reflection->getFileName()
-                    : self::fromTrait($reflection, $name);
+                    : self::fromTrait($reflection, $name) === $member->getDocComment();
                 if ($member->getDeclaringClass()->getName() === $class && !$copied && self::isApi($member->getDocComment())) {
                     $found[] = $class . '::' . $name;
                 }
@@ -203,20 +208,24 @@ final class ApiSurfaceTest extends TestCase
     }
 
     /**
-     * Whether a trait used here (or by one of its traits) declares the property `$name` or constant `NAME`.
+     * The docblock of the property `$name` or constant `NAME` as a trait used here
+     * (or by one of its traits) declares it; null when no trait declares it.
      *
      * @param \ReflectionClass<object> $class
      */
-    private static function fromTrait(\ReflectionClass $class, string $name): bool
+    private static function fromTrait(\ReflectionClass $class, string $name): string|false|null
     {
         foreach ($class->getTraits() as $trait) {
-            $declared = str_starts_with($name, '$') ? $trait->hasProperty(substr($name, 1)) : $trait->hasConstant($name);
-            if ($declared || self::fromTrait($trait, $name)) {
-                return true;
+            $own = self::fromTrait($trait, $name);
+            if ($own !== null) {
+                return $own;
+            }
+            if (str_starts_with($name, '$') ? $trait->hasProperty(substr($name, 1)) : $trait->hasConstant($name)) {
+                return str_starts_with($name, '$') ? $trait->getProperty(substr($name, 1))->getDocComment() : ($trait->getReflectionConstant($name) ?: null)?->getDocComment();
             }
         }
 
-        return false;
+        return null;
     }
 
     private static function isApi(string|false $doc): bool
