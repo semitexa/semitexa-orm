@@ -151,7 +151,13 @@ class MysqlAdapter implements DialectAwareInterface, DatabaseAdapterInterface
     private function executeOnPooledConnection(string $sql, array $params): QueryResult
     {
         $connection = $this->pool->pop();
-        $discard = false;
+        // Back to the pool only after the server answered whole: a result read
+        // to the end, or an error it sent. Anything else cut the call off — a
+        // coroutine cancelled while it waited (an SSE stream whose browser
+        // left) throws CanceledException, not a PDOException, and mysqlnd has
+        // closed the socket — and the pool pings only connections idle for a
+        // second, so the next borrower's BEGIN would fail with 2006.
+        $answered = false;
 
         try {
             try {
@@ -180,6 +186,7 @@ class MysqlAdapter implements DialectAwareInterface, DatabaseAdapterInterface
                 $rowCount = $stmt->rowCount();
                 $lastInsertId = $connection->lastInsertId() ?: '0';
                 $stmt->closeCursor();
+                $answered = true;
 
                 return new QueryResult(
                     rows: $rows,
@@ -192,16 +199,14 @@ class MysqlAdapter implements DialectAwareInterface, DatabaseAdapterInterface
                 // rethrown untouched. A dead connection must not go back to
                 // the channel — the pool discards it and frees its slot.
                 $classified = DriverErrorClassifier::classify($e);
-                if ($classified instanceof ConnectionLostException) {
-                    $discard = true;
-                }
+                $answered = !$classified instanceof ConnectionLostException;
                 throw $classified ?? $e;
             }
         } finally {
-            if ($discard) {
-                $this->discardFromPool($connection);
-            } else {
+            if ($answered) {
                 $this->pool->push($connection);
+            } else {
+                $this->discardFromPool($connection);
             }
         }
     }
@@ -234,7 +239,8 @@ class MysqlAdapter implements DialectAwareInterface, DatabaseAdapterInterface
     private function queryOnPooledConnection(string $sql): QueryResult
     {
         $connection = $this->pool->pop();
-        $discard = false;
+        // Same rule as executeOnPooledConnection(): pooled again only after a whole answer.
+        $answered = false;
 
         try {
             try {
@@ -246,6 +252,7 @@ class MysqlAdapter implements DialectAwareInterface, DatabaseAdapterInterface
                 $rowCount = $stmt->rowCount();
                 $lastInsertId = $connection->lastInsertId() ?: '0';
                 $stmt->closeCursor();
+                $answered = true;
 
                 return new QueryResult(
                     rows: $rows,
@@ -254,16 +261,14 @@ class MysqlAdapter implements DialectAwareInterface, DatabaseAdapterInterface
                 );
             } catch (\PDOException $e) {
                 $classified = DriverErrorClassifier::classify($e);
-                if ($classified instanceof ConnectionLostException) {
-                    $discard = true;
-                }
+                $answered = !$classified instanceof ConnectionLostException;
                 throw $classified ?? $e;
             }
         } finally {
-            if ($discard) {
-                $this->discardFromPool($connection);
-            } else {
+            if ($answered) {
                 $this->pool->push($connection);
+            } else {
+                $this->discardFromPool($connection);
             }
         }
     }
