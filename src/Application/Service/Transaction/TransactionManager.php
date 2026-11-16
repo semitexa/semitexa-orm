@@ -343,6 +343,7 @@ class TransactionManager
         $this->setActiveConnection($pdo);
         $this->setDepth(1);
         $connectionLost = false;
+        $beginCutOff = false;
         $committing = false;
         $undo = [];
 
@@ -368,6 +369,11 @@ class TransactionManager
                 $pdo->beginTransaction();
             } catch (\PDOException $beginFailure) {
                 throw DriverErrorClassifier::classify($beginFailure) ?? $beginFailure;
+            } catch (\Throwable $cutOff) {
+                // Cut off in flight (a cancelled coroutine; mysqlnd closed the socket), and
+                // with no transaction open the rollback check below cannot see it.
+                $beginCutOff = true;
+                throw $cutOff;
             }
 
             $result = $callback($connAdapter);
@@ -376,7 +382,7 @@ class TransactionManager
         } catch (\Throwable $e) {
             $undo = $this->pendingEvents();
             $this->setPendingEvents([]);
-            $connectionLost = $e instanceof ConnectionLostException
+            $connectionLost = $beginCutOff || $e instanceof ConnectionLostException
                 || ($e instanceof \PDOException && DriverErrorClassifier::classify($e) instanceof ConnectionLostException);
             // inTransaction() is INSIDE the try as well: on a severed
             // connection the status check itself throws, and an unguarded one

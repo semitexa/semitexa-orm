@@ -756,24 +756,6 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface, Ephemera
     }
 
     /**
-     * Verify that a pooled connection is still alive and reconnect if not.
-     *
-     * Connections that sat idle in the channel may have been dropped by MySQL
-     * (wait_timeout) or by an intermediate proxy/firewall. A cheap SELECT 1
-     * detects the broken socket before the caller issues a real query.
-     *
-     * Only called for connections retrieved from the channel (not for freshly
-     * created ones), so the overhead is limited to idle connections.
-     *
-     * The slot was already claimed when the connection was first opened, so a
-     * successful reconnect leaves `created` unchanged. But the reconnect is a
-     * real PDO connect that can fail (MySQL briefly unreachable exactly when we
-     * notice the socket is dead): the stale connection is then discarded and no
-     * replacement is produced, so the slot MUST be released — otherwise it
-     * leaks identically to the pop()/fill() paths and ratchets the pool into
-     * the full-but-empty deadlock. createForClaimedSlot() does that release.
-     */
-    /**
      * Health-check the connection only when it sat idle long enough to have
      * plausibly died; a connection returned milliseconds ago is served as-is.
      * See IDLE_PING_SECONDS for the trade-off. A dead connection that slips
@@ -791,6 +773,20 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface, Ephemera
         return $this->ensureAlive($connection);
     }
 
+    /**
+     * Verify that a pooled connection is still alive and reconnect if not.
+     *
+     * Connections that sat idle in the channel may have been dropped by MySQL
+     * (wait_timeout) or by an intermediate proxy/firewall. A cheap SELECT 1
+     * detects the broken socket before the caller issues a real query.
+     *
+     * The slot was already claimed when the connection was first opened, so a
+     * successful reconnect leaves `created` unchanged; a failed one releases it
+     * in createForClaimedSlot(), or the pool ratchets into the full-but-empty
+     * deadlock. A ping cut off before its reply (the coroutine was cancelled
+     * while it waited) leaves a connection that is neither lent nor pooled:
+     * its slot is released here, for the same reason.
+     */
     private function ensureAlive(\PDO $connection): \PDO
     {
         try {
@@ -803,6 +799,10 @@ class ConnectionPool implements TenantSwitchingConnectionPoolInterface, Ephemera
         } catch (\PDOException) {
             // Connection is stale — replace it with a fresh one.
             return $this->replaceDeadConnection($connection);
+        } catch (\Throwable $cutOff) {
+            $this->stats['discards']++;
+            $this->releaseSlotOf($connection);
+            throw $cutOff;
         }
     }
 
