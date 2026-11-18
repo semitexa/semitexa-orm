@@ -51,7 +51,7 @@ final class ResourceModelQuery
     /** @var list<RelationRef> */
     private array $relations = [];
 
-    /** @var list<array{column: ColumnRef, direction: Direction}> */
+    /** @var list<array{column: ColumnRef, direction: Direction, places?: list<array<string, mixed>>}> */
     private array $orderBys = [];
 
     private bool $forUpdate = false;
@@ -333,6 +333,53 @@ final class ResourceModelQuery
     }
 
     /**
+     * Rows ordered by where a column's value stands in a list: the first
+     * place's rows first, rows with an unlisted value after every place
+     * (Direction::Desc reverses both). A place is a value or a list of values
+     * that share it, and orderBy() after it breaks the ties:
+     * `->orderByValues($status, ['new', ['contacted', 'called']], Direction::Asc)
+     *  ->orderBy($createdAt, Direction::Desc)` is "un-worked first, then newest".
+     * Bound like a where's values (ORDER BY CASE … END, see ValueRankOrdering);
+     * count(), exists() and the aggregates leave it out. Refuses an empty list
+     * and a NULL value, which CASE never matches.
+     *
+     * @param array<mixed> $values
+     *
+     * @api
+     */
+    public function orderByValues(ColumnRef $column, array $values, Direction $direction): self
+    {
+        $this->assertColumnBelongsToCurrentResourceModel($column);
+        $places = [];
+        foreach (ValueRankOrdering::places($values) as $place) {
+            $bound = [];
+            foreach ($place as $value) {
+                $bound[$this->nextParam('o')] = $this->normalizeComparisonValue($column, $value);
+            }
+            $places[] = $bound;
+        }
+        $this->orderBys[] = ['column' => $column, 'direction' => $direction, 'places' => $places];
+
+        return $this;
+    }
+
+    /**
+     * Grouped and distinct reads (sumBy, maxBy, distinctValues) over the rows
+     * this query matches, as its WHERE, tenant and soft-delete state stands now.
+     *
+     * @api
+     */
+    public function aggregate(): ResourceModelAggregate
+    {
+        if ($this->forUpdate) {
+            LockingRead::refuse('aggregate()');
+        }
+        [$whereSql, $params] = $this->buildWhereAndParams();
+
+        return new ResourceModelAggregate($this->adapter, $this->resourceModelClass, $this->metadata()->tableName, $whereSql, $params);
+    }
+
+    /**
      * A locking read: the rows stay locked until the transaction ends. Only
      * inside TransactionManager::run(); see LockingRead for what it refuses.
      *
@@ -520,7 +567,7 @@ final class ResourceModelQuery
      */
     public function sum(ColumnRef $column): int|float
     {
-        $value = $this->aggregate('SUM', $column);
+        $value = $this->scalarAggregate('SUM', $column);
         if ($value === null) {
             return 0;
         }
@@ -537,7 +584,7 @@ final class ResourceModelQuery
      */
     public function avg(ColumnRef $column): ?float
     {
-        $value = $this->aggregate('AVG', $column);
+        $value = $this->scalarAggregate('AVG', $column);
 
         return $value === null ? null : Row::asFloat($value);
     }
@@ -551,7 +598,7 @@ final class ResourceModelQuery
      */
     public function min(ColumnRef $column): mixed
     {
-        return $this->aggregate('MIN', $column);
+        return $this->scalarAggregate('MIN', $column);
     }
 
     /**
@@ -561,7 +608,7 @@ final class ResourceModelQuery
      */
     public function max(ColumnRef $column): mixed
     {
-        return $this->aggregate('MAX', $column);
+        return $this->scalarAggregate('MAX', $column);
     }
 
     /**
@@ -637,7 +684,7 @@ final class ResourceModelQuery
         return $out;
     }
 
-    private function aggregate(string $function, ColumnRef $column): mixed
+    private function scalarAggregate(string $function, ColumnRef $column): mixed
     {
         if ($this->forUpdate) {
             LockingRead::refuse(strtolower($function) . '()');
@@ -821,9 +868,10 @@ final class ResourceModelQuery
         if ($this->orderBys !== []) {
             $parts = [];
             foreach ($this->orderBys as $orderBy) {
+                $quoted = SqlIdentifier::quote($orderBy['column']->columnName);
                 $parts[] = sprintf(
                     '%s %s',
-                    SqlIdentifier::quote($orderBy['column']->columnName),
+                    isset($orderBy['places']) ? ValueRankOrdering::sql($quoted, $orderBy['places']) : $quoted,
                     $orderBy['direction']->value,
                 );
             }
@@ -851,6 +899,11 @@ final class ResourceModelQuery
     private function buildParams(): array
     {
         [, $params] = $this->buildWhereAndParams();
+        foreach ($this->orderBys as $orderBy) {
+            foreach ($orderBy['places'] ?? [] as $bound) {
+                $params += $bound;
+            }
+        }
 
         return $params;
     }
