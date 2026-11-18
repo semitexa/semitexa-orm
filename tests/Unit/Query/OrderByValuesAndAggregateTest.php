@@ -103,6 +103,18 @@ final class OrderByValuesAndAggregateTest extends TestCase
         self::assertSame(['north' => 100, 'south' => 30, 'east' => 7], array_map(static fn (mixed $max): int => is_numeric($max) ? (int) $max : -1, $aggregate->maxBy(self::col('region'), self::col('amount'))));
     }
 
+    /** Review, orm#122: a group of NULL values sums to 0 before the order, so its tie with a real 0 breaks by group. */
+    #[Test]
+    public function a_group_of_nulls_sums_to_zero_and_ties_by_group(): void
+    {
+        $this->orm->getAdapter()->execute("INSERT INTO ranked_leads VALUES ('g', 'won', 'zzz', 0, 7), ('h', 'won', 'aaa', NULL, 8)");
+
+        self::assertSame(
+            ['north' => 115, 'south' => 45, 'east' => 7, 'aaa' => 0, 'zzz' => 0],
+            $this->query()->aggregate()->sumBy(self::col('region'), self::col('amount')),
+        );
+    }
+
     #[Test]
     public function distinct_values_come_ascending_with_null_last(): void
     {

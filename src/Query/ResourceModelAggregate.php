@@ -45,7 +45,10 @@ final class ResourceModelAggregate
     public function sumBy(ColumnRef $group, ColumnRef $value): array
     {
         $out = [];
-        foreach ($this->grouped('SUM', $group, $value) as $key => $sum) {
+        // COALESCE before the ORDER BY: a group whose values are all NULL sums to
+        // NULL, which a driver sorts apart from 0, and the 0 it reads as then
+        // broke the ties-by-group order (review, orm#122).
+        foreach ($this->grouped('COALESCE(SUM(%s), 0)', $group, $value) as $key => $sum) {
             $out[$key] = match (true) {
                 $sum === null => 0,
                 is_int($sum), is_string($sum) && preg_match('/^-?\d+$/', $sum) === 1 => Row::asInt($sum),
@@ -67,7 +70,7 @@ final class ResourceModelAggregate
      */
     public function maxBy(ColumnRef $group, ColumnRef $value): array
     {
-        return $this->grouped('MAX', $group, $value);
+        return $this->grouped('MAX(%s)', $group, $value);
     }
 
     /**
@@ -101,17 +104,19 @@ final class ResourceModelAggregate
         return $values;
     }
 
-    /** @return array<int|string, mixed> group => the aggregate, biggest first, ties by group */
-    private function grouped(string $function, ColumnRef $group, ColumnRef $value): array
+    /**
+     * @param string $aggregate the aggregate expression, `%s` standing for the quoted value column
+     * @return array<int|string, mixed> group => the aggregate, biggest first, ties by group
+     */
+    private function grouped(string $aggregate, ColumnRef $group, ColumnRef $value): array
     {
         $this->assertOwnColumn($group);
         $this->assertOwnColumn($value);
         $quotedGroup = SqlIdentifier::quote($group->columnName);
         $sql = sprintf(
-            'SELECT %1$s AS __g, %2$s(%3$s) AS __a FROM %4$s%5$s GROUP BY %1$s ORDER BY __a DESC, %1$s ASC',
+            'SELECT %1$s AS __g, %2$s AS __a FROM %3$s%4$s GROUP BY %1$s ORDER BY __a DESC, %1$s ASC',
             $quotedGroup,
-            $function,
-            SqlIdentifier::quote($value->columnName),
+            sprintf($aggregate, SqlIdentifier::quote($value->columnName)),
             SqlIdentifier::quote($this->tableName),
             $this->whereSql,
         );
