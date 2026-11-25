@@ -5,7 +5,7 @@ Changes to `semitexa/orm` that a consuming application can notice. Sections are
 next release tag. This file is machine-read by `update:changelog` and the OS
 "What's new" surface — keep entries short and operator-facing.
 
-## Unreleased
+## 2026.11.25.1338 — 2026-11-25
 
 ### Deprecated
 - `RepositoryInterface` as a whole. Nothing implements it, and `DomainRepository`, the
