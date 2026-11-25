@@ -300,14 +300,7 @@ class SchemaCollector
             propertyName: $propertyName,
         );
 
-        // Multiple Resources can map to the same table (e.g. base + projection); merge schema — skip column if already defined
-        if ($table->getColumn($columnName) !== null) {
-            return;
-        }
-
-        $table->addColumn($colDef);
-
-        // Auto-index for #[Filterable] columns (single-column, non-unique)
+        // Auto-index for #[Filterable] columns (single-column, non-unique), also when another resource declared the column first
         if (!empty($property->getAttributes(Filterable::class))) {
             $indexName = 'idx_' . $table->name . '_' . $columnName;
             $table->addIndex(new IndexDefinition(
@@ -316,6 +309,13 @@ class SchemaCollector
                 name: $indexName,
             ));
         }
+
+        // Multiple Resources can map to the same table (e.g. base + projection); merge schema — skip column if already defined
+        if ($table->getColumn($columnName) !== null) {
+            return;
+        }
+
+        $table->addColumn($colDef);
 
         if ($isDeprecated) {
             $this->checkDeprecatedUsage($columnName, $table);
