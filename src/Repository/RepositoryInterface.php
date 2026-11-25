@@ -4,6 +4,14 @@ declare(strict_types=1);
 
 namespace Semitexa\Orm\Repository;
 
+/**
+ * @deprecated Nothing implements this contract and nothing reads it. The
+ *             ORM's repository is DomainRepository, which does not implement
+ *             it: its findAll() and findBy() take relations and a nullable
+ *             limit that this interface lacks. Type against DomainRepository,
+ *             or declare your module's own repository contract and satisfy it
+ *             with #[SatisfiesRepositoryContract].
+ */
 interface RepositoryInterface
 {
     /**

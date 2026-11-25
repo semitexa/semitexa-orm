@@ -5,6 +5,14 @@ Changes to `semitexa/orm` that a consuming application can notice. Sections are
 next release tag. This file is machine-read by `update:changelog` and the OS
 "What's new" surface — keep entries short and operator-facing.
 
+## Unreleased
+
+### Deprecated
+- `RepositoryInterface` as a whole. Nothing implements it, and `DomainRepository`, the
+  ORM's repository, does not: its `findAll()` and `findBy()` take relations and a
+  nullable limit the interface lacks. Type against `DomainRepository`, or declare a
+  module's own repository contract and satisfy it with `#[SatisfiesRepositoryContract]`.
+
 ## 2026.11.25.0522 — 2026-11-25
 
 ### Deprecated
