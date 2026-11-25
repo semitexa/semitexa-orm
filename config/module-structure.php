@@ -85,8 +85,9 @@ return new LocalModuleStructureExtension(
         ),
 
         // Repository/ — public ORM repository abstraction. Three files:
-        // DomainRepository (base class), RepositoryInterface (port),
-        // PaginatedResult (paged-result DTO). Patterns cover all current
+        // DomainRepository (the repository, final), RepositoryInterface
+        // (deprecated, nothing implements it), PaginatedResult (paged-result
+        // DTO). Patterns cover all current
         // and likely future additions in this leaf.
         'Repository' => new ModuleStructureRule(
             path: 'Repository',
