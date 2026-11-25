@@ -10,6 +10,7 @@ use Semitexa\Core\Discovery\ClassDiscovery;
 use Semitexa\Orm\Application\Service\Schema\SchemaCollector;
 use Semitexa\Orm\Domain\Model\IndexDefinition;
 use Semitexa\Orm\Tests\Fixture\Schema\SharedColumnBaseModel;
+use Semitexa\Orm\Tests\Fixture\Schema\SharedColumnOtherSliceModel;
 use Semitexa\Orm\Tests\Fixture\Schema\SharedColumnSliceModel;
 
 /**
@@ -55,6 +56,9 @@ final class SchemaCollectorSharedColumnIndexTest extends TestCase
     #[Test]
     public function two_resources_that_both_filter_by_the_column_give_it_one_index(): void
     {
-        self::assertCount(1, $this->indexesOf([SharedColumnSliceModel::class, SharedColumnSliceModel::class]));
+        self::assertEquals(
+            [new IndexDefinition(columns: ['status'], unique: false, name: 'idx_shared_column_items_status')],
+            $this->indexesOf([SharedColumnSliceModel::class, SharedColumnOtherSliceModel::class]),
+        );
     }
 }
