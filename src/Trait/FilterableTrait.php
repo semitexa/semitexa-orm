@@ -12,10 +12,11 @@ use Semitexa\Orm\Domain\Model\ResourceMetadata;
  * and filterBy{Relation}{Column}($value) for related resource columns.
  * Criteria are returned as getFilterCriteria() and getRelationFilterCriteria() for Repository::find().
  *
- * @deprecated A resource model cannot use it: resources are final readonly, and
- *             this trait holds mutable state, so the class fails to load. Nothing
- *             reads the criteria it collects either. #[Filterable] adds an index;
- *             filter with DomainRepository::findBy() criteria or
+ * @deprecated A final readonly resource model cannot use it: the trait holds
+ *             mutable state, so such a class fails to load. A legacy non-readonly
+ *             #[FromTable] class still can, through ResourceMetadata::for(), but no
+ *             repository reads the criteria it collects. #[Filterable] adds an
+ *             index; filter with DomainRepository::findBy() criteria or
  *             query()->where(). It will be removed in a later release.
  */
 trait FilterableTrait

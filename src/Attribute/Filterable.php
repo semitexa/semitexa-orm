@@ -9,8 +9,8 @@ use Attribute;
 /**
  * Adds a single-column, non-unique index on this property's column. To
  * filter by it, pass criteria to DomainRepository::findBy() or use
- * query()->where(): the filterByX() methods of the deprecated FilterableTrait
- * cannot be used by a resource model.
+ * query()->where(): the deprecated FilterableTrait's filterByX() methods cannot
+ * be used by a final readonly resource model.
  *
  * @api
  */

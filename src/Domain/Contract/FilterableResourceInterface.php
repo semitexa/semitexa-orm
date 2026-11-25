@@ -10,8 +10,8 @@ namespace Semitexa\Orm\Domain\Contract;
  * filterBy{Relation}{Column}(), and getRelationFilterCriteria().
  *
  * @deprecated Nothing reads these criteria: no repository implements
- *             RepositoryInterface::find(), and a resource model cannot use
- *             FilterableTrait. Filter with DomainRepository::findBy() criteria or
+ *             RepositoryInterface::find(), and a final readonly resource model
+ *             cannot use FilterableTrait. Filter with DomainRepository::findBy() criteria or
  *             query()->where(). It will be removed in a later release.
  */
 interface FilterableResourceInterface
