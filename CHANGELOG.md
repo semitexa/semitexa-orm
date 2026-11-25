@@ -8,8 +8,9 @@ next release tag. This file is machine-read by `update:changelog` and the OS
 ## Unreleased
 
 ### Deprecated
-- `FilterableTrait`, `FilterableResourceInterface`, and `RepositoryInterface::find()`
-  and `findOne()`, which take the criteria such a resource collects. A resource model
+- `FilterableTrait`, `FilterableResourceInterface`, `RepositoryInterface::find()` and
+  `findOne()`, which take the criteria such a resource collects, and
+  `ResourceMetadata::getFilterableColumns()`, which only the trait reads. A resource model
   must be `final readonly`, so a model that uses the trait fails to load: the trait
   holds mutable state. Nothing reads the criteria either. `#[Filterable]` adds an
   index. To filter, pass criteria to `findBy()` or use `query()->where()`. They will

@@ -252,6 +252,8 @@ final class ResourceMetadata
      * Property names to DB column names for all #[Filterable] properties.
      *
      * @return array<string, string> propertyName => columnName
+     *
+     * @deprecated Only the deprecated FilterableTrait reads it; it goes with the trait.
      */
     public function getFilterableColumns(): array
     {

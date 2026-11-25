@@ -8,15 +8,15 @@ use Semitexa\Orm\Attribute\Filterable;
 use Semitexa\Orm\Domain\Model\ResourceMetadata;
 
 /**
+ * Provides filterByX($value) for main-table properties with #[Filterable],
+ * and filterBy{Relation}{Column}($value) for related resource columns.
+ * Criteria are returned as getFilterCriteria() and getRelationFilterCriteria() for Repository::find().
+ *
  * @deprecated A resource model cannot use it: resources are final readonly, and
  *             this trait holds mutable state, so the class fails to load. Nothing
  *             reads the criteria it collects either. #[Filterable] adds an index;
  *             filter with DomainRepository::findBy() criteria or
  *             query()->where(). It will be removed in a later release.
- *
- * Provides filterByX($value) for main-table properties with #[Filterable],
- * and filterBy{Relation}{Column}($value) for related resource columns.
- * Criteria are returned as getFilterCriteria() and getRelationFilterCriteria() for Repository::find().
  */
 trait FilterableTrait
 {
