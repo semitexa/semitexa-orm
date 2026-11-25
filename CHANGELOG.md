@@ -5,6 +5,16 @@ Changes to `semitexa/orm` that a consuming application can notice. Sections are
 next release tag. This file is machine-read by `update:changelog` and the OS
 "What's new" surface — keep entries short and operator-facing.
 
+## Unreleased
+
+### Deprecated
+- `FilterableTrait`, `FilterableResourceInterface`, and `RepositoryInterface::find()`
+  and `findOne()`, which take the criteria such a resource collects. A resource model
+  must be `final readonly`, so a model that uses the trait fails to load: the trait
+  holds mutable state. Nothing reads the criteria either. `#[Filterable]` adds an
+  index. To filter, pass criteria to `findBy()` or use `query()->where()`. They will
+  be removed in a later release.
+
 ## 2026.10.08.0620 — 2026-10-08
 
 ### Changed

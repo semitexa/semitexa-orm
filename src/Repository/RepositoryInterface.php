@@ -41,12 +41,18 @@ interface RepositoryInterface
      * Find entities matching the filter criteria set on the resource (e.g. via filterByX()).
      * Accepts only the repository's resource type; the resource must supply getFilterCriteria().
      *
+     * @deprecated The criteria come from FilterableResourceInterface, which is
+     *             deprecated. Use DomainRepository::findBy() criteria or query()->where().
+     *
      * @return object[]
      */
     public function find(object $resource): array;
 
     /**
      * Find a single entity matching the filter criteria set on the resource.
+     *
+     * @deprecated The criteria come from FilterableResourceInterface, which is
+     *             deprecated. Use DomainRepository::findOneBy() or query()->where().
      *
      * @return object|null
      */
