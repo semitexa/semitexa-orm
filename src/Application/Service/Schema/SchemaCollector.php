@@ -226,7 +226,7 @@ class SchemaCollector
         }
 
         if ($columnAttrs === []) {
-            // Skip internal/trait state (e.g. FilterableTrait __filterCriteria)
+            // Skip internal state: a __* property is no column (deprecated FilterableTrait's __filterCriteria).
             if (str_starts_with($property->getName(), '__')) {
                 return;
             }

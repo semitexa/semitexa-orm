@@ -7,8 +7,10 @@ namespace Semitexa\Orm\Attribute;
 use Attribute;
 
 /**
- * Marks a property as usable in filter conditions via filterByX().
- * A DB index is automatically created for this column.
+ * Adds a single-column, non-unique index on this property's column. To
+ * filter by it, pass criteria to DomainRepository::findBy() or use
+ * query()->where(): the deprecated FilterableTrait's filterByX() methods cannot
+ * be used by a final readonly resource model.
  *
  * @api
  */

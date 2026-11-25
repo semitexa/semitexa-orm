@@ -22,7 +22,7 @@ Depends on Core and Tenancy. Depended on by Media, Scheduler, Search, Storage, W
 
 - `#[FromTable]`, `#[Column]`, `#[PrimaryKey]`, `#[Index]` for schema definition
 - Relations: `#[BelongsTo]`, `#[HasMany]`, `#[OneToOne]`, `#[ManyToMany]`
-- `#[Filterable]` with auto-indexing and typed `filterByX()` methods
+- `#[Filterable]` adds a single-column index; filter with `findBy()` criteria or `query()->where()`
 - `#[Aggregate]` for virtual computed fields
 - Traits: `HasTimestamps`, `SoftDeletes`, `HasUuid`, `HasUuidV7` (BINARY(16) chronological)
 - Fail-closed tenant isolation for reads and writes; scoped writes cannot mutate tenant identity
